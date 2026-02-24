@@ -1,0 +1,25 @@
+server:
+  host: 0.0.0.0
+  port: 8000
+
+llm:
+  enabled: false
+  api_base: https://api.openai.com/v1
+  api_key: ""
+  model: gpt-4o-mini
+  timeout_seconds: 120
+
+asr:
+  mode: mock
+  device: cpu
+  model_size: base
+  language: zh
+
+bilibili:
+  max_video_minutes: 240
+  yt_dlp_path: yt-dlp
+  ffmpeg_path: ffmpeg
+
+runtime:
+  temp_dir: .tmp
+  log_level: INFO
