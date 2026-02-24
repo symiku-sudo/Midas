@@ -92,8 +92,9 @@ class AudioFetcher:
 
     def _resolve_ffmpeg_location(self) -> str:
         configured = self._settings.bilibili.ffmpeg_path.strip()
-        if self._is_executable_available(configured):
-            return configured
+        resolved = self._resolve_executable_path(configured)
+        if resolved:
+            return resolved
 
         try:
             from imageio_ffmpeg import get_ffmpeg_exe
@@ -117,9 +118,13 @@ class AudioFetcher:
         return ffmpeg_path
 
     def _is_executable_available(self, token: str) -> bool:
+        return bool(self._resolve_executable_path(token))
+
+    def _resolve_executable_path(self, token: str) -> str:
         if not token:
-            return False
+            return ""
         path = Path(token).expanduser()
         if path.is_absolute() or "/" in token or "\\" in token:
-            return path.exists()
-        return which(token) is not None
+            return str(path) if path.exists() else ""
+        resolved = which(token)
+        return resolved or ""
