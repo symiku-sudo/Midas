@@ -30,6 +30,7 @@
   - 小红书页：创建同步任务 + 轮询进度（x/y）+ 结果展示
 - 已实现 Markdown 渲染组件（Markwon）
 - 客户端文档：`android/README.md`
+- 新增真实运行配置模板：`server/config.real.example.yaml`
 
 ## 当前可用接口
 

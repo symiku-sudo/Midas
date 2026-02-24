@@ -23,6 +23,18 @@ pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
+## Real-run config (Bilibili path)
+
+```bash
+cd server
+cp config.real.example.yaml config.yaml
+```
+
+Then fill:
+- `llm.api_key`
+- Ensure `yt-dlp` and `ffmpeg` are installed on system
+- Install `faster-whisper` if `asr.mode=faster_whisper`
+
 ## API examples
 
 ```bash

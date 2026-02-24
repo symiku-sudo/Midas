@@ -42,6 +42,18 @@ source .venv/bin/activate
 python -m pytest -q
 ```
 
+### 2.1) 切到“可真实跑”配置（B 站链路）
+
+```bash
+cd server
+cp config.real.example.yaml config.yaml
+```
+
+然后至少补齐：
+- `llm.api_key`
+- 系统命令可用：`yt-dlp`、`ffmpeg`
+- Python 依赖：`faster-whisper`（当 `asr.mode=faster_whisper`）
+
 ### 3) 启动 Android 客户端
 
 - 用 Android Studio 打开 `android/` 目录。
@@ -51,4 +63,4 @@ python -m pytest -q
 ## 说明
 
 - 当前小红书同步默认 `mock` 数据模式，用于验证风控流程（限量、去重、熔断与进度回传）。
-- 真实小红书网页端接口接入时，可复用现有同步任务与进度查询框架。
+- 真实小红书网页端接口尚未接入；接入后可复用现有同步任务与进度查询框架。
