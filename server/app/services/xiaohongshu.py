@@ -58,6 +58,7 @@ class XiaohongshuNote:
     content: str
     source_url: str
     image_urls: list[str] = field(default_factory=list)
+    is_video: bool = False
 
 
 class MockXiaohongshuSource:
@@ -80,6 +81,7 @@ class MockXiaohongshuSource:
                     for item in raw_images
                     if isinstance(item, str) and str(item).strip()
                 ]
+            is_video = bool(record.get("is_video", False))
 
             if not note_id:
                 raise AppError(
@@ -101,6 +103,7 @@ class MockXiaohongshuSource:
                     content=content,
                     source_url=source_url,
                     image_urls=image_urls,
+                    is_video=is_video,
                 )
             )
         return notes
@@ -222,6 +225,7 @@ class XiaohongshuWebReadonlySource:
                 source_url = self._read_str(record, cfg.source_url_field)
                 if not source_url:
                     source_url = f"https://www.xiaohongshu.com/explore/{note_id}"
+                is_video = self._is_video_note(record)
 
                 content = self._pick_valid_content(
                     payload=record,
@@ -234,7 +238,7 @@ class XiaohongshuWebReadonlySource:
                     max_count=max_images,
                 )
 
-                if self._should_fetch_detail(
+                if (not is_video) and self._should_fetch_detail(
                     detail_fetch_mode=detail_fetch_mode,
                     content=content,
                     image_urls=image_urls,
@@ -251,6 +255,7 @@ class XiaohongshuWebReadonlySource:
                         host_allowlist=cfg.host_allowlist,
                     )
                     if detail_payload is not None:
+                        is_video = is_video or self._is_video_note(detail_payload)
                         detail_content = self._pick_valid_content(
                             payload=detail_payload,
                             candidates=cfg.detail_content_field_candidates,
@@ -270,7 +275,7 @@ class XiaohongshuWebReadonlySource:
                             max_count=max_images,
                         )
 
-                if not content:
+                if not content and not is_video:
                     continue
 
                 notes.append(
@@ -280,6 +285,7 @@ class XiaohongshuWebReadonlySource:
                         content=content,
                         source_url=source_url,
                         image_urls=image_urls,
+                        is_video=is_video,
                     )
                 )
 
@@ -607,6 +613,34 @@ class XiaohongshuWebReadonlySource:
                 break
         return merged
 
+    def _is_video_note(self, payload: object) -> bool:
+        for field_name in (
+            "type",
+            "note_type",
+            "media_type",
+            "note_card.type",
+            "note_card.note_type",
+            "data.items.0.note_card.type",
+            "data.items.0.note_card.note_type",
+        ):
+            value = self._read_str(payload, field_name).lower()
+            if value in {"video", "videonote", "video_note", "note_video", "短视频"}:
+                return True
+
+        for field_name in (
+            "video",
+            "video_info",
+            "video_play_info",
+            "note_card.video",
+            "note_card.video_info",
+            "note_card.video_play_info",
+            "data.items.0.note_card.video",
+            "data.items.0.note_card.video_info",
+        ):
+            if self._read_value(payload, field_name) is not None:
+                return True
+        return False
+
     def _dig(self, payload: object, dot_path: str):
         return self._read_value(payload, dot_path)
 
@@ -737,13 +771,16 @@ class XiaohongshuSyncService:
                 continue
 
             try:
-                summary = await self._llm_service.summarize_xiaohongshu_note(
-                    note_id=note.note_id,
-                    title=note.title,
-                    content=note.content,
-                    source_url=note.source_url,
-                    image_urls=note.image_urls,
-                )
+                if note.is_video:
+                    summary = self._build_video_note_summary(note)
+                else:
+                    summary = await self._llm_service.summarize_xiaohongshu_note(
+                        note_id=note.note_id,
+                        title=note.title,
+                        content=note.content,
+                        source_url=note.source_url,
+                        image_urls=note.image_urls,
+                    )
                 summary = self._ensure_source_link(summary, note.source_url)
                 self._repository.mark_synced(
                     note_id=note.note_id, title=note.title, source_url=note.source_url
@@ -814,6 +851,16 @@ class XiaohongshuSyncService:
             self._repository.set_state("last_live_sync_ts", str(int(time.time())))
 
         return result
+
+    def _build_video_note_summary(self, note: XiaohongshuNote) -> str:
+        return (
+            f"# 小红书笔记总结：{note.title}\n\n"
+            f"- 笔记ID：{note.note_id}\n"
+            f"- 原文链接：{note.source_url}\n\n"
+            "## 说明\n\n"
+            "这是一个视频笔记。\n\n"
+            "当前 MVP 阶段暂不进行视频内容总结。"
+        )
 
     def _ensure_source_link(self, summary_markdown: str, source_url: str) -> str:
         if not source_url:

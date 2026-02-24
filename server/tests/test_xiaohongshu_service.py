@@ -240,6 +240,54 @@ async def test_sync_passes_image_urls_to_llm(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_sync_video_note_skips_llm_and_emits_placeholder(tmp_path) -> None:
+    class _VideoSource:
+        def fetch_recent(self, limit: int) -> list[XiaohongshuNote]:
+            return [
+                XiaohongshuNote(
+                    note_id="v1",
+                    title="视频笔记标题",
+                    content="",
+                    source_url="https://www.xiaohongshu.com/explore/v1",
+                    is_video=True,
+                )
+            ][:limit]
+
+    class _NeverCallLLM:
+        def __init__(self) -> None:
+            self.called = False
+
+        async def summarize_xiaohongshu_note(self, **kwargs) -> str:
+            self.called = True
+            return "SHOULD_NOT_BE_CALLED"
+
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="mock",
+            db_path=str(tmp_path / "midas.db"),
+            max_limit=30,
+            default_limit=20,
+        )
+    )
+    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
+    llm = _NeverCallLLM()
+    service = XiaohongshuSyncService(
+        settings=settings,
+        repository=repo,
+        source=_VideoSource(),
+        llm_service=llm,
+    )
+
+    result = await service.sync(limit=1)
+    assert result.new_count == 1
+    assert llm.called is False
+    assert "这是一个视频笔记" in result.summaries[0].summary_markdown
+    assert "暂不进行视频内容总结" in result.summaries[0].summary_markdown
+    assert "原文链接" in result.summaries[0].summary_markdown
+    assert "https://www.xiaohongshu.com/explore/v1" in result.summaries[0].summary_markdown
+
+
+@pytest.mark.asyncio
 async def test_web_readonly_rejects_title_only_content(monkeypatch) -> None:
     settings = Settings(
         xiaohongshu=XiaohongshuConfig(
@@ -392,3 +440,62 @@ async def test_web_readonly_detail_fetch_extracts_content_and_images(monkeypatch
         "https://sns-webpic-qc.xhscdn.com/cover-1",
     ]
     assert len(_FakeClient.calls) == 2
+
+
+@pytest.mark.asyncio
+async def test_web_readonly_video_note_kept_without_content(monkeypatch) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=".tmp/test-midas.db",
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
+                request_method="GET",
+                request_headers={"Cookie": "a=b"},
+                items_path="data.notes",
+                note_id_field="note_id",
+                title_field="display_title",
+                content_field_candidates=["desc"],
+                detail_fetch_mode="never",
+            ),
+        )
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+
+    class _FakeResp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {
+                "data": {
+                    "notes": [
+                        {
+                            "note_id": "v100",
+                            "display_title": "这是个视频",
+                            "type": "video",
+                        }
+                    ]
+                }
+            }
+
+    class _FakeClient:
+        def __init__(self, *_, **__):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, **_):
+            return _FakeResp()
+
+    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeClient)
+
+    notes = await source.fetch_recent(limit=1)
+    assert len(notes) == 1
+    assert notes[0].note_id == "v100"
+    assert notes[0].is_video is True
+    assert notes[0].content == ""
