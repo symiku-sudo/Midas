@@ -22,6 +22,7 @@ class BilibiliSummaryData(BaseModel):
 
 class XiaohongshuSyncRequest(BaseModel):
     limit: int | None = Field(default=None, ge=1, le=100)
+    confirm_live: bool = False
 
 
 class XiaohongshuSummaryItem(BaseModel):

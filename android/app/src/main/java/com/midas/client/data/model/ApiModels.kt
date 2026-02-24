@@ -34,7 +34,8 @@ data class BilibiliSummaryData(
 )
 
 data class XiaohongshuSyncRequest(
-    val limit: Int? = null
+    val limit: Int? = null,
+    @Json(name = "confirm_live") val confirmLive: Boolean = false
 )
 
 data class XiaohongshuSummaryItem(

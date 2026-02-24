@@ -34,6 +34,23 @@ class BilibiliConfig(BaseModel):
     ffmpeg_path: str = "ffmpeg"
 
 
+class XiaohongshuWebReadonlyConfig(BaseModel):
+    request_url: str = ""
+    request_method: str = "GET"
+    request_headers: dict[str, str] = Field(default_factory=dict)
+    request_body: str = ""
+    items_path: str = "data.notes"
+    note_id_field: str = "note_id"
+    title_field: str = "title"
+    content_field_candidates: list[str] = Field(
+        default_factory=lambda: ["desc", "content", "note_text"]
+    )
+    source_url_field: str = "url"
+    host_allowlist: list[str] = Field(
+        default_factory=lambda: ["www.xiaohongshu.com", "edith.xiaohongshu.com"]
+    )
+
+
 class XiaohongshuConfig(BaseModel):
     mode: str = "mock"
     cookie: str = ""
@@ -43,10 +60,14 @@ class XiaohongshuConfig(BaseModel):
     random_delay_min_seconds: float = 3.0
     random_delay_max_seconds: float = 10.0
     circuit_breaker_failures: int = 3
+    min_live_sync_interval_seconds: int = 1800
     db_path: str = ".tmp/midas.db"
     request_timeout_seconds: int = 30
     api_base: str = ""
     mock_notes_path: str = ""
+    web_readonly: XiaohongshuWebReadonlyConfig = Field(
+        default_factory=XiaohongshuWebReadonlyConfig
+    )
 
 
 class RuntimeConfig(BaseModel):

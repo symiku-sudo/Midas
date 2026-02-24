@@ -17,6 +17,7 @@ import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
@@ -98,6 +99,7 @@ fun MainScreen(viewModel: MainViewModel) {
                 XiaohongshuPanel(
                     state = xiaohongshu,
                     onLimitChange = viewModel::onXiaohongshuLimitInputChange,
+                    onConfirmLiveChange = viewModel::onXiaohongshuConfirmLiveChange,
                     onStartSync = viewModel::startXiaohongshuSync,
                     modifier = Modifier
                         .fillMaxSize()
@@ -199,6 +201,7 @@ private fun BilibiliResult(result: BilibiliSummaryData) {
 private fun XiaohongshuPanel(
     state: XiaohongshuUiState,
     onLimitChange: (String) -> Unit,
+    onConfirmLiveChange: (Boolean) -> Unit,
     onStartSync: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -214,6 +217,22 @@ private fun XiaohongshuPanel(
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("确认真实同步请求")
+                Text(
+                    text = "仅在服务端 mode=web_readonly 时需要打开",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            Switch(
+                checked = state.confirmLive,
+                onCheckedChange = onConfirmLiveChange,
+            )
+        }
         Button(onClick = onStartSync, enabled = !state.isSyncing) {
             Text(if (state.isSyncing) "同步中..." else "同步最近收藏")
         }

@@ -32,10 +32,18 @@ class MidasRepository {
         }
     }
 
-    suspend fun syncXiaohongshu(baseUrl: String, limit: Int): AppResult<XiaohongshuSyncData> {
+    suspend fun syncXiaohongshu(
+        baseUrl: String,
+        limit: Int,
+        confirmLive: Boolean = false,
+    ): AppResult<XiaohongshuSyncData> {
         return runCatching {
             val api = MidasApiFactory.create(baseUrl)
-            unwrap(api.syncXiaohongshu(XiaohongshuSyncRequest(limit = limit)))
+            unwrap(
+                api.syncXiaohongshu(
+                    XiaohongshuSyncRequest(limit = limit, confirmLive = confirmLive)
+                )
+            )
         }.getOrElse { throwable ->
             AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
         }
@@ -44,10 +52,15 @@ class MidasRepository {
     suspend fun createXiaohongshuSyncJob(
         baseUrl: String,
         limit: Int,
+        confirmLive: Boolean = false,
     ): AppResult<XiaohongshuSyncJobCreateData> {
         return runCatching {
             val api = MidasApiFactory.create(baseUrl)
-            unwrap(api.createXiaohongshuSyncJob(XiaohongshuSyncRequest(limit = limit)))
+            unwrap(
+                api.createXiaohongshuSyncJob(
+                    XiaohongshuSyncRequest(limit = limit, confirmLive = confirmLive)
+                )
+            )
         }.getOrElse { throwable ->
             AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
         }

@@ -25,7 +25,9 @@ runtime:
   log_level: INFO
 
 xiaohongshu:
-  # 当前代码仅支持 mock 模式；真实网页端接口待接入。
+  # 可选：mock / web_readonly
+  # - mock: 使用本地示例数据（最安全）
+  # - web_readonly: 只读请求网页端接口（需手动配置 request_url/headers）
   mode: mock
   cookie: ""
   collection_id: ""
@@ -34,7 +36,22 @@ xiaohongshu:
   random_delay_min_seconds: 3.0
   random_delay_max_seconds: 10.0
   circuit_breaker_failures: 3
+  min_live_sync_interval_seconds: 1800
   db_path: .tmp/midas.db
   request_timeout_seconds: 30
   api_base: ""
   mock_notes_path: ""
+  web_readonly:
+    # 从浏览器 DevTools 里复制“收藏列表”请求 URL（建议只读接口）。
+    request_url: ""
+    request_method: GET
+    # 可以先留空，运行时报鉴权失败再补 Cookie / X-S 等必要头。
+    request_headers: {}
+    request_body: ""
+    # 以下字段按你的实际响应结构调整
+    items_path: data.notes
+    note_id_field: note_id
+    title_field: title
+    content_field_candidates: [desc, content, note_text]
+    source_url_field: url
+    host_allowlist: [www.xiaohongshu.com, edith.xiaohongshu.com]

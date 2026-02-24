@@ -33,7 +33,19 @@ xiaohongshu:
   random_delay_min_seconds: 3.0
   random_delay_max_seconds: 10.0
   circuit_breaker_failures: 3
+  min_live_sync_interval_seconds: 1800
   db_path: .tmp/midas.db
   request_timeout_seconds: 30
   api_base: ""
   mock_notes_path: ""
+  web_readonly:
+    request_url: ""
+    request_method: GET
+    request_headers: {}
+    request_body: ""
+    items_path: data.notes
+    note_id_field: note_id
+    title_field: title
+    content_field_candidates: [desc, content, note_text]
+    source_url_field: url
+    host_allowlist: [www.xiaohongshu.com, edith.xiaohongshu.com]

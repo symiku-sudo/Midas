@@ -5,6 +5,7 @@
 - Week 1：服务端 MVP 基线（B 站总结） -> 已完成
 - Week 2：服务端小红书同步链路（限量/去重/熔断） -> 已完成
 - Week 3：服务端进度任务机制 + Android 客户端最小可用版 -> 已完成
+- Week 4：小红书低风控只读模式（web_readonly）与确认开关 -> 已完成
 
 ## Week 3 新增完成项
 
@@ -31,6 +32,32 @@
 - 已实现 Markdown 渲染组件（Markwon）
 - 客户端文档：`android/README.md`
 - 新增真实运行配置模板：`server/config.real.example.yaml`
+
+## Week 4 新增完成项
+
+### 小红书低风控增强（服务端）
+
+- 新增 `xiaohongshu.mode=web_readonly`：
+  - 仅允许 HTTPS
+  - 域名白名单校验
+  - 仅支持 GET/POST 请求回放
+  - 最小真实同步间隔保护（默认 1800 秒）
+- 新增强制确认参数：`confirm_live=true`
+  - 未显式确认时拒绝真实同步请求
+- 新增运行态存储：
+  - 记录 `last_live_sync_ts`，用于限频保护
+
+### 客户端联动
+
+- Android 小红书页新增“确认真实同步请求”开关（对应 `confirm_live`）。
+- 同步任务创建时自动携带 `confirm_live` 参数。
+
+### 测试
+
+- 服务端测试扩展到 `10 passed`：
+  - web_readonly 未确认拦截
+  - web_readonly 限频保护
+  - web_readonly 成功后写入同步时间
 
 ## 当前可用接口
 

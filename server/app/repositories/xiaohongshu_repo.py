@@ -27,6 +27,15 @@ class XiaohongshuSyncRepository:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS xiaohongshu_runtime_state (
+                    state_key TEXT PRIMARY KEY,
+                    state_value TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
             conn.commit()
 
     def is_synced(self, note_id: str) -> bool:
@@ -48,3 +57,27 @@ class XiaohongshuSyncRepository:
             )
             conn.commit()
 
+    def get_state(self, state_key: str) -> str | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT state_value FROM xiaohongshu_runtime_state
+                WHERE state_key = ?
+                LIMIT 1
+                """,
+                (state_key,),
+            ).fetchone()
+        if row is None:
+            return None
+        return str(row["state_value"])
+
+    def set_state(self, state_key: str, state_value: str) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO xiaohongshu_runtime_state (state_key, state_value)
+                VALUES (?, ?)
+                """,
+                (state_key, state_value),
+            )
+            conn.commit()

@@ -35,6 +35,22 @@ Then fill:
 - Ensure `yt-dlp` and `ffmpeg` are installed on system
 - Install `faster-whisper` if `asr.mode=faster_whisper`
 
+## Safe live mode (Xiaohongshu, read-only)
+
+服务端支持 `xiaohongshu.mode=web_readonly` 的低风险只读模式：
+- 只允许 `GET/POST` 单请求回放
+- 强制 HTTPS + 域名白名单
+- 需要显式 `confirm_live=true`
+- 带最小同步间隔保护（默认 1800 秒）
+
+建议流程：
+1. 在浏览器 DevTools 里抓“小红书收藏列表”请求。
+2. 把 URL/Headers 填到 `xiaohongshu.web_readonly`。
+3. 先用小 `limit`（如 3）并传 `confirm_live=true` 试跑。
+4. 观察是否返回 `AUTH_EXPIRED` 或 `RATE_LIMITED`，再调整。
+
+详细步骤见：`XHS_WEB_READONLY_SETUP.md`
+
 ## API examples
 
 ```bash
@@ -63,6 +79,13 @@ curl -X POST http://127.0.0.1:8000/api/xiaohongshu/sync/jobs \
 curl http://127.0.0.1:8000/api/xiaohongshu/sync/jobs/<job_id>
 ```
 
+```bash
+# web_readonly 模式（真实请求）需显式确认
+curl -X POST http://127.0.0.1:8000/api/xiaohongshu/sync/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{"limit":3,"confirm_live":true}'
+```
+
 ## Notes
 
 - Default ASR mode is `mock` for local development.
@@ -70,3 +93,4 @@ curl http://127.0.0.1:8000/api/xiaohongshu/sync/jobs/<job_id>
 - To use real LLM output, set `llm.enabled: true` and configure API params.
 - Current Xiaohongshu integration mode is `mock` to validate workflow and risk controls.
 - Synced note IDs persist in `xiaohongshu.db_path` (default `.tmp/midas.db`).
+- `web_readonly` 模式仍属于非官方接口回放，务必低频、低并发、只读请求，优先保护账号安全。

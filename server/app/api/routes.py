@@ -60,7 +60,7 @@ async def bilibili_summarize(payload: BilibiliSummaryRequest, request: Request) 
 async def xiaohongshu_sync(payload: XiaohongshuSyncRequest, request: Request) -> dict:
     logger.info("Receive xiaohongshu sync request, limit=%s", payload.limit)
     service = _get_xiaohongshu_sync_service()
-    result = await service.sync(limit=payload.limit)
+    result = await service.sync(limit=payload.limit, confirm_live=payload.confirm_live)
     return success_response(data=result.model_dump(), request_id=request.state.request_id)
 
 
@@ -73,7 +73,13 @@ async def xiaohongshu_sync_create_job(
     requested_limit = payload.limit or settings.xiaohongshu.default_limit
     manager = _get_xiaohongshu_sync_job_manager()
     job = await manager.create_job(requested_limit=requested_limit)
-    asyncio.create_task(_run_xiaohongshu_sync_job(job.job_id, payload.limit))
+    asyncio.create_task(
+        _run_xiaohongshu_sync_job(
+            job.job_id,
+            payload.limit,
+            payload.confirm_live,
+        )
+    )
     data = XiaohongshuSyncJobCreateData(
         job_id=job.job_id,
         status=job.status.value,
@@ -115,7 +121,11 @@ async def xiaohongshu_sync_get_job(job_id: str, request: Request) -> dict:
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 
-async def _run_xiaohongshu_sync_job(job_id: str, limit: int | None) -> None:
+async def _run_xiaohongshu_sync_job(
+    job_id: str,
+    limit: int | None,
+    confirm_live: bool,
+) -> None:
     settings = get_settings()
     requested_limit = limit or settings.xiaohongshu.default_limit
     service = _get_xiaohongshu_sync_service()
@@ -136,7 +146,11 @@ async def _run_xiaohongshu_sync_job(job_id: str, limit: int | None) -> None:
             logger.exception("Failed to update xiaohongshu sync progress, job=%s", job_id)
 
     try:
-        result = await service.sync(limit=limit, progress_callback=_on_progress)
+        result = await service.sync(
+            limit=limit,
+            confirm_live=confirm_live,
+            progress_callback=_on_progress,
+        )
         await manager.set_success(job_id, result=result)
     except AppError as exc:
         details = exc.details if isinstance(exc.details, dict) else {}

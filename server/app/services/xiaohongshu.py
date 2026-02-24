@@ -3,9 +3,13 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Awaitable, Callable
+from urllib.parse import urlparse
+
+import httpx
 
 from app.core.config import Settings
 from app.core.errors import AppError, ErrorCode
@@ -122,12 +126,176 @@ class MockXiaohongshuSource:
         return raw
 
 
+class XiaohongshuWebReadonlySource:
+    def __init__(self, settings: Settings) -> None:
+        self._settings = settings
+
+    async def fetch_recent(self, limit: int) -> list[XiaohongshuNote]:
+        cfg = self._settings.xiaohongshu.web_readonly
+        request_url = cfg.request_url.strip()
+        if not request_url:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message="web_readonly 模式缺少 request_url 配置。",
+                status_code=400,
+            )
+
+        parsed = urlparse(request_url)
+        if parsed.scheme != "https":
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message="web_readonly 仅允许 HTTPS 请求。",
+                status_code=400,
+            )
+        if parsed.netloc not in set(cfg.host_allowlist):
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message=f"请求域名不在白名单中：{parsed.netloc}",
+                status_code=400,
+            )
+
+        method = cfg.request_method.strip().upper()
+        if method not in {"GET", "POST"}:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message=f"web_readonly 仅支持 GET/POST，当前为 {method}",
+                status_code=400,
+            )
+
+        headers = {k: v for k, v in cfg.request_headers.items() if k and v}
+        if self._settings.xiaohongshu.cookie and "Cookie" not in headers:
+            headers["Cookie"] = self._settings.xiaohongshu.cookie
+        if "User-Agent" not in headers:
+            headers["User-Agent"] = (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/126.0.0.0 Safari/537.36"
+            )
+
+        body = cfg.request_body.strip() if method == "POST" else None
+        timeout = self._settings.xiaohongshu.request_timeout_seconds
+
+        try:
+            async with httpx.AsyncClient(timeout=timeout) as client:
+                response = await client.request(
+                    method=method,
+                    url=request_url,
+                    headers=headers,
+                    content=body,
+                )
+        except httpx.HTTPError as exc:
+            raise AppError(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message="请求小红书网页端接口失败。",
+                status_code=502,
+            ) from exc
+
+        if response.status_code in {401, 403}:
+            raise AppError(
+                code=ErrorCode.AUTH_EXPIRED,
+                message="小红书鉴权失败，请检查 Cookie 是否失效。",
+                status_code=401,
+            )
+        if response.status_code == 429:
+            raise AppError(
+                code=ErrorCode.RATE_LIMITED,
+                message="小红书请求触发限流，请稍后重试。",
+                status_code=429,
+            )
+        if response.status_code >= 400:
+            raise AppError(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message=f"小红书请求失败（HTTP {response.status_code}）。",
+                status_code=502,
+            )
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise AppError(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message="小红书响应不是合法 JSON。",
+                status_code=502,
+            ) from exc
+
+        records = self._dig(payload, cfg.items_path)
+        if not isinstance(records, list):
+            raise AppError(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message=f"响应中 items_path 无法解析为列表：{cfg.items_path}",
+                status_code=502,
+            )
+
+        notes: list[XiaohongshuNote] = []
+        for record in records:
+            if len(notes) >= limit:
+                break
+            if not isinstance(record, dict):
+                continue
+
+            note_id = self._read_str(record, cfg.note_id_field)
+            if not note_id:
+                continue
+            title = self._read_str(record, cfg.title_field) or f"未命名笔记 {note_id}"
+            content = ""
+            for field_name in cfg.content_field_candidates:
+                content = self._read_str(record, field_name)
+                if content:
+                    break
+            if not content:
+                content = "（空内容）"
+
+            source_url = self._read_str(record, cfg.source_url_field)
+            if not source_url:
+                source_url = f"https://www.xiaohongshu.com/explore/{note_id}"
+
+            notes.append(
+                XiaohongshuNote(
+                    note_id=note_id,
+                    title=title,
+                    content=content,
+                    source_url=source_url,
+                )
+            )
+
+        if not notes:
+            raise AppError(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message="小红书响应中未提取到可用笔记。",
+                status_code=502,
+            )
+        return notes
+
+    def _dig(self, payload: dict, dot_path: str):
+        current: object = payload
+        for segment in dot_path.split("."):
+            if not segment:
+                continue
+            if not isinstance(current, dict):
+                return None
+            current = current.get(segment)
+        return current
+
+    def _read_str(self, payload: dict, dot_path: str) -> str:
+        current: object = payload
+        for segment in dot_path.split("."):
+            if not segment:
+                continue
+            if not isinstance(current, dict):
+                return ""
+            current = current.get(segment)
+        if current is None:
+            return ""
+        return str(current).strip()
+
+
 class XiaohongshuSyncService:
     def __init__(
         self,
         settings: Settings,
         repository: XiaohongshuSyncRepository | None = None,
         source: MockXiaohongshuSource | None = None,
+        web_source: XiaohongshuWebReadonlySource | None = None,
         llm_service: LLMService | None = None,
     ) -> None:
         self._settings = settings
@@ -135,11 +303,13 @@ class XiaohongshuSyncService:
             settings.xiaohongshu.db_path
         )
         self._source = source or MockXiaohongshuSource(settings)
+        self._web_source = web_source or XiaohongshuWebReadonlySource(settings)
         self._llm_service = llm_service or LLMService(settings)
 
     async def sync(
         self,
         limit: int | None,
+        confirm_live: bool = False,
         progress_callback: Callable[[int, int, str], Awaitable[None]] | None = None,
     ) -> XiaohongshuSyncData:
         requested_limit = limit or self._settings.xiaohongshu.default_limit
@@ -153,14 +323,26 @@ class XiaohongshuSyncService:
             )
 
         mode = self._settings.xiaohongshu.mode.strip().lower()
-        if mode != "mock":
+        if mode == "mock":
+            notes = self._source.fetch_recent(requested_limit)
+        elif mode == "web_readonly":
+            if not confirm_live:
+                raise AppError(
+                    code=ErrorCode.INVALID_INPUT,
+                    message=(
+                        "web_readonly 模式需要显式确认。请在请求体中传 confirm_live=true。"
+                    ),
+                    status_code=400,
+                )
+            self._enforce_live_sync_interval()
+            notes = await self._web_source.fetch_recent(requested_limit)
+        else:
             raise AppError(
                 code=ErrorCode.INVALID_INPUT,
-                message="当前仅支持 xiaohongshu.mode=mock。",
+                message="当前仅支持 xiaohongshu.mode=mock 或 web_readonly。",
                 status_code=400,
             )
 
-        notes = self._source.fetch_recent(requested_limit)
         fetched_count = len(notes)
         await self._emit_progress(
             progress_callback,
@@ -250,7 +432,7 @@ class XiaohongshuSyncService:
             if index < fetched_count - 1:
                 await self._delay_between_requests(mode=mode)
 
-        return XiaohongshuSyncData(
+        result = XiaohongshuSyncData(
             requested_limit=requested_limit,
             fetched_count=fetched_count,
             new_count=new_count,
@@ -259,6 +441,11 @@ class XiaohongshuSyncService:
             circuit_opened=False,
             summaries=summaries,
         )
+
+        if mode == "web_readonly":
+            self._repository.set_state("last_live_sync_ts", str(int(time.time())))
+
+        return result
 
     async def _emit_progress(
         self,
@@ -271,6 +458,27 @@ class XiaohongshuSyncService:
         if callback is None:
             return
         await callback(current, total, message)
+
+    def _enforce_live_sync_interval(self) -> None:
+        last_sync_raw = self._repository.get_state("last_live_sync_ts")
+        if not last_sync_raw:
+            return
+        try:
+            last_sync = int(last_sync_raw)
+        except ValueError:
+            return
+
+        min_interval = self._settings.xiaohongshu.min_live_sync_interval_seconds
+        now = int(time.time())
+        delta = now - last_sync
+        if delta < min_interval:
+            wait_seconds = max(min_interval - delta, 0)
+            raise AppError(
+                code=ErrorCode.RATE_LIMITED,
+                message=f"为降低风控，距离上次真实同步过短，请 {wait_seconds} 秒后重试。",
+                status_code=429,
+                details={"wait_seconds": wait_seconds},
+            )
 
     async def _delay_between_requests(self, *, mode: str) -> None:
         if mode == "mock":

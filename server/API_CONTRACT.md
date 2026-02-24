@@ -66,9 +66,14 @@ Request:
 
 ```json
 {
-  "limit": 5
+  "limit": 5,
+  "confirm_live": false
 }
 ```
+
+说明：
+- `confirm_live` 仅在 `xiaohongshu.mode=web_readonly` 时需要设为 `true`。
+- 默认 `false`，用于防止误触发真实账号请求。
 
 Success `data`:
 
@@ -99,7 +104,8 @@ Request:
 
 ```json
 {
-  "limit": 5
+  "limit": 5,
+  "confirm_live": false
 }
 ```
 

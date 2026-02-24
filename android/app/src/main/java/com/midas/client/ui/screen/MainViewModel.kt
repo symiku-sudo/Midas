@@ -33,6 +33,7 @@ data class BilibiliUiState(
 
 data class XiaohongshuUiState(
     val limitInput: String = "5",
+    val confirmLive: Boolean = false,
     val isSyncing: Boolean = false,
     val progressCurrent: Int = 0,
     val progressTotal: Int = 0,
@@ -149,9 +150,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _xiaohongshuState.update { it.copy(limitInput = newValue, errorMessage = "") }
     }
 
+    fun onXiaohongshuConfirmLiveChange(newValue: Boolean) {
+        _xiaohongshuState.update { it.copy(confirmLive = newValue) }
+    }
+
     fun startXiaohongshuSync() {
         val baseUrl = normalizeCurrentBaseUrl()
         val limit = _xiaohongshuState.value.limitInput.toIntOrNull()
+        val confirmLive = _xiaohongshuState.value.confirmLive
         if (limit == null || limit <= 0) {
             _xiaohongshuState.update { it.copy(errorMessage = "同步数量必须为正整数。") }
             return
@@ -171,7 +177,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
 
-            when (val create = apiRepository.createXiaohongshuSyncJob(baseUrl, limit)) {
+            when (
+                val create = apiRepository.createXiaohongshuSyncJob(
+                    baseUrl = baseUrl,
+                    limit = limit,
+                    confirmLive = confirmLive,
+                )
+            ) {
                 is AppResult.Error -> {
                     _xiaohongshuState.update {
                         it.copy(
