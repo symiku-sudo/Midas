@@ -90,6 +90,15 @@ resolve_uvicorn() {
   echo ""
 }
 
+ensure_venv_bin_on_path() {
+  local venv_bin="$SERVER_DIR/.venv/bin"
+  if [[ -d "$venv_bin" && ":$PATH:" != *":$venv_bin:"* ]]; then
+    export PATH="$venv_bin:$PATH"
+  fi
+}
+
+ensure_venv_bin_on_path
+
 PYTHON_BIN="$(resolve_python)"
 UVICORN_BIN="$(resolve_uvicorn)"
 
