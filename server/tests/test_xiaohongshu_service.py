@@ -345,6 +345,85 @@ async def test_web_readonly_rejects_title_only_content(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_web_readonly_page_fallback_extracts_content_and_images(monkeypatch) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=".tmp/test-midas.db",
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
+                request_method="GET",
+                request_headers={"Cookie": "a=b"},
+                items_path="data.notes",
+                note_id_field="note_id",
+                title_field="display_title",
+                content_field_candidates=["display_title", "desc"],
+                max_images_per_note=3,
+            ),
+        )
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+
+    class _FakeResp:
+        def __init__(self, payload: dict | None = None, text: str = "", status_code: int = 200) -> None:
+            self.status_code = status_code
+            self._payload = payload or {}
+            self.text = text
+
+        def json(self) -> dict:
+            return self._payload
+
+    class _FakeClient:
+        calls: list[str] = []
+
+        def __init__(self, *_, **__):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, **kwargs):
+            url = kwargs["url"]
+            self.calls.append(url)
+            if "collect/page" in url:
+                return _FakeResp(
+                    {
+                        "data": {
+                            "notes": [
+                                {
+                                    "note_id": "n2",
+                                    "display_title": "列表标题",
+                                    "desc": "列表标题",
+                                    "xsec_token": "token-2",
+                                }
+                            ]
+                        }
+                    }
+                )
+            html = """
+            <html><body>
+            <script>
+            window.__INITIAL_STATE__ = {"note":{"noteDetailMap":{"n2":{"note":{"noteId":"n2","title":"页面标题","desc":"页面正文","type":"normal","imageList":[{"urlDefault":"https://sns-webpic-qc.xhscdn.com/page-1"}]}}}}};
+            </script>
+            </body></html>
+            """
+            return _FakeResp(text=html)
+
+    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeClient)
+
+    notes = await source.fetch_recent(limit=1)
+    assert len(notes) == 1
+    assert notes[0].title == "页面标题"
+    assert notes[0].content == "页面正文"
+    assert notes[0].image_urls == ["https://sns-webpic-qc.xhscdn.com/page-1"]
+    assert len(_FakeClient.calls) == 2
+    assert any("/explore/n2" in url for url in _FakeClient.calls)
+
+
+@pytest.mark.asyncio
 async def test_web_readonly_detail_fetch_extracts_content_and_images(monkeypatch) -> None:
     settings = Settings(
         xiaohongshu=XiaohongshuConfig(
@@ -373,9 +452,12 @@ async def test_web_readonly_detail_fetch_extracts_content_and_images(monkeypatch
     source = XiaohongshuWebReadonlySource(settings)
 
     class _FakeResp:
-        def __init__(self, payload: dict) -> None:
-            self.status_code = 200
-            self._payload = payload
+        def __init__(
+            self, payload: dict | None = None, text: str = "", status_code: int = 200
+        ) -> None:
+            self.status_code = status_code
+            self._payload = payload or {}
+            self.text = text
 
         def json(self) -> dict:
             return self._payload
@@ -411,6 +493,8 @@ async def test_web_readonly_detail_fetch_extracts_content_and_images(monkeypatch
                         }
                     }
                 )
+            if "/explore/" in url:
+                return _FakeResp(status_code=404)
             return _FakeResp(
                 {
                     "data": {
@@ -439,7 +523,9 @@ async def test_web_readonly_detail_fetch_extracts_content_and_images(monkeypatch
         "https://sns-webpic-qc.xhscdn.com/detail-2",
         "https://sns-webpic-qc.xhscdn.com/cover-1",
     ]
-    assert len(_FakeClient.calls) == 2
+    assert len(_FakeClient.calls) == 3
+    assert any("/explore/n1" in url for url in _FakeClient.calls)
+    assert any("/note/detail?" in url for url in _FakeClient.calls)
 
 
 @pytest.mark.asyncio

@@ -3,11 +3,12 @@ from __future__ import annotations
 import asyncio
 import json
 import random
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import httpx
 
@@ -145,6 +146,9 @@ class XiaohongshuWebReadonlySource:
         "AppleWebKit/537.36 (KHTML, like Gecko) "
         "Chrome/126.0.0.0 Safari/537.36"
     )
+    _INITIAL_STATE_PATTERN = re.compile(
+        r"window\.__INITIAL_STATE__\s*=\s*(\{.*?\})\s*;?\s*</script>", re.S
+    )
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -238,6 +242,43 @@ class XiaohongshuWebReadonlySource:
                     max_count=max_images,
                 )
 
+                # Primary extraction path in MVP:
+                # parse note detail from explore page initial state.
+                page_note = await self._fetch_note_from_page(
+                    client=client,
+                    note_id=note_id,
+                    source_url=source_url,
+                    record=record,
+                    headers=headers,
+                    host_allowlist=cfg.host_allowlist,
+                )
+                if page_note is not None:
+                    page_title = self._read_str(page_note, "title")
+                    if page_title:
+                        title = page_title
+
+                    page_content = self._pick_valid_content(
+                        payload=page_note,
+                        candidates=["desc", "content", "note_desc", "noteDesc", "note_text"],
+                        title=title,
+                    )
+                    if page_content:
+                        content = page_content
+
+                    page_images = self._extract_image_urls(
+                        payload=page_note,
+                        candidates=["imageList", "image_list", "images", "cover"],
+                        max_count=max_images,
+                    )
+                    image_urls = self._merge_image_urls(
+                        primary=page_images,
+                        secondary=image_urls,
+                        max_count=max_images,
+                    )
+                    is_video = is_video or self._is_video_note(page_note)
+
+                # Secondary extraction path:
+                # optional JSON detail endpoint when page extraction is insufficient.
                 if (not is_video) and self._should_fetch_detail(
                     detail_fetch_mode=detail_fetch_mode,
                     content=content,
@@ -293,8 +334,8 @@ class XiaohongshuWebReadonlySource:
             raise AppError(
                 code=ErrorCode.UPSTREAM_ERROR,
                 message=(
-                    "小红书响应中未提取到可用正文。请检查 content_field_candidates、"
-                    "detail_content_field_candidates 或详情接口配置。"
+                    "小红书响应中未提取到可用正文。请检查列表字段映射、"
+                    "笔记页解析或详情接口配置。"
                 ),
                 status_code=502,
             )
@@ -398,6 +439,175 @@ class XiaohongshuWebReadonlySource:
                 status_code=502,
             )
         return payload
+
+    async def _fetch_note_from_page(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        note_id: str,
+        source_url: str,
+        record: dict,
+        headers: dict[str, str],
+        host_allowlist: list[str],
+    ) -> dict | None:
+        page_url = self._build_note_page_url(
+            note_id=note_id, source_url=source_url, record=record
+        )
+        self._assert_https_and_host(page_url, host_allowlist)
+        html = await self._request_text(
+            client=client,
+            method="GET",
+            url=page_url,
+            headers=headers,
+            body=None,
+            best_effort=True,
+        )
+        if not html:
+            return None
+
+        initial_state = self._extract_initial_state(html)
+        if initial_state is None:
+            return None
+        return self._extract_note_from_initial_state(initial_state, note_id)
+
+    async def _request_text(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        method: str,
+        url: str,
+        headers: dict[str, str],
+        body: str | None,
+        best_effort: bool,
+    ) -> str:
+        try:
+            response = await client.request(
+                method=method,
+                url=url,
+                headers=headers,
+                content=body,
+            )
+        except httpx.HTTPError:
+            if best_effort:
+                return ""
+            raise AppError(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message="请求小红书网页端接口失败。",
+                status_code=502,
+            ) from None
+
+        if response.status_code in {401, 403, 429}:
+            if best_effort:
+                return ""
+
+        if response.status_code in {401, 403}:
+            raise AppError(
+                code=ErrorCode.AUTH_EXPIRED,
+                message="小红书鉴权失败，请检查 Cookie 或 Header 是否失效。",
+                status_code=401,
+            )
+        if response.status_code == 429:
+            raise AppError(
+                code=ErrorCode.RATE_LIMITED,
+                message="小红书请求触发限流，请稍后重试。",
+                status_code=429,
+            )
+        if response.status_code >= 400:
+            if best_effort:
+                return ""
+            raise AppError(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message=f"小红书请求失败（HTTP {response.status_code}）。",
+                status_code=502,
+            )
+        return str(getattr(response, "text", "") or "")
+
+    def _build_note_page_url(self, *, note_id: str, source_url: str, record: dict) -> str:
+        parsed_source = urlparse(source_url)
+        if parsed_source.scheme == "https" and parsed_source.netloc == "www.xiaohongshu.com":
+            base_url = f"https://www.xiaohongshu.com{parsed_source.path or f'/explore/{note_id}'}"
+        else:
+            base_url = f"https://www.xiaohongshu.com/explore/{note_id}"
+
+        xsec_token = self._read_str(record, "xsec_token")
+        xsec_source = self._read_str(record, "xsec_source") or "pc_feed"
+        if not xsec_token:
+            return base_url
+        return (
+            f"{base_url}?xsec_token={quote(xsec_token, safe='')}"
+            f"&xsec_source={quote(xsec_source, safe='')}"
+        )
+
+    def _extract_initial_state(self, html: str) -> dict | None:
+        match = self._INITIAL_STATE_PATTERN.search(html)
+        if match is None:
+            return None
+
+        raw = match.group(1)
+        normalized = re.sub(
+            r"(?<=:)\s*(?:undefined|NaN|Infinity|void 0)\s*(?=[,}])",
+            "null",
+            raw,
+        )
+        try:
+            payload = json.loads(normalized)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        return payload
+
+    def _extract_note_from_initial_state(
+        self, initial_state: dict, note_id: str
+    ) -> dict | None:
+        note_map = self._read_value(initial_state, "note.noteDetailMap")
+        if isinstance(note_map, dict):
+            note_node = note_map.get(note_id)
+            if isinstance(note_node, dict):
+                if isinstance(note_node.get("note"), dict):
+                    return note_node["note"]
+                return note_node
+        return self._find_note_payload_by_id(initial_state, note_id)
+
+    def _find_note_payload_by_id(self, payload: object, note_id: str) -> dict | None:
+        if isinstance(payload, dict):
+            current_note_id = self._read_str(payload, "noteId") or self._read_str(
+                payload, "note_id"
+            )
+            if current_note_id == note_id and any(
+                key in payload
+                for key in (
+                    "desc",
+                    "title",
+                    "imageList",
+                    "image_list",
+                    "type",
+                    "video",
+                    "videoInfo",
+                )
+            ):
+                return payload
+
+            note_node = payload.get("note")
+            if isinstance(note_node, dict):
+                note_node_id = self._read_str(note_node, "noteId") or self._read_str(
+                    note_node, "note_id"
+                )
+                if note_node_id == note_id:
+                    return note_node
+
+            for value in payload.values():
+                found = self._find_note_payload_by_id(value, note_id)
+                if found is not None:
+                    return found
+            return None
+
+        if isinstance(payload, list):
+            for item in payload:
+                found = self._find_note_payload_by_id(item, note_id)
+                if found is not None:
+                    return found
+        return None
 
     async def _fetch_detail_payload(
         self,
