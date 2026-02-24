@@ -55,14 +55,14 @@ Then fill:
 
 建议流程：
 1. 在浏览器 DevTools 里抓“小红书收藏列表”请求。
-2. 用脚本自动转换抓包到本地配置（避免手填出错）：
+2. 用脚本自动把抓包写入 `server/.env`（避免手填出错）：
    ```bash
    cd server
    python tools/xhs_capture_to_config.py --har /path/to/capture.har
    ```
-3. 用生成的本地配置启动（不会改你 Git 里的 `config.yaml`）：
+3. 正常启动服务即可（`config.yaml` 会读取 `.env` 里的 `XHS_*` 变量）：
    ```bash
-   MIDAS_CONFIG_PATH=.tmp/config.xhs.local.yaml uvicorn app.main:app --host 0.0.0.0 --port 8000
+   uvicorn app.main:app --host 0.0.0.0 --port 8000
    ```
 4. 先用小 `limit`（如 3）并传 `confirm_live=true` 试跑。
 5. 观察是否返回 `AUTH_EXPIRED` 或 `RATE_LIMITED`，再调整。
@@ -82,6 +82,7 @@ curl -X POST http://127.0.0.1:8000/api/bilibili/summarize \
 ```
 
 ```bash
+# 仅 mock 模式可直接调用（web_readonly 下需 confirm_live=true）
 curl -X POST http://127.0.0.1:8000/api/xiaohongshu/sync \
   -H 'Content-Type: application/json' \
   -d '{"limit":5}'
@@ -106,10 +107,9 @@ curl -X POST http://127.0.0.1:8000/api/xiaohongshu/sync/jobs \
 
 ## Notes
 
-- Default ASR mode is `mock` for local development.
-- To use real ASR, install `faster-whisper` and set `asr.mode: faster_whisper`.
-- To use real LLM output, set `llm.enabled: true` and configure API params.
-- Current Xiaohongshu integration mode is `mock` to validate workflow and risk controls.
+- Default ASR mode is `faster_whisper` with `asr.model_size=base`.
+- Default LLM mode is enabled (`llm.enabled=true`); set `llm.api_key` before real run.
+- Default Xiaohongshu integration mode is `web_readonly`.
 - Synced note IDs persist in `xiaohongshu.db_path` (default `.tmp/midas.db`).
 - `web_readonly` 模式仍属于非官方接口回放，务必低频、低并发、只读请求，优先保护账号安全。
 
@@ -136,10 +136,10 @@ python tools/selfcheck.py
 ```bash
 cd server
 source .venv/bin/activate
-python tools/smoke_test.py --profile mock
+python tools/smoke_test.py --profile web_guard
 ```
 
-- 用于做无风险接口冒烟（`/health`、B站参数校验、小红书 mock 同步与 job 轮询）。
+- 用于做无风险接口冒烟（`/health`、B站参数校验、小红书 confirm_live 保护链路）。
 
 如果服务端当前是 `web_readonly` 模式（不发真实请求，仅验证保护机制）：
 
@@ -151,14 +151,14 @@ python tools/smoke_test.py --profile web_guard
 
 ```bash
 cd server
-tools/run_local_stack.sh --profile mock
+tools/run_local_stack.sh --profile web_guard
 ```
 
 - 执行顺序：`selfcheck -> 启动服务 -> smoke_test`。
 - 默认 `selfcheck` 失败仅告警继续；如果你想严格阻断：
 
 ```bash
-tools/run_local_stack.sh --profile mock --strict-selfcheck
+tools/run_local_stack.sh --profile web_guard --strict-selfcheck
 ```
 
 停止本地服务：

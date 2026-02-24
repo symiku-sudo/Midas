@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 from functools import lru_cache
 from pathlib import Path
 
@@ -14,15 +15,15 @@ class ServerConfig(BaseModel):
 
 
 class LLMConfig(BaseModel):
-    enabled: bool = False
-    api_base: str = "https://api.openai.com/v1"
+    enabled: bool = True
+    api_base: str = "https://generativelanguage.googleapis.com/v1beta/openai"
     api_key: str = ""
-    model: str = "gpt-4o-mini"
+    model: str = "gemini-3-flash-preview"
     timeout_seconds: int = 120
 
 
 class ASRConfig(BaseModel):
-    mode: str = "mock"
+    mode: str = "faster_whisper"
     device: str = "cpu"
     model_size: str = "base"
     language: str = "zh"
@@ -83,7 +84,7 @@ class XiaohongshuWebReadonlyConfig(BaseModel):
 
 
 class XiaohongshuConfig(BaseModel):
-    mode: str = "mock"
+    mode: str = "web_readonly"
     cookie: str = ""
     collection_id: str = ""
     default_limit: int = 20
@@ -115,12 +116,58 @@ class Settings(BaseModel):
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
 
 
+_ENV_VAR_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _project_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _load_dotenv(project_root: Path) -> None:
+    dotenv_path = project_root / ".env"
+    if not dotenv_path.exists():
+        return
+
+    for raw_line in dotenv_path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
+
+
+def _expand_env_vars(payload: object) -> object:
+    if isinstance(payload, dict):
+        return {key: _expand_env_vars(value) for key, value in payload.items()}
+    if isinstance(payload, list):
+        return [_expand_env_vars(item) for item in payload]
+    if isinstance(payload, str):
+        return _ENV_VAR_PATTERN.sub(
+            lambda match: os.getenv(match.group(1), ""),
+            payload,
+        )
+    return payload
+
+
 def _resolve_config_path() -> Path:
+    project_root = _project_root()
+    _load_dotenv(project_root)
+
     env_path = os.getenv("MIDAS_CONFIG_PATH")
     if env_path:
         return Path(env_path).expanduser().resolve()
 
-    project_root = Path(__file__).resolve().parents[2]
     default_path = project_root / "config.yaml"
     if default_path.exists():
         return default_path
@@ -136,7 +183,8 @@ def load_settings() -> Settings:
 
     with config_path.open("r", encoding="utf-8") as fp:
         raw = yaml.safe_load(fp) or {}
-    return Settings.model_validate(raw)
+    expanded = _expand_env_vars(raw)
+    return Settings.model_validate(expanded)
 
 
 @lru_cache(maxsize=1)

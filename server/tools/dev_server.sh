@@ -10,16 +10,16 @@ LOG_FILE="$TMP_DIR/local_server.log"
 usage() {
   cat <<'EOF'
 Usage:
-  tools/dev_server.sh start [mock|web_guard]
+  tools/dev_server.sh start [web_guard|mock]
   tools/dev_server.sh stop
-  tools/dev_server.sh restart [mock|web_guard]
+  tools/dev_server.sh restart [web_guard|mock]
   tools/dev_server.sh status
   tools/dev_server.sh logs [lines]
 
 Examples:
   tools/dev_server.sh start
-  tools/dev_server.sh start web_guard
-  tools/dev_server.sh restart mock
+  tools/dev_server.sh start mock
+  tools/dev_server.sh restart web_guard
   tools/dev_server.sh logs 120
 EOF
 }
@@ -53,7 +53,7 @@ show_status() {
 }
 
 start_server() {
-  local profile="${1:-mock}"
+  local profile="${1:-web_guard}"
   if [[ "$profile" != "mock" && "$profile" != "web_guard" ]]; then
     echo "[dev_server] Unsupported profile: $profile"
     usage
@@ -72,7 +72,7 @@ stop_server() {
 }
 
 restart_server() {
-  local profile="${1:-mock}"
+  local profile="${1:-web_guard}"
   stop_server
   start_server "$profile"
 }
@@ -90,13 +90,13 @@ main() {
   local cmd="${1:-}"
   case "$cmd" in
     start)
-      start_server "${2:-mock}"
+      start_server "${2:-web_guard}"
       ;;
     stop)
       stop_server
       ;;
     restart)
-      restart_server "${2:-mock}"
+      restart_server "${2:-web_guard}"
       ;;
     status)
       show_status

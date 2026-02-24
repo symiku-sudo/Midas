@@ -4,15 +4,15 @@ server:
 
 llm:
   enabled: true
-  api_base: https://api.openai.com/v1
-  api_key: "YOUR_LLM_API_KEY"
-  model: gpt-4o-mini
+  api_base: https://generativelanguage.googleapis.com/v1beta/openai
+  api_key: "${GEMINI_API_KEY}"
+  model: gemini-3-flash-preview
   timeout_seconds: 120
 
 asr:
   mode: faster_whisper
   device: cpu
-  model_size: small
+  model_size: base
   language: zh
 
 bilibili:
@@ -28,7 +28,7 @@ xiaohongshu:
   # 可选：mock / web_readonly
   # - mock: 使用本地示例数据（最安全）
   # - web_readonly: 只读请求网页端接口（需手动配置 request_url/headers）
-  mode: mock
+  mode: web_readonly
   cookie: ""
   collection_id: ""
   default_limit: 20
@@ -42,11 +42,19 @@ xiaohongshu:
   api_base: ""
   mock_notes_path: ""
   web_readonly:
-    # 从浏览器 DevTools 里复制“收藏列表”请求 URL（建议只读接口）。
-    request_url: ""
+    # 从浏览器 DevTools 里复制“收藏列表”请求 URL（建议只读接口），放到 .env 的 XHS_REQUEST_URL。
+    request_url: "${XHS_REQUEST_URL}"
     request_method: GET
-    # 可以先留空，运行时报鉴权失败再补 Cookie / X-S 等必要头。
-    request_headers: {}
+    # 涉及隐私字段，统一从 .env 注入。
+    request_headers:
+      Accept: "${XHS_HEADER_ACCEPT}"
+      Cookie: "${XHS_HEADER_COOKIE}"
+      Origin: "${XHS_HEADER_ORIGIN}"
+      Referer: "${XHS_HEADER_REFERER}"
+      User-Agent: "${XHS_HEADER_USER_AGENT}"
+      X-S: "${XHS_HEADER_X_S}"
+      X-S-Common: "${XHS_HEADER_X_S_COMMON}"
+      X-T: "${XHS_HEADER_X_T}"
     request_body: ""
     # auto: 列表正文不足时再请求详情；always: 总是请求详情；never: 只用列表
     detail_fetch_mode: auto

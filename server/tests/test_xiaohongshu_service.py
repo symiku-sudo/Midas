@@ -168,6 +168,7 @@ async def test_web_readonly_success_sets_last_sync_state(tmp_path) -> None:
         settings=settings,
         repository=repo,
         web_source=FixedWebSource(),
+        llm_service=SimpleLLM(),
     )
 
     result = await service.sync(limit=1, confirm_live=True)

@@ -46,7 +46,7 @@ python -m pytest -q
 
 ```bash
 cd server
-tools/run_local_stack.sh --profile mock
+tools/run_local_stack.sh --profile web_guard
 ```
 
 停止服务：
@@ -86,6 +86,6 @@ cp config.real.example.yaml config.yaml
 
 ## 说明
 
-- 当前小红书同步默认 `mock` 数据模式，用于验证风控流程（限量、去重、熔断与进度回传）。
-- 已支持 `web_readonly` 低风险只读模式（需显式 `confirm_live=true`，并受最小同步间隔保护）。
+- 当前小红书同步默认 `web_readonly` 低风险只读模式（需显式 `confirm_live=true`，并受最小同步间隔保护）。
+- 当前默认 `llm.enabled=true`、`asr.mode=faster_whisper`、`asr.model_size=base`。
 - 真实小红书网页端接口回放仍有平台风控风险，建议低频、小批量执行。

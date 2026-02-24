@@ -59,7 +59,7 @@ xiaohongshu:
     host_allowlist: [www.xiaohongshu.com, edith.xiaohongshu.com]
 ```
 
-### 可选：自动生成本地配置（推荐）
+### 可选：自动写入 `.env`（推荐）
 
 如果你不想手填字段，可以导出 HAR 后直接生成：
 
@@ -68,12 +68,21 @@ cd server
 python tools/xhs_capture_to_config.py --har /path/to/xhs.har
 ```
 
-脚本默认输出：`.tmp/config.xhs.local.yaml`  
-使用方式：
+脚本默认写入：`server/.env` 的这些键：
+- `XHS_REQUEST_URL`
+- `XHS_HEADER_ACCEPT`
+- `XHS_HEADER_COOKIE`
+- `XHS_HEADER_ORIGIN`
+- `XHS_HEADER_REFERER`
+- `XHS_HEADER_USER_AGENT`
+- `XHS_HEADER_X_S`
+- `XHS_HEADER_X_S_COMMON`
+- `XHS_HEADER_X_T`
+
+写入后正常启动服务即可：
 
 ```bash
-MIDAS_CONFIG_PATH=.tmp/config.xhs.local.yaml \
-  uvicorn app.main:app --host 0.0.0.0 --port 8000
+uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
 如果你只有 cURL + 响应 JSON，也可以：

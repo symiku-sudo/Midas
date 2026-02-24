@@ -3,14 +3,14 @@ server:
   port: 8000
 
 llm:
-  enabled: false
-  api_base: https://api.openai.com/v1
-  api_key: ""
-  model: gpt-4o-mini
+  enabled: true
+  api_base: https://generativelanguage.googleapis.com/v1beta/openai
+  api_key: "${GEMINI_API_KEY}"
+  model: gemini-3-flash-preview
   timeout_seconds: 120
 
 asr:
-  mode: mock
+  mode: faster_whisper
   device: cpu
   model_size: base
   language: zh
@@ -25,7 +25,7 @@ runtime:
   log_level: INFO
 
 xiaohongshu:
-  mode: mock
+  mode: web_readonly
   cookie: ""
   collection_id: ""
   default_limit: 20
@@ -39,9 +39,17 @@ xiaohongshu:
   api_base: ""
   mock_notes_path: ""
   web_readonly:
-    request_url: ""
+    request_url: "${XHS_REQUEST_URL}"
     request_method: GET
-    request_headers: {}
+    request_headers:
+      Accept: "${XHS_HEADER_ACCEPT}"
+      Cookie: "${XHS_HEADER_COOKIE}"
+      Origin: "${XHS_HEADER_ORIGIN}"
+      Referer: "${XHS_HEADER_REFERER}"
+      User-Agent: "${XHS_HEADER_USER_AGENT}"
+      X-S: "${XHS_HEADER_X_S}"
+      X-S-Common: "${XHS_HEADER_X_S_COMMON}"
+      X-T: "${XHS_HEADER_X_T}"
     request_body: ""
     detail_fetch_mode: auto
     detail_request_url_template: ""

@@ -247,16 +247,18 @@ def main() -> int:
                 capture.inference = inference
 
         _assert_xhs_host(capture.request_url)
-
-        config = load_yaml_file(args.base)
-        merged = apply_capture_to_config(config, capture)
-
+        updates = build_env_updates(capture)
         if args.dry_run:
-            print(yaml.safe_dump(merged, allow_unicode=True, sort_keys=False))
+            _print_summary(
+                capture=capture,
+                output_path=args.env,
+                updated_keys=updates,
+                dry_run=True,
+            )
             return 0
 
-        write_yaml_file(args.output, merged)
-        _print_summary(capture, args.output)
+        upsert_env_file(args.env, updates)
+        _print_summary(capture=capture, output_path=args.env, updated_keys=updates)
         return 0
     except Exception as exc:
         print(f"[xhs_capture_to_config] 失败: {exc}")
@@ -266,7 +268,7 @@ def main() -> int:
 def _build_arg_parser() -> argparse.ArgumentParser:
     server_root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(
-        description="把浏览器抓包（HAR 或 cURL）转换为小红书 web_readonly 配置。"
+        description="把浏览器抓包（HAR 或 cURL）转换为 server/.env 的 XHS_* 变量。"
     )
 
     src_group = parser.add_mutually_exclusive_group(required=True)
@@ -287,23 +289,77 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="可选：当 HAR 里请求很多时，用 URL 子串提升匹配优先级。",
     )
     parser.add_argument(
-        "--base",
+        "--env",
         type=Path,
-        default=server_root / "config.yaml",
-        help="基础配置文件（默认 server/config.yaml）。",
-    )
-    parser.add_argument(
-        "--output",
-        type=Path,
-        default=server_root / ".tmp" / "config.xhs.local.yaml",
-        help="输出配置文件（默认 server/.tmp/config.xhs.local.yaml）。",
+        default=server_root / ".env",
+        help="输出 .env 文件路径（默认 server/.env）。",
     )
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="仅打印合并后的 YAML，不写文件。",
+        help="仅打印将更新的变量摘要，不写文件。",
     )
     return parser
+
+
+def build_env_updates(capture: RequestCapture) -> dict[str, str]:
+    return {
+        "XHS_REQUEST_URL": _single_line(capture.request_url),
+        "XHS_HEADER_ACCEPT": _single_line(_get_header(capture.request_headers, "Accept")),
+        "XHS_HEADER_COOKIE": _single_line(_get_header(capture.request_headers, "Cookie")),
+        "XHS_HEADER_ORIGIN": _single_line(_get_header(capture.request_headers, "Origin")),
+        "XHS_HEADER_REFERER": _single_line(_get_header(capture.request_headers, "Referer")),
+        "XHS_HEADER_USER_AGENT": _single_line(
+            _get_header(capture.request_headers, "User-Agent")
+        ),
+        "XHS_HEADER_X_S": _single_line(_get_header(capture.request_headers, "X-S")),
+        "XHS_HEADER_X_S_COMMON": _single_line(
+            _get_header(capture.request_headers, "X-S-Common")
+        ),
+        "XHS_HEADER_X_T": _single_line(_get_header(capture.request_headers, "X-T")),
+    }
+
+
+def upsert_env_file(path: Path, updates: dict[str, str]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        lines = path.read_text(encoding="utf-8").splitlines()
+    else:
+        lines = []
+
+    key_to_line: dict[str, int] = {}
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            continue
+        key = line.split("=", 1)[0].strip()
+        if key:
+            key_to_line[key] = i
+
+    for key, value in updates.items():
+        normalized = _single_line(value)
+        if not normalized and key in key_to_line:
+            # Keep existing secret/header value when current capture misses this field.
+            continue
+        rendered = f"{key}={normalized}"
+        if key in key_to_line:
+            lines[key_to_line[key]] = rendered
+        else:
+            lines.append(rendered)
+
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _get_header(headers: dict[str, str], key: str) -> str:
+    wanted = key.strip().lower()
+    for k, v in headers.items():
+        if str(k).strip().lower() == wanted:
+            return str(v).strip()
+    return ""
+
+
+def _single_line(value: str) -> str:
+    return " ".join(str(value).splitlines()).strip()
 
 
 def _score_har_entry(
@@ -509,20 +565,28 @@ def _assert_xhs_host(url: str) -> None:
         raise ValueError(f"请求域名不是小红书：{host}")
 
 
-def _print_summary(capture: RequestCapture, output_path: Path) -> None:
-    print("[xhs_capture_to_config] 已生成配置。")
-    print(f"- request_url: {capture.request_url}")
+def _print_summary(
+    capture: RequestCapture,
+    output_path: Path,
+    updated_keys: dict[str, str],
+    dry_run: bool = False,
+) -> None:
+    action = "预览将更新" if dry_run else "已更新"
+    print(f"[xhs_capture_to_config] {action} .env 变量。")
+    print(f"- request_url_host: {urlparse(capture.request_url).netloc}")
     print(f"- request_method: {capture.request_method}")
     print(f"- headers: {len(capture.request_headers)} keys")
     if capture.inference is not None:
         print(f"- items_path: {capture.inference.items_path}")
         print(f"- note_id_field: {capture.inference.note_id_field}")
         print(f"- title_field: {capture.inference.title_field}")
-    print(f"- output: {output_path}")
-    print(
-        "- 启动方式: MIDAS_CONFIG_PATH="
-        f"{output_path} uvicorn app.main:app --host 0.0.0.0 --port 8000"
-    )
+    print(f"- env: {output_path}")
+
+    non_empty = sorted([k for k, v in updated_keys.items() if v])
+    empty = sorted([k for k, v in updated_keys.items() if not v])
+    print(f"- non_empty_keys: {len(non_empty)}")
+    if empty:
+        print(f"- empty_keys: {', '.join(empty)}")
 
 
 if __name__ == "__main__":

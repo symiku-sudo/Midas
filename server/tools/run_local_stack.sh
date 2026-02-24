@@ -9,7 +9,7 @@ LOG_FILE="$TMP_DIR/local_server.log"
 
 HOST="127.0.0.1"
 PORT="8000"
-PROFILE="mock"
+PROFILE="web_guard"
 WAIT_SECONDS="20"
 STRICT_SELFCHECK="0"
 
@@ -21,7 +21,7 @@ Usage:
 Options:
   --host <host>                Bind host (default: 127.0.0.1)
   --port <port>                Bind port (default: 8000)
-  --profile <mock|web_guard>   Smoke profile (default: mock)
+  --profile <mock|web_guard>   Smoke profile (default: web_guard)
   --wait-seconds <n>           Wait seconds for server ready (default: 20)
   --strict-selfcheck           Stop immediately if selfcheck has fail
   -h, --help                   Show this help
