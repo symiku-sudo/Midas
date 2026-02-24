@@ -16,3 +16,24 @@ class BilibiliSummaryData(BaseModel):
     summary_markdown: str
     elapsed_ms: int
     transcript_chars: int
+
+
+class XiaohongshuSyncRequest(BaseModel):
+    limit: int | None = Field(default=None, ge=1, le=100)
+
+
+class XiaohongshuSummaryItem(BaseModel):
+    note_id: str
+    title: str
+    source_url: str
+    summary_markdown: str
+
+
+class XiaohongshuSyncData(BaseModel):
+    requested_limit: int
+    fetched_count: int
+    new_count: int
+    skipped_count: int
+    failed_count: int
+    circuit_opened: bool
+    summaries: list[XiaohongshuSummaryItem]

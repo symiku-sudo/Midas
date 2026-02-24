@@ -1,31 +1,33 @@
 # Midas 周进度交接（2026-02-24）
 
-## 本周目标
+## 里程碑状态
 
-完成第一个可交付里程碑：服务端 MVP（配置、`/health`、B 站总结接口、统一错误码）。
+- Week 1 目标：服务端 MVP 基线（B 站总结） -> 已完成
+- Week 2 目标：服务端小红书同步链路（限量/去重/熔断） -> 已完成
 
-## 已完成
+## 本周（Week 2）新增完成项
 
-- 新增服务端工程目录：`server/`
-- 配置系统：`config.yaml` + `config.example.yaml`
-- 统一响应结构：`ok/code/message/data/request_id`
-- 请求 ID 中间件：自动读写 `X-Request-ID`
-- 全局异常处理：
-  - `INVALID_INPUT`
-  - `AUTH_EXPIRED`
-  - `RATE_LIMITED`
-  - `UPSTREAM_ERROR`
-  - `DEPENDENCY_MISSING`
-  - `INTERNAL_ERROR`
-- 已实现接口：
-  - `GET /health`
-  - `POST /api/bilibili/summarize`
-- B 站总结链路（MVP）：
-  - 链接校验
-  - `yt-dlp + ffmpeg` 音频下载
-  - ASR（默认 `mock`，支持切换 `faster_whisper`）
-  - LLM 总结（默认关闭，开启后走 OpenAI-compatible `/chat/completions`）
-- 基础测试：`2 passed`
+- 新增接口：`POST /api/xiaohongshu/sync`
+- 新增小红书同步服务能力：
+  - 单次 `limit` 限制（受 `max_limit` 约束）
+  - SQLite 持久化去重（已同步 note_id 不重复处理）
+  - 连续失败熔断（`circuit_breaker_failures` 阈值）
+  - 统一错误码返回（包含 `CIRCUIT_OPEN`）
+- 新增小红书配置段：`xiaohongshu.*`
+- 新增本地 mock 数据源：
+  - 默认内置 5 条示例笔记
+  - 支持 `mock_notes_path` 指定外部 JSON
+- 扩展 LLM 服务：支持单条小红书笔记总结
+- 测试补齐：
+  - API 测试：首次同步、二次去重、limit 超限校验
+  - 服务测试：熔断触发路径
+  - 当前结果：`5 passed`
+
+## 当前可用接口
+
+- `GET /health`
+- `POST /api/bilibili/summarize`
+- `POST /api/xiaohongshu/sync`
 
 ## 本地运行
 
@@ -45,39 +47,6 @@ source .venv/bin/activate
 python -m pytest -q
 ```
 
-## 文件清单（本次新增）
-
-- `server/app/main.py`
-- `server/app/api/routes.py`
-- `server/app/core/config.py`
-- `server/app/core/errors.py`
-- `server/app/core/response.py`
-- `server/app/core/logging.py`
-- `server/app/middleware/request_id.py`
-- `server/app/models/schemas.py`
-- `server/app/services/audio_fetcher.py`
-- `server/app/services/asr.py`
-- `server/app/services/llm.py`
-- `server/app/services/bilibili.py`
-- `server/tests/test_api.py`
-- `server/config.yaml`
-- `server/config.example.yaml`
-- `server/requirements.txt`
-- `server/README.md`
-
-## 当前限制
-
-- `asr.mode=mock` 时不会做真实语音识别（用于本地先打通流程）。
-- 若启用真实链路，需要系统安装 `yt-dlp`、`ffmpeg`，并安装 `faster-whisper`。
-- 小红书同步（限量/去重/延迟/熔断）尚未开发。
-- Android 客户端尚未开始。
-
-## 下次接续建议（优先级）
-
-1. 开发小红书同步服务端（SQLite 去重 + 熔断 + 风控延迟）。
-2. 固化错误码文档并补充接口集成测试。
-3. 启动 Android 最小客户端（连接测试 + B 站输入和结果展示）。
-
 ## 快速检查命令
 
 ```bash
@@ -88,4 +57,21 @@ curl --noproxy '*' http://127.0.0.1:8000/health
 curl --noproxy '*' -X POST http://127.0.0.1:8000/api/bilibili/summarize \
   -H 'Content-Type: application/json' \
   -d '{"video_url":"https://www.bilibili.com/video/BV1xx411c7mD"}'
+
+# 小红书同步（mock）
+curl --noproxy '*' -X POST http://127.0.0.1:8000/api/xiaohongshu/sync \
+  -H 'Content-Type: application/json' \
+  -d '{"limit":5}'
 ```
+
+## 当前限制（未完成项）
+
+- 小红书真实网页端接口尚未接入，当前 `xiaohongshu.mode` 仅支持 `mock`。
+- mock 模式用于验证业务流程，不代表真实风控效果。
+- Android 客户端尚未开始。
+
+## 下周接续建议（优先级）
+
+1. 接入小红书真实数据源（保持现有去重/熔断框架不变）。
+2. 为小红书同步补“鉴权失效”和“限流”场景测试。
+3. 启动 Android 最小客户端：设置页 + 连接测试 + B 站结果展示。

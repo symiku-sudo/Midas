@@ -23,3 +23,17 @@ bilibili:
 runtime:
   temp_dir: .tmp
   log_level: INFO
+
+xiaohongshu:
+  mode: mock
+  cookie: ""
+  collection_id: ""
+  default_limit: 20
+  max_limit: 30
+  random_delay_min_seconds: 3.0
+  random_delay_max_seconds: 10.0
+  circuit_breaker_failures: 3
+  db_path: .tmp/midas.db
+  request_timeout_seconds: 30
+  api_base: ""
+  mock_notes_path: ""

@@ -34,6 +34,21 @@ class BilibiliConfig(BaseModel):
     ffmpeg_path: str = "ffmpeg"
 
 
+class XiaohongshuConfig(BaseModel):
+    mode: str = "mock"
+    cookie: str = ""
+    collection_id: str = ""
+    default_limit: int = 20
+    max_limit: int = 30
+    random_delay_min_seconds: float = 3.0
+    random_delay_max_seconds: float = 10.0
+    circuit_breaker_failures: int = 3
+    db_path: str = ".tmp/midas.db"
+    request_timeout_seconds: int = 30
+    api_base: str = ""
+    mock_notes_path: str = ""
+
+
 class RuntimeConfig(BaseModel):
     temp_dir: str = ".tmp"
     log_level: str = "INFO"
@@ -44,6 +59,7 @@ class Settings(BaseModel):
     llm: LLMConfig = Field(default_factory=LLMConfig)
     asr: ASRConfig = Field(default_factory=ASRConfig)
     bilibili: BilibiliConfig = Field(default_factory=BilibiliConfig)
+    xiaohongshu: XiaohongshuConfig = Field(default_factory=XiaohongshuConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
 
 

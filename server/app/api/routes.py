@@ -7,8 +7,13 @@ from fastapi import APIRouter, Request
 
 from app.core.config import get_settings
 from app.core.response import success_response
-from app.models.schemas import BilibiliSummaryRequest, HealthData
+from app.models.schemas import (
+    BilibiliSummaryRequest,
+    HealthData,
+    XiaohongshuSyncRequest,
+)
 from app.services.bilibili import BilibiliSummarizer
+from app.services.xiaohongshu import XiaohongshuSyncService
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -18,6 +23,12 @@ logger = logging.getLogger(__name__)
 def _get_summarizer() -> BilibiliSummarizer:
     settings = get_settings()
     return BilibiliSummarizer(settings)
+
+
+@lru_cache(maxsize=1)
+def _get_xiaohongshu_sync_service() -> XiaohongshuSyncService:
+    settings = get_settings()
+    return XiaohongshuSyncService(settings)
 
 
 @router.get("/health")
@@ -31,4 +42,12 @@ async def bilibili_summarize(payload: BilibiliSummaryRequest, request: Request) 
     logger.info("Receive summarize request: %s", payload.video_url)
     summarizer = _get_summarizer()
     result = await summarizer.summarize(payload.video_url)
+    return success_response(data=result.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/xiaohongshu/sync")
+async def xiaohongshu_sync(payload: XiaohongshuSyncRequest, request: Request) -> dict:
+    logger.info("Receive xiaohongshu sync request, limit=%s", payload.limit)
+    service = _get_xiaohongshu_sync_service()
+    result = await service.sync(limit=payload.limit)
     return success_response(data=result.model_dump(), request_id=request.state.request_id)
