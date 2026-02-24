@@ -1,19 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from functools import lru_cache
 
 from fastapi import APIRouter, Request
 
 from app.core.config import get_settings
+from app.core.errors import AppError, ErrorCode
 from app.core.response import success_response
 from app.models.schemas import (
     BilibiliSummaryRequest,
     HealthData,
+    XiaohongshuSyncJobCreateData,
+    XiaohongshuSyncJobError,
+    XiaohongshuSyncJobStatusData,
     XiaohongshuSyncRequest,
 )
 from app.services.bilibili import BilibiliSummarizer
 from app.services.xiaohongshu import XiaohongshuSyncService
+from app.services.xiaohongshu_job import XiaohongshuSyncJobManager
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -29,6 +35,11 @@ def _get_summarizer() -> BilibiliSummarizer:
 def _get_xiaohongshu_sync_service() -> XiaohongshuSyncService:
     settings = get_settings()
     return XiaohongshuSyncService(settings)
+
+
+@lru_cache(maxsize=1)
+def _get_xiaohongshu_sync_job_manager() -> XiaohongshuSyncJobManager:
+    return XiaohongshuSyncJobManager()
 
 
 @router.get("/health")
@@ -51,3 +62,99 @@ async def xiaohongshu_sync(payload: XiaohongshuSyncRequest, request: Request) ->
     service = _get_xiaohongshu_sync_service()
     result = await service.sync(limit=payload.limit)
     return success_response(data=result.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/xiaohongshu/sync/jobs")
+async def xiaohongshu_sync_create_job(
+    payload: XiaohongshuSyncRequest, request: Request
+) -> dict:
+    logger.info("Receive xiaohongshu sync job create request, limit=%s", payload.limit)
+    settings = get_settings()
+    requested_limit = payload.limit or settings.xiaohongshu.default_limit
+    manager = _get_xiaohongshu_sync_job_manager()
+    job = await manager.create_job(requested_limit=requested_limit)
+    asyncio.create_task(_run_xiaohongshu_sync_job(job.job_id, payload.limit))
+    data = XiaohongshuSyncJobCreateData(
+        job_id=job.job_id,
+        status=job.status.value,
+        requested_limit=requested_limit,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/xiaohongshu/sync/jobs/{job_id}")
+async def xiaohongshu_sync_get_job(job_id: str, request: Request) -> dict:
+    manager = _get_xiaohongshu_sync_job_manager()
+    state = await manager.get_job(job_id)
+    if state is None:
+        raise AppError(
+            code=ErrorCode.INVALID_INPUT,
+            message=f"同步任务不存在：{job_id}",
+            status_code=404,
+        )
+
+    error = (
+        XiaohongshuSyncJobError(
+            code=state.error.get("code", ErrorCode.INTERNAL_ERROR.value),
+            message=state.error.get("message", "unknown error"),
+            details=state.error.get("details"),
+        )
+        if state.error
+        else None
+    )
+    data = XiaohongshuSyncJobStatusData(
+        job_id=state.job_id,
+        status=state.status.value,
+        requested_limit=state.requested_limit,
+        current=state.current,
+        total=state.total,
+        message=state.message,
+        result=state.result,
+        error=error,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+async def _run_xiaohongshu_sync_job(job_id: str, limit: int | None) -> None:
+    settings = get_settings()
+    requested_limit = limit or settings.xiaohongshu.default_limit
+    service = _get_xiaohongshu_sync_service()
+    manager = _get_xiaohongshu_sync_job_manager()
+
+    await manager.set_running(
+        job_id,
+        total=requested_limit,
+        message="任务已启动，正在同步小红书笔记。",
+    )
+
+    async def _on_progress(current: int, total: int, message: str) -> None:
+        try:
+            await manager.set_progress(
+                job_id, current=current, total=total, message=message
+            )
+        except Exception:
+            logger.exception("Failed to update xiaohongshu sync progress, job=%s", job_id)
+
+    try:
+        result = await service.sync(limit=limit, progress_callback=_on_progress)
+        await manager.set_success(job_id, result=result)
+    except AppError as exc:
+        details = exc.details if isinstance(exc.details, dict) else {}
+        processed = int(details.get("processed_count", 0))
+        total = int(details.get("fetched_count", requested_limit))
+        await manager.set_failed(
+            job_id,
+            code=exc.code.value,
+            message=exc.message,
+            details=details or None,
+            current=processed,
+            total=total,
+        )
+    except Exception as exc:
+        logger.exception("Unhandled xiaohongshu sync job error, job=%s", job_id)
+        await manager.set_failed(
+            job_id,
+            code=ErrorCode.INTERNAL_ERROR.value,
+            message="服务端发生未预期错误。",
+            details={"error": str(exc)},
+        )

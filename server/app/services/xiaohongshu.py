@@ -5,6 +5,7 @@ import json
 import random
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Awaitable, Callable
 
 from app.core.config import Settings
 from app.core.errors import AppError, ErrorCode
@@ -136,7 +137,11 @@ class XiaohongshuSyncService:
         self._source = source or MockXiaohongshuSource(settings)
         self._llm_service = llm_service or LLMService(settings)
 
-    async def sync(self, limit: int | None) -> XiaohongshuSyncData:
+    async def sync(
+        self,
+        limit: int | None,
+        progress_callback: Callable[[int, int, str], Awaitable[None]] | None = None,
+    ) -> XiaohongshuSyncData:
         requested_limit = limit or self._settings.xiaohongshu.default_limit
         if requested_limit > self._settings.xiaohongshu.max_limit:
             raise AppError(
@@ -157,6 +162,14 @@ class XiaohongshuSyncService:
 
         notes = self._source.fetch_recent(requested_limit)
         fetched_count = len(notes)
+        await self._emit_progress(
+            progress_callback,
+            current=0,
+            total=fetched_count,
+            message="已拉取笔记列表，开始处理。",
+        )
+
+        processed_count = 0
         new_count = 0
         skipped_count = 0
         failed_count = 0
@@ -166,6 +179,13 @@ class XiaohongshuSyncService:
         for index, note in enumerate(notes):
             if self._repository.is_synced(note.note_id):
                 skipped_count += 1
+                processed_count += 1
+                await self._emit_progress(
+                    progress_callback,
+                    current=processed_count,
+                    total=fetched_count,
+                    message=f"已跳过重复笔记：{note.note_id}",
+                )
                 continue
 
             try:
@@ -188,9 +208,23 @@ class XiaohongshuSyncService:
                 )
                 new_count += 1
                 consecutive_failures = 0
+                processed_count += 1
+                await self._emit_progress(
+                    progress_callback,
+                    current=processed_count,
+                    total=fetched_count,
+                    message=f"已处理笔记：{note.note_id}",
+                )
             except AppError as exc:
                 failed_count += 1
                 consecutive_failures += 1
+                processed_count += 1
+                await self._emit_progress(
+                    progress_callback,
+                    current=processed_count,
+                    total=fetched_count,
+                    message=f"处理失败笔记：{note.note_id}",
+                )
                 if (
                     consecutive_failures
                     >= self._settings.xiaohongshu.circuit_breaker_failures
@@ -205,6 +239,7 @@ class XiaohongshuSyncService:
                             "new_count": new_count,
                             "skipped_count": skipped_count,
                             "failed_count": failed_count,
+                            "processed_count": processed_count,
                             "circuit_opened": True,
                             "last_error_code": exc.code.value,
                             "last_error_message": exc.message,
@@ -224,6 +259,18 @@ class XiaohongshuSyncService:
             circuit_opened=False,
             summaries=summaries,
         )
+
+    async def _emit_progress(
+        self,
+        callback: Callable[[int, int, str], Awaitable[None]] | None,
+        *,
+        current: int,
+        total: int,
+        message: str,
+    ) -> None:
+        if callback is None:
+            return
+        await callback(current, total, message)
 
     async def _delay_between_requests(self, *, mode: str) -> None:
         if mode == "mock":
@@ -245,4 +292,3 @@ class XiaohongshuSyncService:
             )
 
         await asyncio.sleep(random.uniform(min_delay, max_delay))
-

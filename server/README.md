@@ -5,6 +5,8 @@
 - `GET /health`
 - `POST /api/bilibili/summarize`
 - `POST /api/xiaohongshu/sync`
+- `POST /api/xiaohongshu/sync/jobs`
+- `GET /api/xiaohongshu/sync/jobs/{job_id}`
 - Unified response envelope: `ok/code/message/data/request_id`
 - Unified error handling and request-id middleware
 - Config-driven runtime (`config.yaml`)
@@ -37,6 +39,16 @@ curl -X POST http://127.0.0.1:8000/api/bilibili/summarize \
 curl -X POST http://127.0.0.1:8000/api/xiaohongshu/sync \
   -H 'Content-Type: application/json' \
   -d '{"limit":5}'
+```
+
+```bash
+# 创建异步任务
+curl -X POST http://127.0.0.1:8000/api/xiaohongshu/sync/jobs \
+  -H 'Content-Type: application/json' \
+  -d '{"limit":5}'
+
+# 查询任务进度
+curl http://127.0.0.1:8000/api/xiaohongshu/sync/jobs/<job_id>
 ```
 
 ## Notes

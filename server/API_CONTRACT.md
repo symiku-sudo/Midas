@@ -91,6 +91,70 @@ Success `data`:
 }
 ```
 
+## `POST /api/xiaohongshu/sync/jobs`
+
+用途：创建异步同步任务（用于客户端显示实时进度）。
+
+Request:
+
+```json
+{
+  "limit": 5
+}
+```
+
+Success `data`:
+
+```json
+{
+  "job_id": "6a9f....",
+  "status": "pending",
+  "requested_limit": 5
+}
+```
+
+## `GET /api/xiaohongshu/sync/jobs/{job_id}`
+
+用途：查询同步任务状态与进度。
+
+Success `data`（运行中）:
+
+```json
+{
+  "job_id": "6a9f....",
+  "status": "running",
+  "requested_limit": 5,
+  "current": 2,
+  "total": 5,
+  "message": "已处理笔记：mock-note-002",
+  "result": null,
+  "error": null
+}
+```
+
+Success `data`（完成）:
+
+```json
+{
+  "job_id": "6a9f....",
+  "status": "succeeded",
+  "requested_limit": 5,
+  "current": 5,
+  "total": 5,
+  "message": "同步任务完成。",
+  "result": {
+    "requested_limit": 5,
+    "fetched_count": 5,
+    "new_count": 5,
+    "skipped_count": 0,
+    "failed_count": 0,
+    "circuit_opened": false,
+    "summaries": []
+  },
+  "error": null
+}
+```
+
 ## Error codes
 
 - `INVALID_INPUT`: request field invalid or config invalid

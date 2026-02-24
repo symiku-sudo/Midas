@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from pydantic import BaseModel, Field
 
 
@@ -37,3 +39,26 @@ class XiaohongshuSyncData(BaseModel):
     failed_count: int
     circuit_opened: bool
     summaries: list[XiaohongshuSummaryItem]
+
+
+class XiaohongshuSyncJobCreateData(BaseModel):
+    job_id: str
+    status: str
+    requested_limit: int
+
+
+class XiaohongshuSyncJobError(BaseModel):
+    code: str
+    message: str
+    details: dict[str, Any] | None = None
+
+
+class XiaohongshuSyncJobStatusData(BaseModel):
+    job_id: str
+    status: str
+    requested_limit: int
+    current: int
+    total: int
+    message: str
+    result: XiaohongshuSyncData | None = None
+    error: XiaohongshuSyncJobError | None = None

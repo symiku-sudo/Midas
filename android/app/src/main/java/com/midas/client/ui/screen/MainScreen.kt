@@ -1,0 +1,260 @@
+package com.midas.client.ui.screen
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Button
+import androidx.compose.material3.Card
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Tab
+import androidx.compose.material3.TabRow
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.midas.client.data.model.BilibiliSummaryData
+import com.midas.client.data.model.XiaohongshuSummaryItem
+import com.midas.client.ui.components.MarkdownText
+
+private enum class MainTab(val title: String) {
+    SETTINGS("设置"),
+    BILIBILI("B站总结"),
+    XHS("小红书同步"),
+}
+
+@Composable
+fun MainScreen(viewModel: MainViewModel) {
+    val settings by viewModel.settingsState.collectAsStateWithLifecycle()
+    val bilibili by viewModel.bilibiliState.collectAsStateWithLifecycle()
+    val xiaohongshu by viewModel.xiaohongshuState.collectAsStateWithLifecycle()
+
+    var selectedTab by remember { mutableStateOf(MainTab.SETTINGS) }
+
+    Scaffold(
+        topBar = {
+            Column {
+                Text(
+                    text = "Midas Client",
+                    style = MaterialTheme.typography.titleLarge,
+                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+                )
+                TabRow(selectedTabIndex = selectedTab.ordinal) {
+                    MainTab.entries.forEach { tab ->
+                        Tab(
+                            selected = selectedTab == tab,
+                            onClick = { selectedTab = tab },
+                            text = { Text(tab.title) },
+                        )
+                    }
+                }
+            }
+        },
+    ) { innerPadding ->
+        when (selectedTab) {
+            MainTab.SETTINGS -> {
+                SettingsPanel(
+                    state = settings,
+                    onBaseUrlChange = viewModel::onBaseUrlInputChange,
+                    onSave = viewModel::saveBaseUrl,
+                    onTestConnection = viewModel::testConnection,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                        .padding(16.dp),
+                )
+            }
+
+            MainTab.BILIBILI -> {
+                BilibiliPanel(
+                    state = bilibili,
+                    onVideoUrlChange = viewModel::onBilibiliUrlInputChange,
+                    onSubmit = viewModel::submitBilibiliSummary,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                        .padding(16.dp),
+                )
+            }
+
+            MainTab.XHS -> {
+                XiaohongshuPanel(
+                    state = xiaohongshu,
+                    onLimitChange = viewModel::onXiaohongshuLimitInputChange,
+                    onStartSync = viewModel::startXiaohongshuSync,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                        .padding(16.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsPanel(
+    state: SettingsUiState,
+    onBaseUrlChange: (String) -> Unit,
+    onSave: () -> Unit,
+    onTestConnection: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("服务端设置", style = MaterialTheme.typography.titleMedium)
+        OutlinedTextField(
+            value = state.baseUrlInput,
+            onValueChange = onBaseUrlChange,
+            label = { Text("服务端地址（如 http://192.168.1.5:8000/）") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(onClick = onSave) {
+                Text("保存")
+            }
+            Button(onClick = onTestConnection, enabled = !state.isTesting) {
+                Text(if (state.isTesting) "测试中..." else "连接测试")
+            }
+        }
+        if (state.saveStatus.isNotBlank()) {
+            Text(text = state.saveStatus, color = Color(0xFF2E7D32))
+        }
+        if (state.testStatus.isNotBlank()) {
+            Text(text = state.testStatus)
+        }
+    }
+}
+
+@Composable
+private fun BilibiliPanel(
+    state: BilibiliUiState,
+    onVideoUrlChange: (String) -> Unit,
+    onSubmit: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("B 站视频总结", style = MaterialTheme.typography.titleMedium)
+        OutlinedTextField(
+            value = state.videoUrlInput,
+            onValueChange = onVideoUrlChange,
+            label = { Text("输入 B 站视频链接") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+        Button(onClick = onSubmit, enabled = !state.isLoading) {
+            Text(if (state.isLoading) "处理中..." else "开始总结")
+        }
+        if (state.isLoading) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                CircularProgressIndicator(modifier = Modifier.height(20.dp))
+                Text("高精度处理中，请耐心等待。")
+            }
+        }
+        if (state.errorMessage.isNotBlank()) {
+            Text(text = state.errorMessage, color = Color(0xFFC62828))
+        }
+        state.result?.let { result ->
+            BilibiliResult(result)
+        }
+    }
+}
+
+@Composable
+private fun BilibiliResult(result: BilibiliSummaryData) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text("链接：${result.videoUrl}", style = MaterialTheme.typography.bodySmall)
+            Text("耗时：${result.elapsedMs} ms，转写字数：${result.transcriptChars}", style = MaterialTheme.typography.bodySmall)
+            HorizontalDivider()
+            MarkdownText(markdown = result.summaryMarkdown, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+@Composable
+private fun XiaohongshuPanel(
+    state: XiaohongshuUiState,
+    onLimitChange: (String) -> Unit,
+    onStartSync: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Column(
+        modifier = modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("小红书同步", style = MaterialTheme.typography.titleMedium)
+        OutlinedTextField(
+            value = state.limitInput,
+            onValueChange = onLimitChange,
+            label = { Text("本次同步条数") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+        Button(onClick = onStartSync, enabled = !state.isSyncing) {
+            Text(if (state.isSyncing) "同步中..." else "同步最近收藏")
+        }
+
+        if (state.isSyncing) {
+            if (state.progressTotal > 0) {
+                val progress = (state.progressCurrent.toFloat() / state.progressTotal.toFloat()).coerceIn(0f, 1f)
+                LinearProgressIndicator(progress = progress, modifier = Modifier.fillMaxWidth())
+                Text("进度：${state.progressCurrent}/${state.progressTotal}")
+            } else {
+                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                Text("进度：准备中")
+            }
+            if (state.progressMessage.isNotBlank()) {
+                Text(state.progressMessage)
+            }
+        }
+
+        if (state.errorMessage.isNotBlank()) {
+            Text(text = state.errorMessage, color = Color(0xFFC62828))
+        }
+
+        if (state.statsText.isNotBlank()) {
+            Text(text = state.statsText, fontWeight = FontWeight.SemiBold)
+        }
+
+        state.summaries.forEach { summary ->
+            XiaohongshuSummaryCard(summary)
+        }
+    }
+}
+
+@Composable
+private fun XiaohongshuSummaryCard(item: XiaohongshuSummaryItem) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(item.title, style = MaterialTheme.typography.titleSmall)
+            Text("ID: ${item.noteId}", style = MaterialTheme.typography.bodySmall)
+            Text(item.sourceUrl, style = MaterialTheme.typography.bodySmall)
+            HorizontalDivider()
+            MarkdownText(markdown = item.summaryMarkdown, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
