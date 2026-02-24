@@ -48,10 +48,21 @@ xiaohongshu:
     # 可以先留空，运行时报鉴权失败再补 Cookie / X-S 等必要头。
     request_headers: {}
     request_body: ""
+    # auto: 列表正文不足时再请求详情；always: 总是请求详情；never: 只用列表
+    detail_fetch_mode: auto
+    # 可选：详情接口模板，支持 {note_id} / {xsec_token}
+    detail_request_url_template: ""
+    detail_request_method: GET
+    detail_request_headers: {}
+    detail_request_body: ""
     # 以下字段按你的实际响应结构调整
     items_path: data.notes
     note_id_field: note_id
     title_field: title
     content_field_candidates: [desc, content, note_text]
+    image_field_candidates: [cover.url_pre, cover.url_default, cover.info_list, image_list, images]
+    detail_content_field_candidates: [data.items.0.note_card.desc, data.items.0.note_card.note_display_title, data.note.desc, data.note.note_desc]
+    detail_image_field_candidates: [data.items.0.note_card.image_list, data.items.0.note_card.images_list, data.note.image_list, data.note.images]
     source_url_field: url
+    max_images_per_note: 6
     host_allowlist: [www.xiaohongshu.com, edith.xiaohongshu.com]

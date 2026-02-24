@@ -39,13 +39,44 @@ class XiaohongshuWebReadonlyConfig(BaseModel):
     request_method: str = "GET"
     request_headers: dict[str, str] = Field(default_factory=dict)
     request_body: str = ""
+    detail_fetch_mode: str = "auto"  # auto / always / never
+    detail_request_url_template: str = ""
+    detail_request_method: str = "GET"
+    detail_request_headers: dict[str, str] = Field(default_factory=dict)
+    detail_request_body: str = ""
     items_path: str = "data.notes"
     note_id_field: str = "note_id"
     title_field: str = "title"
     content_field_candidates: list[str] = Field(
         default_factory=lambda: ["desc", "content", "note_text"]
     )
+    image_field_candidates: list[str] = Field(
+        default_factory=lambda: [
+            "cover.url_pre",
+            "cover.url_default",
+            "cover.info_list",
+            "image_list",
+            "images",
+        ]
+    )
+    detail_content_field_candidates: list[str] = Field(
+        default_factory=lambda: [
+            "data.items.0.note_card.desc",
+            "data.items.0.note_card.note_display_title",
+            "data.note.desc",
+            "data.note.note_desc",
+        ]
+    )
+    detail_image_field_candidates: list[str] = Field(
+        default_factory=lambda: [
+            "data.items.0.note_card.image_list",
+            "data.items.0.note_card.images_list",
+            "data.note.image_list",
+            "data.note.images",
+        ]
+    )
     source_url_field: str = "url"
+    max_images_per_note: int = 6
     host_allowlist: list[str] = Field(
         default_factory=lambda: ["www.xiaohongshu.com", "edith.xiaohongshu.com"]
     )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import httpx
 
@@ -17,6 +18,9 @@ _SYSTEM_PROMPT = (
 _XHS_PROMPT = (
     "你是一个中文信息提炼助手。"
     "请把输入的小红书笔记整理成 Markdown，输出包含：摘要、关键要点、可执行建议。"
+    "严格基于提供的正文，不得根据标题臆测。"
+    "若提供了配图，请结合图文共同总结，不可忽略图片信息。"
+    "如果信息不足，请明确写出“信息不足”，不要编造细节。"
 )
 
 
@@ -101,14 +105,7 @@ class LLMService:
             )
 
         raw = resp.json()
-        try:
-            content = raw["choices"][0]["message"]["content"].strip()
-        except (KeyError, IndexError, TypeError) as exc:
-            raise AppError(
-                code=ErrorCode.UPSTREAM_ERROR,
-                message="LLM 响应结构异常。",
-                status_code=502,
-            ) from exc
+        content = self._extract_response_text(raw)
 
         if not content:
             raise AppError(
@@ -126,9 +123,22 @@ class LLMService:
         title: str,
         content: str,
         source_url: str,
+        image_urls: list[str] | None = None,
     ) -> str:
+        normalized_image_urls = [
+            item.strip()
+            for item in (image_urls or [])
+            if isinstance(item, str) and item.strip().startswith(("http://", "https://"))
+        ]
         if not self._settings.llm.enabled:
             preview = content[:300].strip()
+            image_section = ""
+            if normalized_image_urls:
+                image_lines = "\n".join(
+                    f"- [配图{i + 1}]({url})"
+                    for i, url in enumerate(normalized_image_urls[:6])
+                )
+                image_section = f"\n## 配图链接\n\n{image_lines}\n"
             return (
                 f"# 小红书笔记总结：{title}\n\n"
                 f"- 笔记ID：{note_id}\n"
@@ -137,6 +147,7 @@ class LLMService:
                 "当前为本地降级输出（未启用 LLM）。\n\n"
                 "## 内容片段\n\n"
                 f"> {preview}\n"
+                f"{image_section}"
             )
 
         if not self._settings.llm.api_key:
@@ -147,6 +158,19 @@ class LLMService:
             )
 
         url = f"{self._settings.llm.api_base.rstrip('/')}/chat/completions"
+        user_text = (
+            f"笔记ID: {note_id}\n"
+            f"标题: {title}\n"
+            f"来源: {source_url}\n\n"
+            f"正文:\n{content}\n\n"
+            f"配图数量: {len(normalized_image_urls)}"
+        )
+        user_content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
+        for image_url in normalized_image_urls:
+            user_content.append(
+                {"type": "image_url", "image_url": {"url": image_url}}
+            )
+
         payload = {
             "model": self._settings.llm.model,
             "temperature": 0.2,
@@ -154,12 +178,7 @@ class LLMService:
                 {"role": "system", "content": _XHS_PROMPT},
                 {
                     "role": "user",
-                    "content": (
-                        f"笔记ID: {note_id}\n"
-                        f"标题: {title}\n"
-                        f"来源: {source_url}\n\n"
-                        f"正文:\n{content}"
-                    ),
+                    "content": user_content,
                 },
             ],
         }
@@ -200,14 +219,7 @@ class LLMService:
             )
 
         raw = resp.json()
-        try:
-            result = raw["choices"][0]["message"]["content"].strip()
-        except (KeyError, IndexError, TypeError) as exc:
-            raise AppError(
-                code=ErrorCode.UPSTREAM_ERROR,
-                message="LLM 响应结构异常。",
-                status_code=502,
-            ) from exc
+        result = self._extract_response_text(raw)
 
         if not result:
             raise AppError(
@@ -217,3 +229,29 @@ class LLMService:
             )
 
         return result
+
+    def _extract_response_text(self, payload: dict[str, Any]) -> str:
+        try:
+            content = payload["choices"][0]["message"]["content"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise AppError(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message="LLM 响应结构异常。",
+                status_code=502,
+            ) from exc
+
+        if isinstance(content, str):
+            return content.strip()
+
+        if isinstance(content, list):
+            chunks: list[str] = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                if item.get("type") == "text" and isinstance(item.get("text"), str):
+                    text = item["text"].strip()
+                    if text:
+                        chunks.append(text)
+            return "\n".join(chunks).strip()
+
+        return ""
