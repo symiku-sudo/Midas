@@ -4,3 +4,5 @@ local.properties
 **/build/
 .cxx/
 .DS_Store
+gradle_package/
+*.swp

@@ -56,6 +56,16 @@ cd server
 tools/stop_local_stack.sh
 ```
 
+更简化的统一入口：
+
+```bash
+cd server
+tools/dev_server.sh start
+tools/dev_server.sh status
+tools/dev_server.sh logs 120
+tools/dev_server.sh stop
+```
+
 ### 2.2) 切到“可真实跑”配置（B 站链路）
 
 ```bash

@@ -23,6 +23,16 @@ pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 ```
 
+## WSL one-script workflow
+
+```bash
+cd server
+tools/dev_server.sh start
+tools/dev_server.sh status
+tools/dev_server.sh logs 120
+tools/dev_server.sh stop
+```
+
 ## Real-run config (Bilibili path)
 
 ```bash
