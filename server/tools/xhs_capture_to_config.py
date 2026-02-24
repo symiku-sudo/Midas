@@ -1,0 +1,529 @@
+from __future__ import annotations
+
+import argparse
+import base64
+import json
+import shlex
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any
+from urllib.parse import urlparse
+
+import yaml
+
+_HEADER_SKIP = {
+    "content-length",
+    "host",
+    ":authority",
+    ":method",
+    ":path",
+    ":scheme",
+}
+
+_NOTE_ID_CANDIDATES = ["note_id", "noteid", "id", "item_id"]
+_TITLE_CANDIDATES = ["title", "note_title", "name"]
+_CONTENT_CANDIDATES = ["desc", "content", "note_text", "text"]
+_SOURCE_URL_CANDIDATES = ["url", "source_url", "jump_url", "link"]
+
+
+@dataclass
+class FieldInference:
+    items_path: str
+    note_id_field: str
+    title_field: str
+    content_field_candidates: list[str]
+    source_url_field: str
+
+
+@dataclass
+class RequestCapture:
+    request_url: str
+    request_method: str
+    request_headers: dict[str, str]
+    request_body: str
+    inference: FieldInference | None = None
+
+
+def parse_curl_text(curl_text: str) -> RequestCapture:
+    normalized = curl_text.replace("\\\n", " ").strip()
+    if not normalized:
+        raise ValueError("curl 内容为空。")
+
+    tokens = shlex.split(normalized, posix=True)
+    if not tokens:
+        raise ValueError("无法解析 curl 内容。")
+    if tokens[0] == "curl":
+        tokens = tokens[1:]
+
+    method = ""
+    url = ""
+    headers: dict[str, str] = {}
+    data_parts: list[str] = []
+
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+
+        if token in {"-X", "--request"}:
+            i += 1
+            method = tokens[i].strip().upper() if i < len(tokens) else ""
+        elif token in {"-H", "--header"}:
+            i += 1
+            if i < len(tokens):
+                _merge_header(headers, tokens[i])
+        elif token in {
+            "-d",
+            "--data",
+            "--data-raw",
+            "--data-binary",
+            "--data-urlencode",
+            "--data-ascii",
+        }:
+            i += 1
+            if i < len(tokens):
+                data_parts.append(tokens[i])
+        elif token == "--url":
+            i += 1
+            if i < len(tokens):
+                url = tokens[i].strip()
+        elif token.startswith("http://") or token.startswith("https://"):
+            url = token.strip()
+        i += 1
+
+    if not method:
+        method = "POST" if data_parts else "GET"
+    if not url:
+        raise ValueError("curl 中未找到请求 URL。")
+
+    body = "&".join(data_parts).strip()
+    if method != "POST":
+        body = ""
+
+    return RequestCapture(
+        request_url=url,
+        request_method=method,
+        request_headers=headers,
+        request_body=body,
+    )
+
+
+def extract_best_har_capture(
+    har_data: dict[str, Any], select_url_contains: str = ""
+) -> RequestCapture:
+    entries = har_data.get("log", {}).get("entries", [])
+    if not isinstance(entries, list):
+        raise ValueError("HAR 格式无效：缺少 log.entries 列表。")
+
+    best_score = -1
+    best_capture: RequestCapture | None = None
+    url_hint = select_url_contains.strip()
+
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        scored = _score_har_entry(entry, url_hint)
+        if scored is None:
+            continue
+
+        score, capture = scored
+        if score > best_score:
+            best_score = score
+            best_capture = capture
+
+    if best_capture is None:
+        raise ValueError("未在 HAR 中找到可用的小红书 JSON 列表请求。")
+    return best_capture
+
+
+def infer_fields_from_payload(payload: Any) -> tuple[FieldInference | None, int]:
+    best_score = -1
+    best_inference: FieldInference | None = None
+
+    for path, records in _walk_lists(payload):
+        dict_records = [item for item in records if isinstance(item, dict)]
+        if not dict_records:
+            continue
+
+        sample = dict_records[0]
+        score = _score_record(sample)
+        lowered_path = path.lower()
+        if "note" in lowered_path:
+            score += 2
+        if "collect" in lowered_path or "fav" in lowered_path:
+            score += 1
+        if score < 4:
+            continue
+
+        inference = FieldInference(
+            items_path=path,
+            note_id_field=_find_field_path(sample, _NOTE_ID_CANDIDATES) or "note_id",
+            title_field=_find_field_path(sample, _TITLE_CANDIDATES) or "title",
+            content_field_candidates=(
+                _find_content_paths(sample) or ["desc", "content", "note_text"]
+            ),
+            source_url_field=(
+                _find_field_path(sample, _SOURCE_URL_CANDIDATES) or "url"
+            ),
+        )
+        if score > best_score:
+            best_score = score
+            best_inference = inference
+
+    return best_inference, best_score
+
+
+def apply_capture_to_config(
+    config: dict[str, Any], capture: RequestCapture
+) -> dict[str, Any]:
+    xhs_cfg = config.setdefault("xiaohongshu", {})
+    xhs_cfg["mode"] = "web_readonly"
+    xhs_cfg.setdefault("min_live_sync_interval_seconds", 1800)
+
+    web_cfg = xhs_cfg.setdefault("web_readonly", {})
+    web_cfg["request_url"] = capture.request_url
+    web_cfg["request_method"] = capture.request_method
+    web_cfg["request_headers"] = capture.request_headers
+    web_cfg["request_body"] = capture.request_body if capture.request_method == "POST" else ""
+    web_cfg.setdefault(
+        "host_allowlist", ["www.xiaohongshu.com", "edith.xiaohongshu.com"]
+    )
+
+    if capture.inference is not None:
+        web_cfg["items_path"] = capture.inference.items_path
+        web_cfg["note_id_field"] = capture.inference.note_id_field
+        web_cfg["title_field"] = capture.inference.title_field
+        web_cfg["content_field_candidates"] = capture.inference.content_field_candidates
+        web_cfg["source_url_field"] = capture.inference.source_url_field
+
+    return config
+
+
+def load_json_file(path: Path) -> Any:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def load_yaml_file(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    if not isinstance(raw, dict):
+        raise ValueError(f"配置文件不是 YAML 对象: {path}")
+    return raw
+
+
+def write_yaml_file(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        yaml.safe_dump(
+            data,
+            allow_unicode=True,
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+
+
+def main() -> int:
+    parser = _build_arg_parser()
+    args = parser.parse_args()
+
+    try:
+        if args.har is not None:
+            capture = extract_best_har_capture(
+                load_json_file(args.har), select_url_contains=args.select_url_contains
+            )
+        else:
+            if args.curl is not None:
+                curl_text = args.curl
+            elif args.curl_file is not None:
+                curl_text = args.curl_file.read_text(encoding="utf-8")
+            else:
+                raise ValueError("请提供 --har 或 --curl/--curl-file。")
+
+            capture = parse_curl_text(curl_text)
+            if args.response_json is not None:
+                payload = load_json_file(args.response_json)
+                inference, _ = infer_fields_from_payload(payload)
+                capture.inference = inference
+
+        _assert_xhs_host(capture.request_url)
+
+        config = load_yaml_file(args.base)
+        merged = apply_capture_to_config(config, capture)
+
+        if args.dry_run:
+            print(yaml.safe_dump(merged, allow_unicode=True, sort_keys=False))
+            return 0
+
+        write_yaml_file(args.output, merged)
+        _print_summary(capture, args.output)
+        return 0
+    except Exception as exc:
+        print(f"[xhs_capture_to_config] 失败: {exc}")
+        return 1
+
+
+def _build_arg_parser() -> argparse.ArgumentParser:
+    server_root = Path(__file__).resolve().parents[1]
+    parser = argparse.ArgumentParser(
+        description="把浏览器抓包（HAR 或 cURL）转换为小红书 web_readonly 配置。"
+    )
+
+    src_group = parser.add_mutually_exclusive_group(required=True)
+    src_group.add_argument("--har", type=Path, help="HAR 文件路径。")
+    src_group.add_argument("--curl-file", type=Path, help="包含 cURL 文本的文件路径。")
+    src_group.add_argument("--curl", type=str, help="直接传入 cURL 文本。")
+
+    parser.add_argument(
+        "--response-json",
+        type=Path,
+        default=None,
+        help="可选：cURL 对应的响应 JSON 文件，用于自动推断字段路径。",
+    )
+    parser.add_argument(
+        "--select-url-contains",
+        type=str,
+        default="",
+        help="可选：当 HAR 里请求很多时，用 URL 子串提升匹配优先级。",
+    )
+    parser.add_argument(
+        "--base",
+        type=Path,
+        default=server_root / "config.yaml",
+        help="基础配置文件（默认 server/config.yaml）。",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=server_root / ".tmp" / "config.xhs.local.yaml",
+        help="输出配置文件（默认 server/.tmp/config.xhs.local.yaml）。",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="仅打印合并后的 YAML，不写文件。",
+    )
+    return parser
+
+
+def _score_har_entry(
+    entry: dict[str, Any], url_hint: str
+) -> tuple[int, RequestCapture] | None:
+    request = entry.get("request")
+    response = entry.get("response")
+    if not isinstance(request, dict) or not isinstance(response, dict):
+        return None
+
+    method = str(request.get("method", "GET")).strip().upper()
+    if method not in {"GET", "POST"}:
+        return None
+
+    url = str(request.get("url", "")).strip()
+    if not url:
+        return None
+    parsed = urlparse(url)
+    if not parsed.netloc.endswith("xiaohongshu.com"):
+        return None
+
+    status = int(response.get("status", 0))
+    if status < 200 or status >= 300:
+        return None
+
+    payload = _extract_har_response_json(response)
+    if payload is None:
+        return None
+
+    inference, score = infer_fields_from_payload(payload)
+    if inference is None:
+        return None
+
+    headers: dict[str, str] = {}
+    for item in request.get("headers", []):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name", ""))
+        value = str(item.get("value", ""))
+        _merge_header(headers, f"{name}:{value}")
+
+    post_data = request.get("postData")
+    body = ""
+    if method == "POST" and isinstance(post_data, dict):
+        body = str(post_data.get("text", "")).strip()
+
+    if "note" in url.lower() or "collect" in url.lower() or "fav" in url.lower():
+        score += 2
+    if url_hint and url_hint in url:
+        score += 3
+
+    capture = RequestCapture(
+        request_url=url,
+        request_method=method,
+        request_headers=headers,
+        request_body=body,
+        inference=inference,
+    )
+    return score, capture
+
+
+def _extract_har_response_json(response: dict[str, Any]) -> Any | None:
+    content = response.get("content")
+    if not isinstance(content, dict):
+        return None
+    text = content.get("text")
+    if not isinstance(text, str) or not text.strip():
+        return None
+
+    if content.get("encoding") == "base64":
+        try:
+            text = base64.b64decode(text).decode("utf-8", errors="replace")
+        except ValueError:
+            return None
+
+    cleaned = text.lstrip()
+    if cleaned.startswith(")]}',"):
+        cleaned = cleaned.split("\n", 1)[1] if "\n" in cleaned else ""
+    if not cleaned:
+        return None
+
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
+
+
+def _walk_lists(payload: Any, prefix: str = "") -> list[tuple[str, list[Any]]]:
+    found: list[tuple[str, list[Any]]] = []
+    if isinstance(payload, list):
+        found.append((prefix, payload))
+    elif isinstance(payload, dict):
+        for key, value in payload.items():
+            key_text = str(key)
+            next_prefix = f"{prefix}.{key_text}" if prefix else key_text
+            found.extend(_walk_lists(value, next_prefix))
+    return found
+
+
+def _score_record(record: dict[str, Any]) -> int:
+    keys = _collect_keys(record)
+    score = 0
+    if any(key in keys for key in _NOTE_ID_CANDIDATES):
+        score += 4
+    if any(key in keys for key in _TITLE_CANDIDATES):
+        score += 3
+    if any(key in keys for key in _CONTENT_CANDIDATES):
+        score += 2
+    if any(key in keys for key in _SOURCE_URL_CANDIDATES):
+        score += 1
+    if any("note" in key for key in keys):
+        score += 1
+    return score
+
+
+def _collect_keys(payload: Any, depth: int = 0, max_depth: int = 5) -> set[str]:
+    if depth > max_depth:
+        return set()
+    if isinstance(payload, dict):
+        keys: set[str] = set()
+        for key, value in payload.items():
+            keys.add(str(key).strip().lower())
+            keys |= _collect_keys(value, depth + 1, max_depth=max_depth)
+        return keys
+    if isinstance(payload, list):
+        keys: set[str] = set()
+        for item in payload[:5]:
+            keys |= _collect_keys(item, depth + 1, max_depth=max_depth)
+        return keys
+    return set()
+
+
+def _find_content_paths(record: dict[str, Any]) -> list[str]:
+    found: list[str] = []
+    for candidate in _CONTENT_CANDIDATES:
+        path = _find_field_path(record, [candidate])
+        if path and path not in found:
+            found.append(path)
+    return found
+
+
+def _find_field_path(
+    payload: Any,
+    candidates: list[str],
+    *,
+    prefix: str = "",
+    depth: int = 0,
+    max_depth: int = 5,
+) -> str:
+    if depth > max_depth:
+        return ""
+
+    if isinstance(payload, dict):
+        lower_map = {str(key).strip().lower(): str(key) for key in payload.keys()}
+        for candidate in candidates:
+            key = lower_map.get(candidate.lower())
+            if key is not None:
+                return f"{prefix}.{key}" if prefix else key
+
+        for key, value in payload.items():
+            key_text = str(key)
+            next_prefix = f"{prefix}.{key_text}" if prefix else key_text
+            result = _find_field_path(
+                value,
+                candidates,
+                prefix=next_prefix,
+                depth=depth + 1,
+                max_depth=max_depth,
+            )
+            if result:
+                return result
+    elif isinstance(payload, list):
+        for item in payload[:3]:
+            result = _find_field_path(
+                item,
+                candidates,
+                prefix=prefix,
+                depth=depth + 1,
+                max_depth=max_depth,
+            )
+            if result:
+                return result
+
+    return ""
+
+
+def _merge_header(headers: dict[str, str], raw_header: str) -> None:
+    if ":" not in raw_header:
+        return
+    name, value = raw_header.split(":", 1)
+    key = name.strip()
+    val = value.strip()
+    if not key or not val:
+        return
+    if key.lower() in _HEADER_SKIP:
+        return
+    headers[key] = val
+
+
+def _assert_xhs_host(url: str) -> None:
+    host = urlparse(url).netloc
+    if not host.endswith("xiaohongshu.com"):
+        raise ValueError(f"请求域名不是小红书：{host}")
+
+
+def _print_summary(capture: RequestCapture, output_path: Path) -> None:
+    print("[xhs_capture_to_config] 已生成配置。")
+    print(f"- request_url: {capture.request_url}")
+    print(f"- request_method: {capture.request_method}")
+    print(f"- headers: {len(capture.request_headers)} keys")
+    if capture.inference is not None:
+        print(f"- items_path: {capture.inference.items_path}")
+        print(f"- note_id_field: {capture.inference.note_id_field}")
+        print(f"- title_field: {capture.inference.title_field}")
+    print(f"- output: {output_path}")
+    print(
+        "- 启动方式: MIDAS_CONFIG_PATH="
+        f"{output_path} uvicorn app.main:app --host 0.0.0.0 --port 8000"
+    )
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

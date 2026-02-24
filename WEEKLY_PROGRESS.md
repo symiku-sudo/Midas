@@ -6,6 +6,7 @@
 - Week 2：服务端小红书同步链路（限量/去重/熔断） -> 已完成
 - Week 3：服务端进度任务机制 + Android 客户端最小可用版 -> 已完成
 - Week 4：小红书低风控只读模式（web_readonly）与确认开关 -> 已完成
+- Week 5：抓包自动转配置 + 测试开箱即跑 -> 已完成
 
 ## Week 3 新增完成项
 
@@ -58,6 +59,24 @@
   - web_readonly 未确认拦截
   - web_readonly 限频保护
   - web_readonly 成功后写入同步时间
+
+## Week 5 新增完成项
+
+### 小红书抓包提效
+
+- 新增工具脚本：`server/tools/xhs_capture_to_config.py`
+  - 支持从 HAR 自动识别小红书列表接口并生成 `web_readonly` 配置
+  - 支持从 cURL + 响应 JSON 生成配置
+  - 默认输出到 `server/.tmp/config.xhs.local.yaml`（避免污染仓库配置）
+- 新增单测：`server/tests/test_xhs_capture_to_config.py`
+  - 覆盖 cURL 解析、HAR 选择、字段推断与配置合并
+
+### 测试可运行性修复
+
+- 新增 `server/tests/conftest.py`，修复 `pytest` 的导入路径问题
+- 现在可直接执行：
+  - `cd server && source .venv/bin/activate && pytest -q`
+- 当前测试结果：`14 passed`
 
 ## 当前可用接口
 

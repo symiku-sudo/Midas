@@ -45,9 +45,17 @@ Then fill:
 
 建议流程：
 1. 在浏览器 DevTools 里抓“小红书收藏列表”请求。
-2. 把 URL/Headers 填到 `xiaohongshu.web_readonly`。
-3. 先用小 `limit`（如 3）并传 `confirm_live=true` 试跑。
-4. 观察是否返回 `AUTH_EXPIRED` 或 `RATE_LIMITED`，再调整。
+2. 用脚本自动转换抓包到本地配置（避免手填出错）：
+   ```bash
+   cd server
+   python tools/xhs_capture_to_config.py --har /path/to/capture.har
+   ```
+3. 用生成的本地配置启动（不会改你 Git 里的 `config.yaml`）：
+   ```bash
+   MIDAS_CONFIG_PATH=.tmp/config.xhs.local.yaml uvicorn app.main:app --host 0.0.0.0 --port 8000
+   ```
+4. 先用小 `limit`（如 3）并传 `confirm_live=true` 试跑。
+5. 观察是否返回 `AUTH_EXPIRED` 或 `RATE_LIMITED`，再调整。
 
 详细步骤见：`XHS_WEB_READONLY_SETUP.md`
 
@@ -94,3 +102,13 @@ curl -X POST http://127.0.0.1:8000/api/xiaohongshu/sync/jobs \
 - Current Xiaohongshu integration mode is `mock` to validate workflow and risk controls.
 - Synced note IDs persist in `xiaohongshu.db_path` (default `.tmp/midas.db`).
 - `web_readonly` 模式仍属于非官方接口回放，务必低频、低并发、只读请求，优先保护账号安全。
+
+## Tests
+
+```bash
+cd server
+source .venv/bin/activate
+pytest -q
+```
+
+已修复测试导入路径，`pytest` 可直接运行。

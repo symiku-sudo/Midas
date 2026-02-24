@@ -59,6 +59,31 @@ xiaohongshu:
     host_allowlist: [www.xiaohongshu.com, edith.xiaohongshu.com]
 ```
 
+### 可选：自动生成本地配置（推荐）
+
+如果你不想手填字段，可以导出 HAR 后直接生成：
+
+```bash
+cd server
+python tools/xhs_capture_to_config.py --har /path/to/xhs.har
+```
+
+脚本默认输出：`.tmp/config.xhs.local.yaml`  
+使用方式：
+
+```bash
+MIDAS_CONFIG_PATH=.tmp/config.xhs.local.yaml \
+  uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+如果你只有 cURL + 响应 JSON，也可以：
+
+```bash
+python tools/xhs_capture_to_config.py \
+  --curl-file /path/to/capture.curl.txt \
+  --response-json /path/to/response.json
+```
+
 ## 步骤 4：先小流量试跑
 
 - 服务端启动后，先用 `limit=3`。
