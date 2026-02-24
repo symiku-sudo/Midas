@@ -8,6 +8,8 @@ import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.data.repo.MidasRepository
 import com.midas.client.data.repo.SettingsRepository
 import com.midas.client.util.AppResult
+import com.midas.client.util.ErrorContext
+import com.midas.client.util.ErrorMessageMapper
 import com.midas.client.util.UrlNormalizer
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -103,7 +105,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _settingsState.update {
                         it.copy(
                             isTesting = false,
-                            testStatus = "连接失败：${result.code} - ${result.message}",
+                            testStatus = "连接失败：${
+                                ErrorMessageMapper.format(
+                                    code = result.code,
+                                    message = result.message,
+                                    context = ErrorContext.CONNECTION,
+                                )
+                            }",
                         )
                     }
                 }
@@ -138,7 +146,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _bilibiliState.update {
                         it.copy(
                             isLoading = false,
-                            errorMessage = "${result.code} - ${result.message}",
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.BILIBILI,
+                            ),
                         )
                     }
                 }
@@ -188,7 +200,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _xiaohongshuState.update {
                         it.copy(
                             isSyncing = false,
-                            errorMessage = "${create.code} - ${create.message}",
+                            errorMessage = ErrorMessageMapper.format(
+                                code = create.code,
+                                message = create.message,
+                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                            ),
                         )
                     }
                 }
@@ -209,7 +225,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _xiaohongshuState.update {
                         it.copy(
                             isSyncing = false,
-                            errorMessage = "${poll.code} - ${poll.message}",
+                            errorMessage = ErrorMessageMapper.format(
+                                code = poll.code,
+                                message = poll.message,
+                                context = ErrorContext.XIAOHONGSHU_JOB,
+                            ),
                         )
                     }
                     return
@@ -253,7 +273,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             val message = if (err == null) {
                                 "同步任务失败。"
                             } else {
-                                "${err.code} - ${err.message}"
+                                ErrorMessageMapper.format(
+                                    code = err.code,
+                                    message = err.message,
+                                    context = ErrorContext.XIAOHONGSHU_JOB,
+                                )
                             }
                             _xiaohongshuState.update {
                                 it.copy(isSyncing = false, errorMessage = message)

@@ -7,6 +7,7 @@
 - B 站总结（`/api/bilibili/summarize`）
 - 小红书同步进度（`/api/xiaohongshu/sync/jobs` + 轮询状态）
 - 小红书真实同步确认开关（对应 `confirm_live`）
+- 错误码场景化提示（`AUTH_EXPIRED` / `RATE_LIMITED` / `CIRCUIT_OPEN` 等）
 - Markdown 渲染展示（Markwon）
 
 ## 构建

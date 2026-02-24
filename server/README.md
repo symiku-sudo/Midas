@@ -112,3 +112,47 @@ pytest -q
 ```
 
 已修复测试导入路径，`pytest` 可直接运行。
+
+## Pre-Home Checks (No Live XHS Traffic)
+
+```bash
+cd server
+source .venv/bin/activate
+python tools/selfcheck.py
+```
+
+- 用于检查配置与依赖是否就绪（LLM/ASR/yt-dlp/ffmpeg/xhs 模式）。
+
+```bash
+cd server
+source .venv/bin/activate
+python tools/smoke_test.py --profile mock
+```
+
+- 用于做无风险接口冒烟（`/health`、B站参数校验、小红书 mock 同步与 job 轮询）。
+
+如果服务端当前是 `web_readonly` 模式（不发真实请求，仅验证保护机制）：
+
+```bash
+python tools/smoke_test.py --profile web_guard
+```
+
+## One-Command Local Run
+
+```bash
+cd server
+tools/run_local_stack.sh --profile mock
+```
+
+- 执行顺序：`selfcheck -> 启动服务 -> smoke_test`。
+- 默认 `selfcheck` 失败仅告警继续；如果你想严格阻断：
+
+```bash
+tools/run_local_stack.sh --profile mock --strict-selfcheck
+```
+
+停止本地服务：
+
+```bash
+tools/stop_local_stack.sh
+```

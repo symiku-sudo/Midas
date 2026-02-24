@@ -42,7 +42,21 @@ source .venv/bin/activate
 python -m pytest -q
 ```
 
-### 2.1) 切到“可真实跑”配置（B 站链路）
+### 2.1) 一键本地启动（含自检 + 冒烟）
+
+```bash
+cd server
+tools/run_local_stack.sh --profile mock
+```
+
+停止服务：
+
+```bash
+cd server
+tools/stop_local_stack.sh
+```
+
+### 2.2) 切到“可真实跑”配置（B 站链路）
 
 ```bash
 cd server

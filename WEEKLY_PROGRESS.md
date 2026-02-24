@@ -7,6 +7,8 @@
 - Week 3：服务端进度任务机制 + Android 客户端最小可用版 -> 已完成
 - Week 4：小红书低风控只读模式（web_readonly）与确认开关 -> 已完成
 - Week 5：抓包自动转配置 + 测试开箱即跑 -> 已完成
+- Week 6：环境自检与无风险冒烟工具 -> 已完成
+- Week 7：一键本地启动脚本 + Android 错误码文案映射 -> 已完成
 
 ## Week 3 新增完成项
 
@@ -78,6 +80,44 @@
   - `cd server && source .venv/bin/activate && pytest -q`
 - 当前测试结果：`14 passed`
 
+## Week 6 新增完成项
+
+### 服务端运维工具
+
+- 新增 `server/tools/selfcheck.py`
+  - 启动前检查：`runtime.temp_dir`、LLM 配置、ASR 依赖、`yt-dlp/ffmpeg`、小红书模式配置
+  - 输出 `pass/warn/fail` 汇总并返回退出码，便于脚本化执行
+- 新增 `server/tools/smoke_test.py`
+  - `mock` profile：`/health`、B站无效入参校验、小红书 mock 同步与 job 轮询
+  - `web_guard` profile：验证 `confirm_live` 保护是否生效（不发真实同步）
+
+### 测试
+
+- 新增 `server/tests/test_selfcheck_tool.py`
+- 新增 `server/tests/test_smoke_test_tool.py`
+- 当前测试结果：`25 passed`
+
+## Week 7 新增完成项
+
+### 一键本地运行
+
+- 新增启动脚本：`server/tools/run_local_stack.sh`
+  - 自动执行 `selfcheck -> uvicorn -> smoke_test`
+  - 支持 `--profile mock|web_guard`
+  - 支持 `--strict-selfcheck` 严格模式
+- 新增停止脚本：`server/tools/stop_local_stack.sh`
+- 文档补充：
+  - `server/README.md` 新增 One-Command Local Run
+  - 根目录 `README.md` 新增一键启动入口
+
+### Android 可用性提升
+
+- 新增 `android/app/src/main/java/com/midas/client/util/ErrorMessageMapper.kt`
+  - 对 `AUTH_EXPIRED` / `RATE_LIMITED` / `CIRCUIT_OPEN` / `UPSTREAM_ERROR` 等错误码提供场景化中文提示
+  - 对小红书 `confirm_live` 保护错误给出明确引导（打开“确认真实同步请求”开关）
+- `MainViewModel` 已接入映射，不再直接展示生硬的 `code - message`
+- `android/README.md` 功能说明已更新
+
 ## 当前可用接口
 
 - `GET /health`
@@ -88,8 +128,8 @@
 
 ## 验证结果
 
-- 服务端自动化测试：`7 passed`
-- Python 编译检查：通过（`python -m compileall app`）
+- 服务端自动化测试：`25 passed`
+- Python 编译检查：通过（`python -m compileall app tools`）
 
 ## 本地运行
 
@@ -117,7 +157,7 @@ python -m pytest -q
 
 ## 当前限制
 
-- 小红书真实网页端接口尚未接入，当前 `xiaohongshu.mode` 默认为 `mock`。
+- 小红书 `web_readonly` 已接入，但真实请求仍需用户提供有效 HAR/cURL 才能完成配置落地。
 - Android 构建未在当前环境执行（本机无 Gradle/Android SDK CLI），需在 Android Studio 中同步构建验证。
 
 ## 下阶段建议
