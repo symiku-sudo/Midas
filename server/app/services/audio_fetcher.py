@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import subprocess
+import sys
 from pathlib import Path
+from shutil import which
 
 from app.core.config import Settings
 from app.core.errors import AppError, ErrorCode
@@ -19,9 +21,11 @@ class AudioFetcher:
     def fetch_audio(self, video_url: str, output_dir: Path) -> Path:
         output_dir.mkdir(parents=True, exist_ok=True)
         output_template = output_dir / "source.%(ext)s"
+        yt_dlp_cmd = self._resolve_yt_dlp_command()
+        ffmpeg_location = self._resolve_ffmpeg_location()
 
         cmd = [
-            self._settings.bilibili.yt_dlp_path,
+            *yt_dlp_cmd,
             "--no-playlist",
             "-x",
             "--audio-format",
@@ -29,7 +33,7 @@ class AudioFetcher:
             "--audio-quality",
             "0",
             "--ffmpeg-location",
-            self._settings.bilibili.ffmpeg_path,
+            ffmpeg_location,
             "-o",
             str(output_template),
             video_url,
@@ -65,3 +69,57 @@ class AudioFetcher:
         files.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         logger.info("Downloaded audio file: %s", files[0])
         return files[0]
+
+    def _resolve_yt_dlp_command(self) -> list[str]:
+        configured = self._settings.bilibili.yt_dlp_path.strip()
+        if self._is_executable_available(configured):
+            return [configured]
+
+        try:
+            import yt_dlp  # noqa: F401
+        except ImportError as exc:
+            raise AppError(
+                code=ErrorCode.DEPENDENCY_MISSING,
+                message="yt-dlp 不可用，请安装后重试。",
+                status_code=500,
+                details={"configured_path": configured or "yt-dlp"},
+            ) from exc
+
+        logger.info(
+            "yt-dlp command not found in PATH, fallback to Python module execution"
+        )
+        return [sys.executable, "-m", "yt_dlp"]
+
+    def _resolve_ffmpeg_location(self) -> str:
+        configured = self._settings.bilibili.ffmpeg_path.strip()
+        if self._is_executable_available(configured):
+            return configured
+
+        try:
+            from imageio_ffmpeg import get_ffmpeg_exe
+        except ImportError as exc:
+            raise AppError(
+                code=ErrorCode.DEPENDENCY_MISSING,
+                message="ffmpeg 不可用，请安装 ffmpeg 或 imageio-ffmpeg。",
+                status_code=500,
+                details={"configured_path": configured or "ffmpeg"},
+            ) from exc
+
+        ffmpeg_path = get_ffmpeg_exe()
+        if not ffmpeg_path:
+            raise AppError(
+                code=ErrorCode.DEPENDENCY_MISSING,
+                message="ffmpeg 不可用，请安装 ffmpeg 或 imageio-ffmpeg。",
+                status_code=500,
+                details={"configured_path": configured or "ffmpeg"},
+            )
+        logger.info("ffmpeg command not found in PATH, fallback to imageio-ffmpeg binary")
+        return ffmpeg_path
+
+    def _is_executable_available(self, token: str) -> bool:
+        if not token:
+            return False
+        path = Path(token).expanduser()
+        if path.is_absolute() or "/" in token or "\\" in token:
+            return path.exists()
+        return which(token) is not None
