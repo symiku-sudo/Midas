@@ -20,6 +20,19 @@
 2. 同步 Gradle。
 3. 运行 `app` 模块。
 
+若需在 WSL 终端由 agent 直接编译：
+
+```bash
+cd android
+tools/wsl_android_build.sh
+```
+
+也可传自定义任务：
+
+```bash
+tools/wsl_android_build.sh :app:assembleDebug :app:testDebugUnitTest
+```
+
 > 说明：客户端默认地址 `http://10.0.2.2:8000/`（Android 模拟器访问宿主机）。
 
 ## 结构
