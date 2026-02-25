@@ -33,6 +33,17 @@ tools/dev_server.sh logs 120
 tools/dev_server.sh stop
 ```
 
+## Clean temp files (`server/.tmp`)
+
+```bash
+cd server
+tools/clean_tmp.sh
+```
+
+- 默认会清空 `server/.tmp` 下所有内容（含 `midas.db`、日志、PID、临时音频）。
+- 若需保留小红书去重状态数据库：`tools/clean_tmp.sh --keep-db`。
+- 若服务正在运行，脚本默认会拒绝清理；可先 `tools/dev_server.sh stop`。
+
 ## Real-run config (Bilibili path)
 
 ```bash
