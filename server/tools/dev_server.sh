@@ -10,9 +10,9 @@ LOG_FILE="$TMP_DIR/local_server.log"
 usage() {
   cat <<'EOF'
 Usage:
-  tools/dev_server.sh start [web_guard|mock] [--mobile|--host <host>] [--port <port>]
+  tools/dev_server.sh start [web_guard|mock] [--mobile|--host <host>] [--port <port>] [--no-ts-proxy]
   tools/dev_server.sh stop
-  tools/dev_server.sh restart [web_guard|mock] [--mobile|--host <host>] [--port <port>]
+  tools/dev_server.sh restart [web_guard|mock] [--mobile|--host <host>] [--port <port>] [--no-ts-proxy]
   tools/dev_server.sh status
   tools/dev_server.sh logs [lines]
 
@@ -21,6 +21,7 @@ Examples:
   tools/dev_server.sh start mock
   tools/dev_server.sh start web_guard --mobile
   tools/dev_server.sh start --host 0.0.0.0 --port 8000
+  tools/dev_server.sh start web_guard --mobile --no-ts-proxy
   tools/dev_server.sh restart web_guard
   tools/dev_server.sh logs 120
 EOF
@@ -70,6 +71,77 @@ get_bind_from_pid() {
   echo "$host $port"
 }
 
+resolve_wsl_ip() {
+  hostname -I 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i !~ /^127\./) {print $i; exit}}'
+}
+
+resolve_windows_tailscale_ip() {
+  local raw
+  raw="$(powershell.exe -NoProfile -Command \
+    "(Get-NetIPAddress -AddressFamily IPv4 | Where-Object { \$_.InterfaceAlias -like '*Tailscale*' -and \$_.IPAddress -notlike '169.254*' } | Select-Object -First 1 -ExpandProperty IPAddress)" \
+    2>/dev/null || true)"
+  echo "$raw" | tr -d '\r' | awk 'NF {print; exit}'
+}
+
+configure_tailscale_proxy() {
+  local port="$1"
+  local wsl_ip ts_ip
+  wsl_ip="$(resolve_wsl_ip)"
+  ts_ip="$(resolve_windows_tailscale_ip)"
+
+  if [[ -z "$wsl_ip" ]]; then
+    echo "[dev_server] Tailscale proxy skipped: failed to detect WSL IP."
+    return 0
+  fi
+  if [[ -z "$ts_ip" ]]; then
+    echo "[dev_server] Tailscale proxy skipped: Windows Tailscale IPv4 not found."
+    return 0
+  fi
+
+  local rule_name
+  rule_name="midas-ts-${port}"
+
+  # Needs Administrator privilege on Windows.
+  cmd.exe /c "netsh interface portproxy delete v4tov4 listenaddress=$ts_ip listenport=$port" >/dev/null 2>&1 || true
+  if ! cmd.exe /c "netsh interface portproxy add v4tov4 listenaddress=$ts_ip listenport=$port connectaddress=$wsl_ip connectport=$port" >/dev/null 2>&1; then
+    echo "[dev_server] Tailscale proxy apply failed (likely Windows admin privilege required)."
+    echo "[dev_server] Run in Administrator PowerShell:"
+    echo "  netsh interface portproxy add v4tov4 listenaddress=$ts_ip listenport=$port connectaddress=$wsl_ip connectport=$port"
+    echo "  netsh advfirewall firewall add rule name=\"$rule_name\" dir=in action=allow protocol=TCP localip=$ts_ip localport=$port"
+    return 0
+  fi
+
+  cmd.exe /c "netsh advfirewall firewall delete rule name=\"$rule_name\"" >/dev/null 2>&1 || true
+  if ! cmd.exe /c "netsh advfirewall firewall add rule name=\"$rule_name\" dir=in action=allow protocol=TCP localip=$ts_ip localport=$port" >/dev/null 2>&1; then
+    echo "[dev_server] Tailscale proxy set, but firewall rule add failed (try Administrator PowerShell)."
+  fi
+
+  echo "[dev_server] Tailscale endpoint: http://$ts_ip:$port/"
+  echo "[dev_server] Tailscale forward: $ts_ip:$port -> $wsl_ip:$port"
+}
+
+show_tailscale_proxy_status() {
+  local port="$1"
+  local ts_ip table line connect_ip connect_port
+  ts_ip="$(resolve_windows_tailscale_ip)"
+  if [[ -z "$ts_ip" ]]; then
+    return 0
+  fi
+
+  table="$(cmd.exe /c "netsh interface portproxy show v4tov4" 2>/dev/null | tr -d '\r' || true)"
+  line="$(printf '%s\n' "$table" | awk -v lip="$ts_ip" -v p="$port" '$1==lip && $2==p {print; exit}')"
+  if [[ -z "$line" ]]; then
+    echo "[dev_server] tailscale_proxy=off"
+    return 0
+  fi
+
+  connect_ip="$(awk '{print $3}' <<<"$line")"
+  connect_port="$(awk '{print $4}' <<<"$line")"
+  echo "[dev_server] tailscale_proxy=on"
+  echo "[dev_server] url(tailscale)=http://$ts_ip:$port/"
+  echo "[dev_server] tailscale_forward=$ts_ip:$port -> $connect_ip:$connect_port"
+}
+
 show_bind_status() {
   local pid="$1"
   local host port
@@ -94,13 +166,14 @@ show_bind_status() {
     0.0.0.0)
       echo "[dev_server] access=lan+local"
       local lan_ip
-      lan_ip="$(hostname -I 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i !~ /^127\./) {print $i; exit}}')"
+      lan_ip="$(resolve_wsl_ip)"
       echo "[dev_server] url(local)=http://127.0.0.1:$port/"
       if [[ -n "$lan_ip" ]]; then
         echo "[dev_server] url(lan)=http://$lan_ip:$port/"
       else
         echo "[dev_server] url(lan)=http://<your-lan-ip>:$port/"
       fi
+      show_tailscale_proxy_status "$port"
       ;;
     *)
       echo "[dev_server] access=custom-bind"
@@ -113,6 +186,7 @@ parse_start_args() {
   local profile="web_guard"
   local host="127.0.0.1"
   local port="8000"
+  local auto_ts_proxy="1"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -122,6 +196,10 @@ parse_start_args() {
         ;;
       --mobile|--lan)
         host="0.0.0.0"
+        shift
+        ;;
+      --no-ts-proxy)
+        auto_ts_proxy="0"
         shift
         ;;
       --host)
@@ -159,6 +237,7 @@ parse_start_args() {
   START_PROFILE="$profile"
   START_HOST="$host"
   START_PORT="$port"
+  START_AUTO_TS_PROXY="$auto_ts_proxy"
 }
 
 show_mobile_tip() {
@@ -168,7 +247,7 @@ show_mobile_tip() {
     return 0
   fi
   local lan_ip
-  lan_ip="$(hostname -I 2>/dev/null | awk '{for(i=1;i<=NF;i++) if ($i !~ /^127\./) {print $i; exit}}')"
+  lan_ip="$(resolve_wsl_ip)"
   if [[ -n "$lan_ip" ]]; then
     echo "[dev_server] Mobile endpoint: http://$lan_ip:$port/"
   else
@@ -184,6 +263,9 @@ start_server() {
     read -r current_host current_port <<<"$(get_bind_from_pid "$pid")"
     if [[ "$current_host" == "$START_HOST" && "$current_port" == "$START_PORT" ]]; then
       echo "[dev_server] already running with requested bind."
+      if [[ "$START_HOST" == "0.0.0.0" && "$START_AUTO_TS_PROXY" == "1" ]]; then
+        configure_tailscale_proxy "$START_PORT"
+      fi
       show_status
       return 0
     fi
@@ -195,6 +277,9 @@ start_server() {
     --host "$START_HOST" \
     --port "$START_PORT"
   show_mobile_tip "$START_HOST" "$START_PORT"
+  if [[ "$START_HOST" == "0.0.0.0" && "$START_AUTO_TS_PROXY" == "1" ]]; then
+    configure_tailscale_proxy "$START_PORT"
+  fi
 }
 
 stop_server() {
