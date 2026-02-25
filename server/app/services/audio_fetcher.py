@@ -18,7 +18,12 @@ class AudioFetcher:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
-    def fetch_audio(self, video_url: str, output_dir: Path) -> Path:
+    def fetch_audio(
+        self,
+        video_url: str,
+        output_dir: Path,
+        headers: dict[str, str] | None = None,
+    ) -> Path:
         output_dir.mkdir(parents=True, exist_ok=True)
         output_template = output_dir / "source.%(ext)s"
         yt_dlp_cmd = self._resolve_yt_dlp_command()
@@ -38,6 +43,12 @@ class AudioFetcher:
             str(output_template),
             video_url,
         ]
+        for key, value in (headers or {}).items():
+            header_key = str(key).strip()
+            header_value = str(value).strip()
+            if not header_key or not header_value:
+                continue
+            cmd.extend(["--add-header", f"{header_key}:{header_value}"])
 
         logger.info("Start downloading audio for URL: %s", video_url)
         try:

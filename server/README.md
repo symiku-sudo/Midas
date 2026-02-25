@@ -20,6 +20,7 @@
 - Unified error handling and request-id middleware
 - Config-driven runtime (`config.yaml`)
 - Xiaohongshu sync controls: limit, dedupe(SQLite), circuit-breaker
+- Xiaohongshu 视频笔记总结：音频导出 -> ASR -> LLM（合并正文）
 - API schema reference: `API_CONTRACT.md`
 
 ## Quick start

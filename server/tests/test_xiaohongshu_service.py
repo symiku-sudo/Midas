@@ -241,26 +241,50 @@ async def test_sync_passes_image_urls_to_llm(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_sync_video_note_skips_llm_and_emits_placeholder(tmp_path) -> None:
+async def test_sync_video_note_uses_audio_asr_and_llm(tmp_path) -> None:
     class _VideoSource:
         def fetch_recent(self, limit: int) -> list[XiaohongshuNote]:
             return [
                 XiaohongshuNote(
                     note_id="v1",
                     title="视频笔记标题",
-                    content="",
+                    content="这是原笔记正文",
                     source_url="https://www.xiaohongshu.com/explore/v1",
                     is_video=True,
                 )
             ][:limit]
 
-    class _NeverCallLLM:
+    class _VideoLLM:
         def __init__(self) -> None:
-            self.called = False
+            self.video_kwargs: dict | None = None
+            self.text_called = False
 
         async def summarize_xiaohongshu_note(self, **kwargs) -> str:
-            self.called = True
+            self.text_called = True
             return "SHOULD_NOT_BE_CALLED"
+
+        async def summarize_xiaohongshu_video_note(self, **kwargs) -> str:
+            self.video_kwargs = kwargs
+            return "# 视频总结\n\n- 结论 A"
+
+    class _DummyFetcher:
+        def __init__(self) -> None:
+            self.last_headers: dict[str, str] | None = None
+
+        def fetch_audio(
+            self,
+            video_url: str,
+            output_dir,
+            headers: dict[str, str] | None = None,
+        ):
+            self.last_headers = headers
+            audio_path = output_dir / "source.wav"
+            audio_path.write_bytes(b"dummy-audio")
+            return audio_path
+
+    class _DummyASR:
+        def transcribe(self, audio_path) -> str:
+            return "这是视频转写文本。"
 
     settings = Settings(
         xiaohongshu=XiaohongshuConfig(
@@ -271,19 +295,25 @@ async def test_sync_video_note_skips_llm_and_emits_placeholder(tmp_path) -> None
         )
     )
     repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
-    llm = _NeverCallLLM()
+    llm = _VideoLLM()
+    fetcher = _DummyFetcher()
     service = XiaohongshuSyncService(
         settings=settings,
         repository=repo,
         source=_VideoSource(),
         llm_service=llm,
+        audio_fetcher=fetcher,
+        asr_service=_DummyASR(),
     )
 
     result = await service.sync(limit=1)
     assert result.new_count == 1
-    assert llm.called is False
-    assert "这是一个视频笔记" in result.summaries[0].summary_markdown
-    assert "暂不进行视频内容总结" in result.summaries[0].summary_markdown
+    assert llm.video_kwargs is not None
+    assert llm.video_kwargs["transcript"] == "这是视频转写文本。"
+    assert llm.video_kwargs["content"] == "这是原笔记正文"
+    assert llm.text_called is False
+    assert fetcher.last_headers is not None
+    assert fetcher.last_headers.get("Referer") == "https://www.xiaohongshu.com/explore/v1"
     assert "原文链接" in result.summaries[0].summary_markdown
     assert "https://www.xiaohongshu.com/explore/v1" in result.summaries[0].summary_markdown
 

@@ -151,6 +151,7 @@ Request:
 说明：
 - `confirm_live` 仅在 `xiaohongshu.mode=web_readonly` 时需要设为 `true`。
 - 默认 `false`，用于防止误触发真实账号请求。
+- 对视频型笔记，会走“音频导出 -> ASR 转写 -> LLM 总结”，并合并正文（若存在）。
 
 Success `data`:
 

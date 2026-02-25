@@ -4,7 +4,9 @@ import asyncio
 import json
 import random
 import re
+import shutil
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable
@@ -16,6 +18,8 @@ from app.core.config import Settings
 from app.core.errors import AppError, ErrorCode
 from app.models.schemas import XiaohongshuSummaryItem, XiaohongshuSyncData
 from app.repositories.xiaohongshu_repo import XiaohongshuSyncRepository
+from app.services.asr import ASRService
+from app.services.audio_fetcher import AudioFetcher
 from app.services.llm import LLMService
 
 _DEFAULT_NOTES: list[dict[str, str]] = [
@@ -907,6 +911,8 @@ class XiaohongshuSyncService:
         source: MockXiaohongshuSource | None = None,
         web_source: XiaohongshuWebReadonlySource | None = None,
         llm_service: LLMService | None = None,
+        audio_fetcher: AudioFetcher | None = None,
+        asr_service: ASRService | None = None,
     ) -> None:
         self._settings = settings
         self._repository = repository or XiaohongshuSyncRepository(
@@ -915,6 +921,8 @@ class XiaohongshuSyncService:
         self._source = source or MockXiaohongshuSource(settings)
         self._web_source = web_source or XiaohongshuWebReadonlySource(settings)
         self._llm_service = llm_service or LLMService(settings)
+        self._audio_fetcher = audio_fetcher or AudioFetcher(settings)
+        self._asr_service = asr_service or ASRService(settings)
 
     async def sync(
         self,
@@ -982,7 +990,7 @@ class XiaohongshuSyncService:
 
             try:
                 if note.is_video:
-                    summary = self._build_video_note_summary(note)
+                    summary = await self._summarize_video_note(note)
                 else:
                     summary = await self._llm_service.summarize_xiaohongshu_note(
                         note_id=note.note_id,
@@ -1062,15 +1070,83 @@ class XiaohongshuSyncService:
 
         return result
 
-    def _build_video_note_summary(self, note: XiaohongshuNote) -> str:
-        return (
-            f"# 小红书笔记总结：{note.title}\n\n"
-            f"- 笔记ID：{note.note_id}\n"
-            f"- 原文链接：{note.source_url}\n\n"
-            "## 说明\n\n"
-            "这是一个视频笔记。\n\n"
-            "当前 MVP 阶段暂不进行视频内容总结。"
+    async def _summarize_video_note(self, note: XiaohongshuNote) -> str:
+        transcript = ""
+        transcript_error = ""
+        try:
+            transcript = await self._transcribe_video_note(note)
+        except AppError as exc:
+            transcript_error = exc.message
+        except Exception as exc:
+            transcript_error = str(exc)
+
+        if transcript:
+            return await self._llm_service.summarize_xiaohongshu_video_note(
+                note_id=note.note_id,
+                title=note.title,
+                content=note.content,
+                transcript=transcript,
+                source_url=note.source_url,
+                image_urls=note.image_urls,
+            )
+
+        content = note.content.strip()
+        if content:
+            summary = await self._llm_service.summarize_xiaohongshu_note(
+                note_id=note.note_id,
+                title=note.title,
+                content=content,
+                source_url=note.source_url,
+                image_urls=note.image_urls,
+            )
+            if transcript_error:
+                return (
+                    f"{summary.rstrip()}\n\n> 注：视频音频转写失败，当前总结仅基于正文。"
+                )
+            return summary
+
+        raise AppError(
+            code=ErrorCode.UPSTREAM_ERROR,
+            message=f"视频笔记处理失败：{transcript_error or '无法提取转写与正文'}",
+            status_code=502,
         )
+
+    async def _transcribe_video_note(self, note: XiaohongshuNote) -> str:
+        base_temp = Path(self._settings.runtime.temp_dir)
+        job_dir = base_temp / f"xhs-video-{uuid.uuid4().hex}"
+        job_dir.mkdir(parents=True, exist_ok=True)
+
+        headers = self._build_video_download_headers(note.source_url)
+        try:
+            audio_path = await asyncio.to_thread(
+                self._audio_fetcher.fetch_audio,
+                note.source_url,
+                job_dir,
+                headers,
+            )
+            transcript = await asyncio.to_thread(self._asr_service.transcribe, audio_path)
+            return transcript.strip()
+        finally:
+            shutil.rmtree(job_dir, ignore_errors=True)
+
+    def _build_video_download_headers(self, source_url: str) -> dict[str, str]:
+        headers: dict[str, str] = {}
+        cfg_headers = self._settings.xiaohongshu.web_readonly.request_headers
+        for key in ("User-Agent", "Referer", "Origin"):
+            value = cfg_headers.get(key)
+            if isinstance(value, str) and value.strip():
+                headers[key] = value.strip()
+        if source_url:
+            headers.setdefault("Referer", source_url)
+
+        cookie = self._settings.xiaohongshu.cookie.strip()
+        if cookie:
+            headers["Cookie"] = cookie
+        else:
+            fallback_cookie = cfg_headers.get("Cookie")
+            if isinstance(fallback_cookie, str) and fallback_cookie.strip():
+                headers["Cookie"] = fallback_cookie.strip()
+        return headers
 
     def _ensure_source_link(self, summary_markdown: str, source_url: str) -> str:
         if not source_url:
