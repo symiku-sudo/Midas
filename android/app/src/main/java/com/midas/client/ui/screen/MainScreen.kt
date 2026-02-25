@@ -80,6 +80,10 @@ fun MainScreen(viewModel: MainViewModel) {
                     onBaseUrlChange = viewModel::onBaseUrlInputChange,
                     onSave = viewModel::saveBaseUrl,
                     onTestConnection = viewModel::testConnection,
+                    onLoadConfig = viewModel::loadEditableConfig,
+                    onConfigInputChange = viewModel::onEditableConfigInputChange,
+                    onSaveConfig = viewModel::saveEditableConfig,
+                    onResetConfig = viewModel::resetEditableConfig,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
@@ -139,6 +143,10 @@ private fun SettingsPanel(
     onBaseUrlChange: (String) -> Unit,
     onSave: () -> Unit,
     onTestConnection: () -> Unit,
+    onLoadConfig: () -> Unit,
+    onConfigInputChange: (String) -> Unit,
+    onSaveConfig: () -> Unit,
+    onResetConfig: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -166,6 +174,37 @@ private fun SettingsPanel(
         }
         if (state.testStatus.isNotBlank()) {
             Text(text = state.testStatus)
+        }
+
+        HorizontalDivider()
+        Text("运行配置（可编辑子集）", style = MaterialTheme.typography.titleSmall)
+        Text(
+            text = "敏感字段（如 api_key/cookie）不会出现在此处。",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(onClick = onLoadConfig, enabled = !state.isConfigLoading) {
+                Text(if (state.isConfigLoading) "加载中..." else "加载配置")
+            }
+            Button(
+                onClick = onSaveConfig,
+                enabled = !state.isConfigSaving && state.editableConfigInput.isNotBlank(),
+            ) {
+                Text(if (state.isConfigSaving) "保存中..." else "保存配置")
+            }
+            Button(onClick = onResetConfig, enabled = !state.isConfigResetting) {
+                Text(if (state.isConfigResetting) "恢复中..." else "恢复默认")
+            }
+        }
+        OutlinedTextField(
+            value = state.editableConfigInput,
+            onValueChange = onConfigInputChange,
+            label = { Text("可编辑配置 JSON") },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 10,
+        )
+        if (state.configStatus.isNotBlank()) {
+            Text(text = state.configStatus)
         }
     }
 }

@@ -2,6 +2,7 @@ package com.midas.client.util
 
 enum class ErrorContext {
     CONNECTION,
+    CONFIG,
     BILIBILI,
     XIAOHONGSHU_SYNC,
     XIAOHONGSHU_JOB,
@@ -21,6 +22,7 @@ object ErrorMessageMapper {
             "UPSTREAM_ERROR" -> when (context) {
                 ErrorContext.BILIBILI -> "上游处理失败，请检查视频可访问性与服务端日志。"
                 ErrorContext.XIAOHONGSHU_SYNC, ErrorContext.XIAOHONGSHU_JOB -> "小红书上游响应异常，请检查抓包字段映射。"
+                ErrorContext.CONFIG -> "配置服务响应异常，请稍后重试。"
                 ErrorContext.CONNECTION -> "服务端响应异常，请稍后重试。"
             }
 
@@ -43,6 +45,7 @@ object ErrorMessageMapper {
 
         return when (context) {
             ErrorContext.CONNECTION -> "服务端地址或请求参数不合法。"
+            ErrorContext.CONFIG -> "配置内容不合法，请检查 JSON 格式与字段值。"
             ErrorContext.BILIBILI -> "输入链接无效，请使用 bilibili.com 或 b23.tv 链接。"
             ErrorContext.XIAOHONGSHU_SYNC, ErrorContext.XIAOHONGSHU_JOB -> "同步参数不合法，请检查同步数量和配置。"
         }

@@ -6,6 +6,8 @@ import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSavedNotesData
 import com.midas.client.data.model.BilibiliSummaryData
 import com.midas.client.data.model.BilibiliSummaryRequest
+import com.midas.client.data.model.EditableConfigData
+import com.midas.client.data.model.EditableConfigUpdateRequest
 import com.midas.client.data.model.HealthData
 import com.midas.client.data.model.NotesDeleteData
 import com.midas.client.data.model.NotesSaveBatchData
@@ -141,6 +143,36 @@ class MidasRepository {
         return runCatching {
             val api = MidasApiFactory.create(baseUrl)
             unwrap(api.clearXiaohongshuNotes())
+        }.getOrElse { throwable ->
+            AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
+        }
+    }
+
+    suspend fun getEditableConfig(baseUrl: String): AppResult<EditableConfigData> {
+        return runCatching {
+            val api = MidasApiFactory.create(baseUrl)
+            unwrap(api.getEditableConfig())
+        }.getOrElse { throwable ->
+            AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
+        }
+    }
+
+    suspend fun updateEditableConfig(
+        baseUrl: String,
+        settings: Map<String, Any?>,
+    ): AppResult<EditableConfigData> {
+        return runCatching {
+            val api = MidasApiFactory.create(baseUrl)
+            unwrap(api.updateEditableConfig(EditableConfigUpdateRequest(settings = settings)))
+        }.getOrElse { throwable ->
+            AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
+        }
+    }
+
+    suspend fun resetEditableConfig(baseUrl: String): AppResult<EditableConfigData> {
+        return runCatching {
+            val api = MidasApiFactory.create(baseUrl)
+            unwrap(api.resetEditableConfig())
         }.getOrElse { throwable ->
             AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
         }

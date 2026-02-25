@@ -103,6 +103,14 @@ data class NotesSaveBatchData(
     @Json(name = "saved_count") val savedCount: Int
 )
 
+data class EditableConfigData(
+    val settings: Map<String, Any?>
+)
+
+data class EditableConfigUpdateRequest(
+    val settings: Map<String, Any?>
+)
+
 data class XiaohongshuSyncJobCreateData(
     @Json(name = "job_id") val jobId: String,
     val status: String,

@@ -6,6 +6,8 @@ import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSavedNotesData
 import com.midas.client.data.model.BilibiliSummaryData
 import com.midas.client.data.model.BilibiliSummaryRequest
+import com.midas.client.data.model.EditableConfigData
+import com.midas.client.data.model.EditableConfigUpdateRequest
 import com.midas.client.data.model.HealthData
 import com.midas.client.data.model.NotesDeleteData
 import com.midas.client.data.model.NotesSaveBatchData
@@ -20,6 +22,7 @@ import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
 import retrofit2.http.POST
+import retrofit2.http.PUT
 import retrofit2.http.Path
 
 interface MidasApiService {
@@ -67,6 +70,17 @@ interface MidasApiService {
 
     @DELETE("api/notes/xiaohongshu")
     suspend fun clearXiaohongshuNotes(): Response<ApiEnvelope<NotesDeleteData>>
+
+    @GET("api/config/editable")
+    suspend fun getEditableConfig(): Response<ApiEnvelope<EditableConfigData>>
+
+    @PUT("api/config/editable")
+    suspend fun updateEditableConfig(
+        @Body request: EditableConfigUpdateRequest
+    ): Response<ApiEnvelope<EditableConfigData>>
+
+    @POST("api/config/editable/reset")
+    suspend fun resetEditableConfig(): Response<ApiEnvelope<EditableConfigData>>
 
     @POST("api/xiaohongshu/sync/jobs")
     suspend fun createXiaohongshuSyncJob(
