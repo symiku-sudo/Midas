@@ -59,6 +59,30 @@ if ! command -v java >/dev/null 2>&1; then
   exit 1
 fi
 
+LOCAL_PROPERTIES="$ANDROID_DIR/local.properties"
+LOCAL_PROPERTIES_BACKUP=""
+LOCAL_PROPERTIES_MISSING="0"
+
+restore_local_properties() {
+  if [[ "$LOCAL_PROPERTIES_MISSING" == "1" ]]; then
+    rm -f "$LOCAL_PROPERTIES"
+    return
+  fi
+  if [[ -n "$LOCAL_PROPERTIES_BACKUP" && -f "$LOCAL_PROPERTIES_BACKUP" ]]; then
+    mv -f "$LOCAL_PROPERTIES_BACKUP" "$LOCAL_PROPERTIES"
+  fi
+}
+
+if [[ -f "$LOCAL_PROPERTIES" ]]; then
+  LOCAL_PROPERTIES_BACKUP="$(mktemp)"
+  cp "$LOCAL_PROPERTIES" "$LOCAL_PROPERTIES_BACKUP"
+else
+  LOCAL_PROPERTIES_MISSING="1"
+fi
+trap restore_local_properties EXIT
+
+printf 'sdk.dir=%s\n' "$ANDROID_SDK_ROOT" > "$LOCAL_PROPERTIES"
+
 TASKS=("$@")
 if [[ ${#TASKS[@]} -eq 0 ]]; then
   TASKS=(":app:assembleDebug")
