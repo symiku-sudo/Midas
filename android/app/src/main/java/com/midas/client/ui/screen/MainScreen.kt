@@ -17,6 +17,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -26,6 +27,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -44,10 +46,10 @@ import com.midas.client.util.ConfigFieldType
 import com.midas.client.util.EditableConfigField
 
 private enum class MainTab(val title: String) {
-    SETTINGS("设置"),
     BILIBILI("B站总结"),
     XHS("小红书同步"),
     NOTES("笔记库"),
+    SETTINGS("设置"),
 }
 
 private enum class ConfigControlKind {
@@ -96,11 +98,10 @@ private val configFieldSpecs = listOf(
         path = "asr.mode",
         section = "总结能力",
         title = "视频转写模式",
-        description = "faster_whisper 为真实转写，mock 为调试文本。",
+        description = "固定使用真实转写模式。",
         control = ConfigControlKind.DROPDOWN,
         options = listOf(
             ConfigOption(value = "faster_whisper", label = "真实转写（faster_whisper）"),
-            ConfigOption(value = "mock", label = "调试模式（mock）"),
         ),
     ),
     ConfigFieldSpec(
@@ -143,11 +144,10 @@ private val configFieldSpecs = listOf(
         path = "xiaohongshu.mode",
         section = "小红书同步",
         title = "同步模式",
-        description = "web_readonly 为真实同步，mock 为本地示例数据。",
+        description = "固定使用真实同步模式。",
         control = ConfigControlKind.DROPDOWN,
         options = listOf(
             ConfigOption(value = "web_readonly", label = "真实同步（web_readonly）"),
-            ConfigOption(value = "mock", label = "示例数据（mock）"),
         ),
     ),
     ConfigFieldSpec(
@@ -247,7 +247,7 @@ fun MainScreen(viewModel: MainViewModel) {
     val xiaohongshu by viewModel.xiaohongshuState.collectAsStateWithLifecycle()
     val notes by viewModel.notesState.collectAsStateWithLifecycle()
 
-    var selectedTab by remember { mutableStateOf(MainTab.SETTINGS) }
+    var selectedTab by remember { mutableStateOf(MainTab.BILIBILI) }
 
     Scaffold(
         topBar = {
@@ -276,7 +276,6 @@ fun MainScreen(viewModel: MainViewModel) {
                     onBaseUrlChange = viewModel::onBaseUrlInputChange,
                     onSave = viewModel::saveBaseUrl,
                     onTestConnection = viewModel::testConnection,
-                    onLoadConfig = viewModel::loadEditableConfig,
                     onConfigTextChange = viewModel::onEditableConfigFieldTextChange,
                     onConfigBooleanChange = viewModel::onEditableConfigFieldBooleanChange,
                     onSaveConfig = viewModel::saveEditableConfig,
@@ -305,7 +304,6 @@ fun MainScreen(viewModel: MainViewModel) {
                 XiaohongshuPanel(
                     state = xiaohongshu,
                     onLimitChange = viewModel::onXiaohongshuLimitInputChange,
-                    onConfirmLiveChange = viewModel::onXiaohongshuConfirmLiveChange,
                     onStartSync = viewModel::startXiaohongshuSync,
                     onSaveNotes = viewModel::saveCurrentXiaohongshuSummaries,
                     modifier = Modifier
@@ -340,7 +338,6 @@ private fun SettingsPanel(
     onBaseUrlChange: (String) -> Unit,
     onSave: () -> Unit,
     onTestConnection: () -> Unit,
-    onLoadConfig: () -> Unit,
     onConfigTextChange: (String, String) -> Unit,
     onConfigBooleanChange: (String, Boolean) -> Unit,
     onSaveConfig: () -> Unit,
@@ -377,9 +374,6 @@ private fun SettingsPanel(
         HorizontalDivider()
         Text("运行配置", style = MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onLoadConfig, enabled = !state.isConfigLoading) {
-                Text(if (state.isConfigLoading) "加载中..." else "加载配置")
-            }
             Button(
                 onClick = onSaveConfig,
                 enabled = !state.isConfigSaving && state.editableConfigFields.isNotEmpty(),
@@ -389,6 +383,9 @@ private fun SettingsPanel(
             Button(onClick = onResetConfig, enabled = !state.isConfigResetting) {
                 Text(if (state.isConfigResetting) "恢复中..." else "恢复默认")
             }
+        }
+        if (state.isConfigLoading) {
+            Text("正在拉取配置...", style = MaterialTheme.typography.bodySmall)
         }
         EditableConfigFieldsPanel(
             fields = state.editableConfigFields,
@@ -414,7 +411,7 @@ private fun EditableConfigFieldsPanel(
 
     if (visibleFields.isEmpty()) {
         Text(
-            text = "当前没有可展示的配置项，请先点击“加载配置”。",
+            text = "当前没有可展示的配置项，请检查服务端连接后重试。",
             style = MaterialTheme.typography.bodySmall,
         )
         return
@@ -507,8 +504,13 @@ private fun ConfigDropdownField(
     onSelect: (String) -> Unit,
 ) {
     var expanded by remember(spec.path) { mutableStateOf(false) }
-    val selectedLabel = spec.options.firstOrNull { option -> option.value == currentValue }?.label
-        ?: currentValue.ifBlank { "请选择" }
+    val matched = spec.options.firstOrNull { option -> option.value == currentValue }
+    if (matched == null && spec.options.isNotEmpty()) {
+        LaunchedEffect(spec.path, currentValue) {
+            onSelect(spec.options.first().value)
+        }
+    }
+    val selectedLabel = matched?.label ?: spec.options.firstOrNull()?.label ?: "请选择"
 
     Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(text = spec.title, fontWeight = FontWeight.SemiBold)
@@ -601,11 +603,12 @@ private fun BilibiliPanel(
 
 @Composable
 private fun BilibiliResult(result: BilibiliSummaryData) {
+    val elapsedSeconds = result.elapsedMs / 1000.0
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("链接：${result.videoUrl}", style = MaterialTheme.typography.bodySmall)
             Text(
-                "耗时：${result.elapsedMs} ms，转写字数：${result.transcriptChars}",
+                "耗时：${"%.1f".format(elapsedSeconds)} s，转写字数：${result.transcriptChars}",
                 style = MaterialTheme.typography.bodySmall,
             )
             HorizontalDivider()
@@ -618,7 +621,6 @@ private fun BilibiliResult(result: BilibiliSummaryData) {
 private fun XiaohongshuPanel(
     state: XiaohongshuUiState,
     onLimitChange: (String) -> Unit,
-    onConfirmLiveChange: (Boolean) -> Unit,
     onStartSync: () -> Unit,
     onSaveNotes: () -> Unit,
     modifier: Modifier = Modifier,
@@ -635,22 +637,6 @@ private fun XiaohongshuPanel(
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text("确认真实同步请求")
-                Text(
-                    text = "仅在服务端 mode=web_readonly 时需要打开",
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
-            Switch(
-                checked = state.confirmLive,
-                onCheckedChange = onConfirmLiveChange,
-            )
-        }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(onClick = onStartSync, enabled = !state.isSyncing) {
                 Text(if (state.isSyncing) "同步中..." else "同步最近收藏")
@@ -717,25 +703,32 @@ private fun NotesPanel(
     onClearXiaohongshu: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var selectedDetail by remember { mutableStateOf<NoteDetailViewState?>(null) }
     val keyword = state.keywordInput.trim()
     val filteredBilibili = state.bilibiliNotes.filter { item ->
-        keyword.isBlank() || listOf(item.title, item.videoUrl, item.summaryMarkdown)
-            .any { value -> value.contains(keyword, ignoreCase = true) }
+        keyword.isBlank() || item.title.contains(keyword, ignoreCase = true)
     }
     val filteredXhs = state.xiaohongshuNotes.filter { item ->
-        keyword.isBlank() || listOf(item.title, item.sourceUrl, item.summaryMarkdown)
-            .any { value -> value.contains(keyword, ignoreCase = true) }
+        keyword.isBlank() || item.title.contains(keyword, ignoreCase = true)
     }
 
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        if (selectedDetail != null) {
+            NoteDetailPanel(
+                detail = selectedDetail!!,
+                onBack = { selectedDetail = null },
+            )
+            return@Column
+        }
+
         Text("已保存笔记", style = MaterialTheme.typography.titleMedium)
         OutlinedTextField(
             value = state.keywordInput,
             onValueChange = onKeywordChange,
-            label = { Text("关键词检索（标题/链接/内容）") },
+            label = { Text("关键词检索（标题）") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
@@ -767,7 +760,12 @@ private fun NotesPanel(
             Text("暂无 B 站已保存笔记。", style = MaterialTheme.typography.bodySmall)
         }
         filteredBilibili.forEach { item ->
-            BilibiliSavedNoteCard(item = item, onDelete = onDeleteBilibili)
+            SavedNoteListItem(
+                title = item.title,
+                savedAt = item.savedAt,
+                onOpen = { selectedDetail = NoteDetailViewState.Bilibili(item) },
+                onDelete = { onDeleteBilibili(item.noteId) },
+            )
         }
 
         Text(
@@ -779,47 +777,112 @@ private fun NotesPanel(
             Text("暂无小红书已保存笔记。", style = MaterialTheme.typography.bodySmall)
         }
         filteredXhs.forEach { item ->
-            XiaohongshuSavedNoteCard(item = item, onDelete = onDeleteXiaohongshu)
+            SavedNoteListItem(
+                title = item.title,
+                savedAt = item.savedAt,
+                onOpen = { selectedDetail = NoteDetailViewState.Xiaohongshu(item) },
+                onDelete = { onDeleteXiaohongshu(item.noteId) },
+            )
         }
     }
 }
 
 @Composable
-private fun BilibiliSavedNoteCard(
-    item: BilibiliSavedNote,
-    onDelete: (String) -> Unit,
+private fun SavedNoteListItem(
+    title: String,
+    savedAt: String,
+    onOpen: () -> Unit,
+    onDelete: () -> Unit,
 ) {
+    var menuExpanded by remember(title, savedAt) { mutableStateOf(false) }
+
     Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(item.title, style = MaterialTheme.typography.titleSmall)
-            Text("ID: ${item.noteId}", style = MaterialTheme.typography.bodySmall)
-            Text(item.videoUrl, style = MaterialTheme.typography.bodySmall)
-            Text("保存时间：${item.savedAt}", style = MaterialTheme.typography.bodySmall)
-            HorizontalDivider()
-            MarkdownText(markdown = item.summaryMarkdown, modifier = Modifier.fillMaxWidth())
-            Button(onClick = { onDelete(item.noteId) }) {
-                Text("删除此笔记")
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text(
+                    text = title,
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.clickable(onClick = onOpen),
+                )
+                Text("保存时间：$savedAt", style = MaterialTheme.typography.bodySmall)
+            }
+            Box {
+                IconButton(onClick = { menuExpanded = true }) {
+                    Text("⋮")
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("删除") },
+                        onClick = {
+                            menuExpanded = false
+                            onDelete()
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+private sealed interface NoteDetailViewState {
+    data class Bilibili(val note: BilibiliSavedNote) : NoteDetailViewState
+    data class Xiaohongshu(val note: XiaohongshuSavedNote) : NoteDetailViewState
+}
+
+@Composable
+private fun NoteDetailPanel(
+    detail: NoteDetailViewState,
+    onBack: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Button(onClick = onBack) {
+            Text("返回标题列表")
+        }
+
+        Card(modifier = Modifier.fillMaxWidth()) {
+            when (detail) {
+                is NoteDetailViewState.Bilibili -> {
+                    BilibiliNoteDetail(note = detail.note)
+                }
+
+                is NoteDetailViewState.Xiaohongshu -> {
+                    XiaohongshuNoteDetail(note = detail.note)
+                }
             }
         }
     }
 }
 
 @Composable
-private fun XiaohongshuSavedNoteCard(
-    item: XiaohongshuSavedNote,
-    onDelete: (String) -> Unit,
-) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(item.title, style = MaterialTheme.typography.titleSmall)
-            Text("ID: ${item.noteId}", style = MaterialTheme.typography.bodySmall)
-            Text(item.sourceUrl, style = MaterialTheme.typography.bodySmall)
-            Text("保存时间：${item.savedAt}", style = MaterialTheme.typography.bodySmall)
-            HorizontalDivider()
-            MarkdownText(markdown = item.summaryMarkdown, modifier = Modifier.fillMaxWidth())
-            Button(onClick = { onDelete(item.noteId) }) {
-                Text("删除此笔记")
-            }
-        }
+private fun BilibiliNoteDetail(note: BilibiliSavedNote) {
+    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(note.title, style = MaterialTheme.typography.titleSmall)
+        Text("保存时间：${note.savedAt}", style = MaterialTheme.typography.bodySmall)
+        Text(note.videoUrl, style = MaterialTheme.typography.bodySmall)
+        HorizontalDivider()
+        MarkdownText(markdown = note.summaryMarkdown, modifier = Modifier.fillMaxWidth())
+    }
+}
+
+@Composable
+private fun XiaohongshuNoteDetail(note: XiaohongshuSavedNote) {
+    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(note.title, style = MaterialTheme.typography.titleSmall)
+        Text("保存时间：${note.savedAt}", style = MaterialTheme.typography.bodySmall)
+        Text(note.sourceUrl, style = MaterialTheme.typography.bodySmall)
+        HorizontalDivider()
+        MarkdownText(markdown = note.summaryMarkdown, modifier = Modifier.fillMaxWidth())
     }
 }
