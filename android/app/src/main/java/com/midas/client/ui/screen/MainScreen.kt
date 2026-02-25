@@ -11,8 +11,10 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -68,6 +70,7 @@ private data class ConfigFieldSpec(
     val section: String,
     val title: String,
     val description: String,
+    val defaultValue: String,
     val control: ConfigControlKind,
     val options: List<ConfigOption> = emptyList(),
 )
@@ -78,6 +81,7 @@ private val configFieldSpecs = listOf(
         section = "总结能力",
         title = "启用 LLM 总结",
         description = "关闭后使用本地降级摘要，不请求模型。",
+        defaultValue = "true",
         control = ConfigControlKind.SWITCH,
     ),
     ConfigFieldSpec(
@@ -85,6 +89,7 @@ private val configFieldSpecs = listOf(
         section = "总结能力",
         title = "LLM 模型",
         description = "填写服务端可用模型名，例如 gemini-3-flash-preview。",
+        defaultValue = "gemini-3-flash-preview",
         control = ConfigControlKind.TEXT,
     ),
     ConfigFieldSpec(
@@ -92,6 +97,7 @@ private val configFieldSpecs = listOf(
         section = "总结能力",
         title = "LLM 超时（秒）",
         description = "单次模型请求最长等待时间。",
+        defaultValue = "120",
         control = ConfigControlKind.TEXT,
     ),
     ConfigFieldSpec(
@@ -99,6 +105,7 @@ private val configFieldSpecs = listOf(
         section = "总结能力",
         title = "视频转写模式",
         description = "固定使用真实转写模式。",
+        defaultValue = "faster_whisper",
         control = ConfigControlKind.DROPDOWN,
         options = listOf(
             ConfigOption(value = "faster_whisper", label = "真实转写（faster_whisper）"),
@@ -109,6 +116,7 @@ private val configFieldSpecs = listOf(
         section = "总结能力",
         title = "Whisper 模型大小",
         description = "模型越大通常越准，但速度更慢、占用更高。",
+        defaultValue = "base",
         control = ConfigControlKind.DROPDOWN,
         options = listOf(
             ConfigOption(value = "tiny", label = "tiny（最快）"),
@@ -123,6 +131,7 @@ private val configFieldSpecs = listOf(
         section = "总结能力",
         title = "ASR 设备",
         description = "无 GPU 建议用 cpu；有 CUDA 环境可选 cuda。",
+        defaultValue = "cpu",
         control = ConfigControlKind.DROPDOWN,
         options = listOf(
             ConfigOption(value = "cpu", label = "CPU"),
@@ -134,6 +143,7 @@ private val configFieldSpecs = listOf(
         section = "总结能力",
         title = "转写语言",
         description = "当前仅支持中文或英文。",
+        defaultValue = "zh",
         control = ConfigControlKind.DROPDOWN,
         options = listOf(
             ConfigOption(value = "zh", label = "中文（zh）"),
@@ -145,6 +155,7 @@ private val configFieldSpecs = listOf(
         section = "小红书同步",
         title = "同步模式",
         description = "固定使用真实同步模式。",
+        defaultValue = "web_readonly",
         control = ConfigControlKind.DROPDOWN,
         options = listOf(
             ConfigOption(value = "web_readonly", label = "真实同步（web_readonly）"),
@@ -155,6 +166,7 @@ private val configFieldSpecs = listOf(
         section = "小红书同步",
         title = "收藏夹 ID",
         description = "真实同步时使用的小红书收藏夹 ID。",
+        defaultValue = "",
         control = ConfigControlKind.TEXT,
     ),
     ConfigFieldSpec(
@@ -162,6 +174,7 @@ private val configFieldSpecs = listOf(
         section = "小红书同步",
         title = "默认同步条数",
         description = "未指定 limit 时使用这个值。",
+        defaultValue = "20",
         control = ConfigControlKind.TEXT,
     ),
     ConfigFieldSpec(
@@ -169,6 +182,7 @@ private val configFieldSpecs = listOf(
         section = "小红书同步",
         title = "单次最大同步条数",
         description = "客户端可请求的上限，防止单次任务过大。",
+        defaultValue = "30",
         control = ConfigControlKind.TEXT,
     ),
     ConfigFieldSpec(
@@ -176,6 +190,7 @@ private val configFieldSpecs = listOf(
         section = "小红书同步",
         title = "请求间最小随机间隔（秒）",
         description = "同一轮同步中，相邻两次请求之间的最小等待时间。",
+        defaultValue = "3.0",
         control = ConfigControlKind.TEXT,
     ),
     ConfigFieldSpec(
@@ -183,6 +198,7 @@ private val configFieldSpecs = listOf(
         section = "小红书同步",
         title = "请求间最大随机间隔（秒）",
         description = "同一轮同步中，相邻两次请求之间的最大等待时间。",
+        defaultValue = "10.0",
         control = ConfigControlKind.TEXT,
     ),
     ConfigFieldSpec(
@@ -190,6 +206,7 @@ private val configFieldSpecs = listOf(
         section = "小红书同步",
         title = "两次真实同步最小间隔（秒）",
         description = "两次 web_readonly 真实同步任务之间的最短间隔。",
+        defaultValue = "1800",
         control = ConfigControlKind.TEXT,
     ),
     ConfigFieldSpec(
@@ -197,6 +214,7 @@ private val configFieldSpecs = listOf(
         section = "小红书同步",
         title = "小红书请求超时（秒）",
         description = "单次小红书上游请求的超时时间。",
+        defaultValue = "30",
         control = ConfigControlKind.TEXT,
     ),
     ConfigFieldSpec(
@@ -204,6 +222,7 @@ private val configFieldSpecs = listOf(
         section = "小红书同步",
         title = "连续失败熔断阈值",
         description = "连续失败达到该次数时，本次同步任务会中断。",
+        defaultValue = "3",
         control = ConfigControlKind.TEXT,
     ),
     ConfigFieldSpec(
@@ -211,6 +230,7 @@ private val configFieldSpecs = listOf(
         section = "小红书同步",
         title = "详情抓取策略",
         description = "auto=按需抓，always=总是抓，never=不抓详情。",
+        defaultValue = "auto",
         control = ConfigControlKind.DROPDOWN,
         options = listOf(
             ConfigOption(value = "auto", label = "按需抓取（auto）"),
@@ -223,6 +243,7 @@ private val configFieldSpecs = listOf(
         section = "运行与调试",
         title = "日志级别",
         description = "排查问题建议临时切到 DEBUG，平时建议 INFO。",
+        defaultValue = "INFO",
         control = ConfigControlKind.DROPDOWN,
         options = listOf(
             ConfigOption(value = "DEBUG", label = "DEBUG"),
@@ -236,6 +257,7 @@ private val configFieldSpecs = listOf(
         section = "运行与调试",
         title = "B 站视频时长上限（分钟）",
         description = "超过该时长的视频将被拒绝处理。",
+        defaultValue = "240",
         control = ConfigControlKind.TEXT,
     ),
 )
@@ -443,55 +465,89 @@ private fun ConfigFieldEditor(
     onTextChange: (String, String) -> Unit,
     onBooleanChange: (String, Boolean) -> Unit,
 ) {
-    when (spec.control) {
-        ConfigControlKind.SWITCH -> {
+    val isCustomized = isConfigFieldCustomized(spec = spec, field = field)
+    val indicatorText = if (isCustomized) "已修改" else "默认"
+    val indicatorColor = if (isCustomized) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant
+    val containerColor = if (isCustomized) Color(0xFFF1F8E9) else MaterialTheme.colorScheme.surface
+    val borderColor = if (isCustomized) Color(0xFF66BB6A) else MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(vertical = 4.dp),
+        colors = CardDefaults.cardColors(containerColor = containerColor),
+        border = BorderStroke(1.dp, borderColor),
+    ) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text(text = spec.title, fontWeight = FontWeight.SemiBold)
-                    Text(
-                        text = spec.description,
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                }
-                Switch(
-                    checked = field.boolValue,
-                    onCheckedChange = { checked ->
-                        onBooleanChange(spec.path, checked)
-                    },
-                )
-            }
-        }
-
-        ConfigControlKind.DROPDOWN -> {
-            ConfigDropdownField(
-                spec = spec,
-                currentValue = field.textValue,
-                onSelect = { selected ->
-                    onTextChange(spec.path, selected)
-                },
-            )
-        }
-
-        ConfigControlKind.TEXT -> {
-            val isList = field.type == ConfigFieldType.LIST_JSON
-            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
                 Text(text = spec.title, fontWeight = FontWeight.SemiBold)
                 Text(
-                    text = spec.description,
+                    text = indicatorText,
                     style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                    color = indicatorColor,
                 )
-                OutlinedTextField(
-                    value = field.textValue,
-                    onValueChange = { value ->
-                        onTextChange(spec.path, value)
-                    },
-                    modifier = Modifier.fillMaxWidth(),
-                    singleLine = !isList,
-                    minLines = if (isList) 2 else 1,
+            }
+            Text(
+                text = spec.description,
+                style = MaterialTheme.typography.bodySmall,
+            )
+            if (isCustomized) {
+                Text(
+                    text = "默认值：${spec.defaultDisplayText()}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFF2E7D32),
                 )
+            }
+
+            when (spec.control) {
+                ConfigControlKind.SWITCH -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = if (field.boolValue) "当前：开启" else "当前：关闭",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        Switch(
+                            checked = field.boolValue,
+                            onCheckedChange = { checked ->
+                                onBooleanChange(spec.path, checked)
+                            },
+                        )
+                    }
+                }
+
+                ConfigControlKind.DROPDOWN -> {
+                    ConfigDropdownField(
+                        path = spec.path,
+                        options = spec.options,
+                        currentValue = field.textValue,
+                        onSelect = { selected ->
+                            onTextChange(spec.path, selected)
+                        },
+                    )
+                }
+
+                ConfigControlKind.TEXT -> {
+                    val isList = field.type == ConfigFieldType.LIST_JSON
+                    OutlinedTextField(
+                        value = field.textValue,
+                        onValueChange = { value ->
+                            onTextChange(spec.path, value)
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = !isList,
+                        minLines = if (isList) 2 else 1,
+                    )
+                }
             }
         }
     }
@@ -499,57 +555,99 @@ private fun ConfigFieldEditor(
 
 @Composable
 private fun ConfigDropdownField(
-    spec: ConfigFieldSpec,
+    path: String,
+    options: List<ConfigOption>,
     currentValue: String,
     onSelect: (String) -> Unit,
 ) {
-    var expanded by remember(spec.path) { mutableStateOf(false) }
-    val matched = spec.options.firstOrNull { option -> option.value == currentValue }
-    if (matched == null && spec.options.isNotEmpty()) {
-        LaunchedEffect(spec.path, currentValue) {
-            onSelect(spec.options.first().value)
+    var expanded by remember(path) { mutableStateOf(false) }
+    val matched = options.firstOrNull { option -> option.value == currentValue }
+    if (matched == null && options.isNotEmpty()) {
+        LaunchedEffect(path, currentValue) {
+            onSelect(options.first().value)
         }
     }
-    val selectedLabel = matched?.label ?: spec.options.firstOrNull()?.label ?: "请选择"
+    val selectedLabel = matched?.label ?: options.firstOrNull()?.label ?: "请选择"
 
-    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        Text(text = spec.title, fontWeight = FontWeight.SemiBold)
-        Text(
-            text = spec.description,
-            style = MaterialTheme.typography.bodySmall,
+    Box(modifier = Modifier.fillMaxWidth()) {
+        OutlinedTextField(
+            value = selectedLabel,
+            onValueChange = {},
+            readOnly = true,
+            trailingIcon = { Text("▼") },
+            singleLine = true,
+            modifier = Modifier.fillMaxWidth(),
         )
-        Box(modifier = Modifier.fillMaxWidth()) {
-            OutlinedTextField(
-                value = selectedLabel,
-                onValueChange = {},
-                readOnly = true,
-                trailingIcon = { Text("▼") },
-                singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth(),
-            )
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(56.dp)
-                    .clickable { expanded = true },
-            )
-            DropdownMenu(
-                expanded = expanded,
-                onDismissRequest = { expanded = false },
-            ) {
-                spec.options.forEach { option ->
-                    DropdownMenuItem(
-                        text = { Text(option.label) },
-                        onClick = {
-                            onSelect(option.value)
-                            expanded = false
-                        },
-                    )
-                }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(56.dp)
+                .clickable { expanded = true },
+        )
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label) },
+                    onClick = {
+                        onSelect(option.value)
+                        expanded = false
+                    },
+                )
             }
         }
     }
+}
+
+private fun isConfigFieldCustomized(spec: ConfigFieldSpec, field: EditableConfigField): Boolean {
+    val expected = spec.defaultValue.trim()
+    return when (spec.control) {
+        ConfigControlKind.SWITCH -> {
+            val expectedBool = expected.equals("true", ignoreCase = true)
+            field.boolValue != expectedBool
+        }
+
+        ConfigControlKind.DROPDOWN -> field.textValue.trim() != expected
+        ConfigControlKind.TEXT -> {
+            val actual = field.textValue.trim()
+            when (field.type) {
+                ConfigFieldType.INTEGER -> {
+                    val actualInt = actual.toLongOrNull()
+                    val expectedInt = expected.toLongOrNull()
+                    if (actualInt != null && expectedInt != null) {
+                        actualInt != expectedInt
+                    } else {
+                        actual != expected
+                    }
+                }
+
+                ConfigFieldType.DECIMAL -> {
+                    val actualDec = actual.toDoubleOrNull()
+                    val expectedDec = expected.toDoubleOrNull()
+                    if (actualDec != null && expectedDec != null) {
+                        actualDec != expectedDec
+                    } else {
+                        actual != expected
+                    }
+                }
+
+                else -> actual != expected
+            }
+        }
+    }
+}
+
+private fun ConfigFieldSpec.defaultDisplayText(): String {
+    if (control == ConfigControlKind.SWITCH) {
+        return if (defaultValue.equals("true", ignoreCase = true)) "开启" else "关闭"
+    }
+    val dropdownLabel = options.firstOrNull { it.value == defaultValue }?.label
+    if (dropdownLabel != null) {
+        return dropdownLabel
+    }
+    return if (defaultValue.isBlank()) "空" else defaultValue
 }
 
 @Composable
@@ -568,7 +666,10 @@ private fun BilibiliPanel(
         OutlinedTextField(
             value = state.videoUrlInput,
             onValueChange = onVideoUrlChange,
-            label = { Text("输入 B 站视频链接") },
+            label = { Text("输入 B 站视频链接或 BV 号") },
+            supportingText = {
+                Text("示例：BV1xx411c7mD 或 https://www.bilibili.com/video/BV1xx411c7mD")
+            },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
