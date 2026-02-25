@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import random
 import re
@@ -64,6 +65,14 @@ class XiaohongshuNote:
     source_url: str
     image_urls: list[str] = field(default_factory=list)
     is_video: bool = False
+
+
+@dataclass(frozen=True)
+class XiaohongshuPageBatch:
+    notes: list[XiaohongshuNote]
+    request_cursor: str = ""
+    next_cursor: str = ""
+    exhausted: bool = False
 
 
 class MockXiaohongshuSource:
@@ -192,6 +201,17 @@ class XiaohongshuWebReadonlySource:
         return notes
 
     async def iter_recent(self) -> AsyncIterator[XiaohongshuNote]:
+        async for batch in self.iter_pages():
+            for note in batch.notes:
+                yield note
+
+    async def iter_pages(
+        self,
+        *,
+        start_cursor: str | None = None,
+        force_head: bool = False,
+        max_pages: int | None = None,
+    ) -> AsyncIterator[XiaohongshuPageBatch]:
         cfg = self._settings.xiaohongshu.web_readonly
         request_url = cfg.request_url.strip()
         if not request_url:
@@ -235,8 +255,22 @@ class XiaohongshuWebReadonlySource:
 
         page_url = request_url
         page_body = body
+        page_cursor = ""
+        normalized_start_cursor = (start_cursor or "").strip()
+        if normalized_start_cursor and not force_head:
+            next_page = self._build_next_page_request(
+                method=method,
+                current_url=request_url,
+                current_body=body,
+                next_cursor=normalized_start_cursor,
+            )
+            if next_page is not None:
+                page_url, page_body = next_page
+                page_cursor = normalized_start_cursor
         seen_page_tokens: set[tuple[str, str | None]] = set()
         emitted_any = False
+        page_count = 0
+        stopped_by_page_limit = False
 
         async with httpx.AsyncClient(timeout=timeout) as client:
             while True:
@@ -256,6 +290,7 @@ class XiaohongshuWebReadonlySource:
                         status_code=502,
                     )
 
+                notes: list[XiaohongshuNote] = []
                 for record in records:
                     if not isinstance(record, dict):
                         continue
@@ -274,10 +309,21 @@ class XiaohongshuWebReadonlySource:
                     if note is None:
                         continue
                     emitted_any = True
-                    yield note
+                    notes.append(note)
 
                 has_more = self._extract_has_more(payload)
                 next_cursor = self._extract_next_cursor(payload)
+                exhausted = (not has_more) and (not next_cursor)
+                yield XiaohongshuPageBatch(
+                    notes=notes,
+                    request_cursor=page_cursor,
+                    next_cursor=next_cursor,
+                    exhausted=exhausted,
+                )
+                page_count += 1
+                if max_pages is not None and max_pages > 0 and page_count >= max_pages:
+                    stopped_by_page_limit = True
+                    break
                 if not has_more and not next_cursor:
                     break
                 if not next_cursor:
@@ -294,12 +340,13 @@ class XiaohongshuWebReadonlySource:
                 if next_page == (page_url, page_body):
                     break
                 page_url, page_body = next_page
+                page_cursor = next_cursor
                 page_token = (page_url, page_body)
                 if page_token in seen_page_tokens:
                     break
                 seen_page_tokens.add(page_token)
 
-        if not emitted_any:
+        if not emitted_any and not stopped_by_page_limit:
             raise AppError(
                 code=ErrorCode.UPSTREAM_ERROR,
                 message=(
@@ -1074,6 +1121,10 @@ class XiaohongshuWebReadonlySource:
 
 
 class XiaohongshuSyncService:
+    _LIVE_CURSOR_STATE_KEY = "live_sync_cursor"
+    _LIVE_CURSOR_FINGERPRINT_STATE_KEY = "live_sync_cursor_fingerprint"
+    _HEAD_SHORT_SCAN_PAGES = 2
+
     def __init__(
         self,
         settings: Settings,
@@ -1263,6 +1314,14 @@ class XiaohongshuSyncService:
                 yield note
             return
 
+        iter_pages = getattr(self._web_source, "iter_pages", None)
+        if callable(iter_pages):
+            async for note in self._iter_web_candidate_notes_with_hybrid_cursor(
+                iter_pages=iter_pages,
+            ):
+                yield note
+            return
+
         iter_recent = getattr(self._web_source, "iter_recent", None)
         if callable(iter_recent):
             async for note in iter_recent():
@@ -1272,6 +1331,100 @@ class XiaohongshuSyncService:
         notes = await self._web_source.fetch_recent(requested_limit)
         for note in notes:
             yield note
+
+    async def _iter_web_candidate_notes_with_hybrid_cursor(
+        self,
+        *,
+        iter_pages: Callable[..., AsyncIterator[XiaohongshuPageBatch]],
+    ) -> AsyncIterator[XiaohongshuNote]:
+        seen_note_ids: set[str] = set()
+        cursor_fingerprint = self._build_live_cursor_fingerprint()
+        saved_cursor = self._load_live_cursor(fingerprint=cursor_fingerprint)
+
+        head_next_cursor = ""
+        head_exhausted = False
+        async for batch in iter_pages(
+            force_head=True,
+            max_pages=max(self._HEAD_SHORT_SCAN_PAGES, 1),
+        ):
+            if batch.next_cursor:
+                head_next_cursor = batch.next_cursor.strip()
+            if batch.exhausted:
+                head_exhausted = True
+            for note in batch.notes:
+                if note.note_id in seen_note_ids:
+                    continue
+                seen_note_ids.add(note.note_id)
+                yield note
+
+        if head_exhausted:
+            return
+
+        resume_cursor = saved_cursor or head_next_cursor
+        if not resume_cursor:
+            return
+
+        async for batch in iter_pages(start_cursor=resume_cursor):
+            page_cursor = batch.request_cursor.strip()
+            if page_cursor:
+                self._save_live_cursor(
+                    cursor=page_cursor,
+                    fingerprint=cursor_fingerprint,
+                )
+            for note in batch.notes:
+                if note.note_id in seen_note_ids:
+                    continue
+                seen_note_ids.add(note.note_id)
+                yield note
+            if batch.exhausted:
+                break
+
+    def _build_live_cursor_fingerprint(self) -> str:
+        cfg = self._settings.xiaohongshu.web_readonly
+        fingerprint_payload = {
+            "request_url": cfg.request_url,
+            "request_method": cfg.request_method,
+            "request_body": cfg.request_body,
+            "request_headers": cfg.request_headers,
+            "items_path": cfg.items_path,
+            "note_id_field": cfg.note_id_field,
+            "title_field": cfg.title_field,
+            "source_url_field": cfg.source_url_field,
+        }
+        normalized = json.dumps(
+            fingerprint_payload,
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha1(normalized.encode("utf-8")).hexdigest()
+
+    def _load_live_cursor(self, *, fingerprint: str) -> str | None:
+        saved_fingerprint = self._repository.get_state(
+            self._LIVE_CURSOR_FINGERPRINT_STATE_KEY
+        )
+        if saved_fingerprint != fingerprint:
+            return None
+        raw_cursor = self._repository.get_state(self._LIVE_CURSOR_STATE_KEY)
+        if raw_cursor is None:
+            return None
+        cursor = raw_cursor.strip()
+        if not cursor:
+            return None
+        return cursor
+
+    def _save_live_cursor(self, *, cursor: str, fingerprint: str) -> None:
+        normalized_cursor = cursor.strip()
+        if not normalized_cursor:
+            return
+        self._repository.set_state(
+            self._LIVE_CURSOR_FINGERPRINT_STATE_KEY,
+            fingerprint,
+        )
+        self._repository.set_state(
+            self._LIVE_CURSOR_STATE_KEY,
+            normalized_cursor,
+        )
 
     async def _summarize_video_note(self, note: XiaohongshuNote) -> str:
         transcript = ""

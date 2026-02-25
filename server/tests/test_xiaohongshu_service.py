@@ -10,6 +10,7 @@ from app.core.errors import AppError, ErrorCode
 from app.repositories.xiaohongshu_repo import XiaohongshuSyncRepository
 from app.services.xiaohongshu import (
     XiaohongshuNote,
+    XiaohongshuPageBatch,
     XiaohongshuSyncService,
     XiaohongshuWebReadonlySource,
 )
@@ -85,6 +86,45 @@ class IterWebSource:
             yield note
 
 
+class HybridCursorWebSource:
+    def __init__(
+        self,
+        *,
+        head_notes: list[XiaohongshuNote],
+        head_next_cursor: str,
+        resume_pages: dict[str, list[XiaohongshuPageBatch]],
+    ) -> None:
+        self.calls: list[dict[str, object]] = []
+        self._head_notes = head_notes
+        self._head_next_cursor = head_next_cursor
+        self._resume_pages = resume_pages
+
+    async def iter_pages(
+        self,
+        *,
+        start_cursor: str | None = None,
+        force_head: bool = False,
+        max_pages: int | None = None,
+    ):
+        self.calls.append(
+            {
+                "start_cursor": start_cursor,
+                "force_head": force_head,
+                "max_pages": max_pages,
+            }
+        )
+        if force_head:
+            yield XiaohongshuPageBatch(
+                notes=self._head_notes,
+                request_cursor="",
+                next_cursor=self._head_next_cursor,
+                exhausted=False,
+            )
+            return
+        for batch in self._resume_pages.get((start_cursor or "").strip(), []):
+            yield batch
+
+
 @pytest.mark.asyncio
 async def test_sync_circuit_breaker(tmp_path) -> None:
     settings = Settings(
@@ -111,6 +151,201 @@ async def test_sync_circuit_breaker(tmp_path) -> None:
     assert err.code == ErrorCode.CIRCUIT_OPEN
     assert err.details["failed_count"] == 2
     assert err.details["circuit_opened"] is True
+
+
+@pytest.mark.asyncio
+async def test_web_readonly_hybrid_scans_head_then_resume_saved_cursor(tmp_path) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=str(tmp_path / "midas.db"),
+            min_live_sync_interval_seconds=0,
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://www.xiaohongshu.com/api/some/path"
+            ),
+        )
+    )
+    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
+    repo.mark_synced("h1", "head-1", "https://www.xiaohongshu.com/explore/h1")
+    source = HybridCursorWebSource(
+        head_notes=[
+            XiaohongshuNote(
+                note_id="h1",
+                title="head-1",
+                content="head-content-1",
+                source_url="https://www.xiaohongshu.com/explore/h1",
+            )
+        ],
+        head_next_cursor="head-next",
+        resume_pages={
+            "resume-cursor": [
+                XiaohongshuPageBatch(
+                    notes=[
+                        XiaohongshuNote(
+                            note_id="r1",
+                            title="resume-1",
+                            content="resume-content-1",
+                            source_url="https://www.xiaohongshu.com/explore/r1",
+                        )
+                    ],
+                    request_cursor="resume-cursor",
+                    next_cursor="resume-next",
+                    exhausted=False,
+                ),
+                XiaohongshuPageBatch(
+                    notes=[
+                        XiaohongshuNote(
+                            note_id="r2",
+                            title="resume-2",
+                            content="resume-content-2",
+                            source_url="https://www.xiaohongshu.com/explore/r2",
+                        )
+                    ],
+                    request_cursor="resume-next",
+                    next_cursor="",
+                    exhausted=True,
+                ),
+            ]
+        },
+    )
+    service = XiaohongshuSyncService(
+        settings=settings,
+        repository=repo,
+        web_source=source,
+        llm_service=SimpleLLM(),
+    )
+    fingerprint = service._build_live_cursor_fingerprint()
+    repo.set_state(service._LIVE_CURSOR_FINGERPRINT_STATE_KEY, fingerprint)
+    repo.set_state(service._LIVE_CURSOR_STATE_KEY, "resume-cursor")
+
+    result = await service.sync(limit=2, confirm_live=True)
+
+    assert result.new_count == 2
+    assert [item.note_id for item in result.summaries] == ["r1", "r2"]
+    assert len(source.calls) == 2
+    assert source.calls[0]["force_head"] is True
+    assert source.calls[0]["max_pages"] == service._HEAD_SHORT_SCAN_PAGES
+    assert source.calls[1]["start_cursor"] == "resume-cursor"
+    assert repo.get_state(service._LIVE_CURSOR_STATE_KEY) == "resume-next"
+
+
+@pytest.mark.asyncio
+async def test_web_readonly_hybrid_uses_head_cursor_when_no_saved_cursor(tmp_path) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=str(tmp_path / "midas.db"),
+            min_live_sync_interval_seconds=0,
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://www.xiaohongshu.com/api/some/path"
+            ),
+        )
+    )
+    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
+    repo.mark_synced("h1", "head-1", "https://www.xiaohongshu.com/explore/h1")
+    source = HybridCursorWebSource(
+        head_notes=[
+            XiaohongshuNote(
+                note_id="h1",
+                title="head-1",
+                content="head-content-1",
+                source_url="https://www.xiaohongshu.com/explore/h1",
+            )
+        ],
+        head_next_cursor="head-next",
+        resume_pages={
+            "head-next": [
+                XiaohongshuPageBatch(
+                    notes=[
+                        XiaohongshuNote(
+                            note_id="r1",
+                            title="resume-1",
+                            content="resume-content-1",
+                            source_url="https://www.xiaohongshu.com/explore/r1",
+                        )
+                    ],
+                    request_cursor="head-next",
+                    next_cursor="",
+                    exhausted=True,
+                )
+            ]
+        },
+    )
+    service = XiaohongshuSyncService(
+        settings=settings,
+        repository=repo,
+        web_source=source,
+        llm_service=SimpleLLM(),
+    )
+
+    result = await service.sync(limit=1, confirm_live=True)
+
+    assert result.new_count == 1
+    assert [item.note_id for item in result.summaries] == ["r1"]
+    assert len(source.calls) == 2
+    assert source.calls[1]["start_cursor"] == "head-next"
+    assert repo.get_state(service._LIVE_CURSOR_STATE_KEY) == "head-next"
+
+
+@pytest.mark.asyncio
+async def test_web_readonly_hybrid_ignores_stale_cursor_on_fingerprint_change(
+    tmp_path,
+) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=str(tmp_path / "midas.db"),
+            min_live_sync_interval_seconds=0,
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://www.xiaohongshu.com/api/some/path"
+            ),
+        )
+    )
+    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
+    repo.mark_synced("h1", "head-1", "https://www.xiaohongshu.com/explore/h1")
+    source = HybridCursorWebSource(
+        head_notes=[
+            XiaohongshuNote(
+                note_id="h1",
+                title="head-1",
+                content="head-content-1",
+                source_url="https://www.xiaohongshu.com/explore/h1",
+            )
+        ],
+        head_next_cursor="head-next",
+        resume_pages={
+            "head-next": [
+                XiaohongshuPageBatch(
+                    notes=[
+                        XiaohongshuNote(
+                            note_id="r1",
+                            title="resume-1",
+                            content="resume-content-1",
+                            source_url="https://www.xiaohongshu.com/explore/r1",
+                        )
+                    ],
+                    request_cursor="head-next",
+                    next_cursor="",
+                    exhausted=True,
+                )
+            ]
+        },
+    )
+    service = XiaohongshuSyncService(
+        settings=settings,
+        repository=repo,
+        web_source=source,
+        llm_service=SimpleLLM(),
+    )
+    repo.set_state(service._LIVE_CURSOR_FINGERPRINT_STATE_KEY, "stale-fingerprint")
+    repo.set_state(service._LIVE_CURSOR_STATE_KEY, "stale-cursor")
+
+    result = await service.sync(limit=1, confirm_live=True)
+
+    assert result.new_count == 1
+    assert [item.note_id for item in result.summaries] == ["r1"]
+    assert len(source.calls) == 2
+    assert source.calls[1]["start_cursor"] == "head-next"
 
 
 @pytest.mark.asyncio
