@@ -179,7 +179,11 @@ async def prune_unsaved_xiaohongshu_synced_notes(request: Request) -> dict:
 @router.post("/api/xiaohongshu/capture/refresh")
 async def refresh_xiaohongshu_capture(request: Request) -> dict:
     try:
-        har_path, capture, updates = xhs_capture_tool.apply_capture_from_default_har_to_env()
+        _capture_source, capture_path, capture, updates = (
+            xhs_capture_tool.apply_capture_from_default_auth_source_to_env(
+                require_cookie=True
+            )
+        )
     except ValueError as exc:
         raise AppError(
             code=ErrorCode.INVALID_INPUT,
@@ -202,7 +206,7 @@ async def refresh_xiaohongshu_capture(request: Request) -> dict:
 
     empty_keys = sorted([key for key, value in updates.items() if not value])
     data = XiaohongshuCaptureRefreshData(
-        har_path=str(har_path),
+        har_path=str(capture_path),
         request_url_host=urlparse(capture.request_url).netloc,
         request_method=capture.request_method,
         headers_count=len(capture.request_headers),

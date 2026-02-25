@@ -188,6 +188,14 @@ class XiaohongshuWebReadonlySource:
         "data.page.next_cursor",
         "data.page.nextCursor",
     )
+    _RECORDS_FALLBACK_PATHS = (
+        "data.notes",
+        "data.items",
+        "notes",
+        "items",
+        "data.note_list",
+        "data.list",
+    )
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -282,18 +290,20 @@ class XiaohongshuWebReadonlySource:
                     body=page_body,
                 )
 
-                records = self._dig(payload, cfg.items_path)
-                if not isinstance(records, list):
+                resolved = self._resolve_records_list(
+                    payload=payload,
+                    configured_items_path=cfg.items_path,
+                )
+                if resolved is None:
                     raise AppError(
                         code=ErrorCode.UPSTREAM_ERROR,
                         message=f"响应中 items_path 无法解析为列表：{cfg.items_path}",
                         status_code=502,
                     )
+                records, _resolved_path = resolved
 
                 notes: list[XiaohongshuNote] = []
                 for record in records:
-                    if not isinstance(record, dict):
-                        continue
                     note = await self._extract_note_from_record(
                         client=client,
                         record=record,
@@ -372,22 +382,51 @@ class XiaohongshuWebReadonlySource:
     ) -> XiaohongshuNote | None:
         note_id = self._read_str(record, cfg.note_id_field)
         if not note_id:
+            note_id = self._read_str(record, "note_id")
+        if not note_id:
+            note_id = self._read_str(record, "noteId")
+        if not note_id:
+            note_id = self._read_str(record, "id")
+        if not note_id:
+            note_id = self._read_str(record, "note_card.note_id")
+        if not note_id:
+            note_id = self._read_str(record, "note_card.noteId")
+        if not note_id:
+            note_id = self._read_str(record, "note.note_id")
+        if not note_id:
+            note_id = self._read_str(record, "note.noteId")
+        if not note_id:
             return None
 
         title = self._read_str(record, cfg.title_field) or f"未命名笔记 {note_id}"
+        if title == f"未命名笔记 {note_id}":
+            title = (
+                self._read_str(record, "display_title")
+                or self._read_str(record, "note_card.title")
+                or self._read_str(record, "note_card.display_title")
+                or title
+            )
         source_url = self._read_str(record, cfg.source_url_field)
         if not source_url:
             source_url = f"https://www.xiaohongshu.com/explore/{note_id}"
         is_video = self._is_video_note(record)
 
+        content_candidates = list(cfg.content_field_candidates)
+        for field_name in ("note_card.desc", "note.desc", "note_card.content"):
+            if field_name not in content_candidates:
+                content_candidates.append(field_name)
         content = self._pick_valid_content(
             payload=record,
-            candidates=cfg.content_field_candidates,
+            candidates=content_candidates,
             title=title,
         )
+        image_candidates = list(cfg.image_field_candidates)
+        for field_name in ("note_card.image_list", "note.image_list"):
+            if field_name not in image_candidates:
+                image_candidates.append(field_name)
         image_urls = self._extract_image_urls(
             payload=record,
-            candidates=cfg.image_field_candidates,
+            candidates=image_candidates,
             max_count=max_images,
         )
 
@@ -576,7 +615,56 @@ class XiaohongshuWebReadonlySource:
                 message="小红书响应 JSON 顶层不是对象。",
                 status_code=502,
             )
+        self._raise_if_business_error(payload)
         return payload
+
+    def _raise_if_business_error(self, payload: dict) -> None:
+        code_value = payload.get("code")
+        success_value = payload.get("success")
+        message = (
+            self._read_str(payload, "msg")
+            or self._read_str(payload, "message")
+            or self._read_str(payload, "error_msg")
+            or self._read_str(payload, "errorMessage")
+        )
+        normalized_code = str(code_value).strip() if code_value is not None else ""
+        normalized_message = message.strip()
+
+        auth_message_hints = (
+            "登录已过期",
+            "登录过期",
+            "请先登录",
+            "未登录",
+            "登录失效",
+            "token expired",
+        )
+        if (
+            normalized_code in {"-100", "-101"}
+            or any(hint in normalized_message for hint in auth_message_hints)
+        ):
+            raise AppError(
+                code=ErrorCode.AUTH_EXPIRED,
+                message="小红书登录状态已失效，请重新抓包更新请求头后重试。",
+                status_code=401,
+            )
+
+        rate_limit_hints = ("频繁", "风控", "限流", "请求过快", "captcha")
+        if any(hint in normalized_message.lower() for hint in rate_limit_hints):
+            raise AppError(
+                code=ErrorCode.RATE_LIMITED,
+                message="小红书接口触发风控或限流，请稍后重试。",
+                status_code=429,
+            )
+
+        has_nonzero_code = normalized_code not in {"", "0"}
+        if success_value is False or has_nonzero_code:
+            details = f"code={normalized_code}" if normalized_code else "未知状态码"
+            detail_message = normalized_message or details
+            raise AppError(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message=f"小红书接口返回异常：{detail_message}",
+                status_code=502,
+            )
 
     def _extract_has_more(self, payload: dict) -> bool:
         for path in self._HAS_MORE_PATHS:
@@ -1075,6 +1163,68 @@ class XiaohongshuWebReadonlySource:
     def _dig(self, payload: object, dot_path: str):
         return self._read_value(payload, dot_path)
 
+    def _resolve_records_list(
+        self,
+        *,
+        payload: dict,
+        configured_items_path: str,
+    ) -> tuple[list[dict], str] | None:
+        candidate_paths: list[str] = []
+        configured_path = configured_items_path.strip()
+        if configured_path:
+            candidate_paths.append(configured_path)
+        candidate_paths.extend(self._RECORDS_FALLBACK_PATHS)
+
+        seen_paths: set[str] = set()
+        for path in candidate_paths:
+            normalized_path = path.strip()
+            if not normalized_path or normalized_path in seen_paths:
+                continue
+            seen_paths.add(normalized_path)
+            value = self._dig(payload, normalized_path)
+            records = self._coerce_record_list(value)
+            if records is None:
+                continue
+            return records, normalized_path
+        return None
+
+    def _coerce_record_list(self, value: object) -> list[dict] | None:
+        if isinstance(value, list):
+            normalized = self._normalize_record_list(value)
+            if normalized or len(value) == 0:
+                return normalized
+            return None
+
+        if isinstance(value, dict):
+            for key in ("notes", "items", "list", "data"):
+                nested = value.get(key)
+                if isinstance(nested, list):
+                    normalized = self._normalize_record_list(nested)
+                    if normalized or len(nested) == 0:
+                        return normalized
+        return None
+
+    def _normalize_record_list(self, items: list[object]) -> list[dict]:
+        records: list[dict] = []
+        for item in items:
+            normalized = self._normalize_record_item(item)
+            if normalized is not None:
+                records.append(normalized)
+        return records
+
+    def _normalize_record_item(self, item: object) -> dict | None:
+        if not isinstance(item, dict):
+            return None
+
+        merged = dict(item)
+        for key in ("note_card", "note"):
+            nested = item.get(key)
+            if not isinstance(nested, dict):
+                continue
+            for nested_key, nested_value in nested.items():
+                merged.setdefault(str(nested_key), nested_value)
+        return merged
+
     def _read_value(self, payload: object, dot_path: str) -> object | None:
         current: object = payload
         for segment in dot_path.split("."):
@@ -1364,20 +1514,60 @@ class XiaohongshuSyncService:
         if not resume_cursor:
             return
 
-        async for batch in iter_pages(start_cursor=resume_cursor):
-            page_cursor = batch.request_cursor.strip()
-            if page_cursor:
-                self._save_live_cursor(
-                    cursor=page_cursor,
-                    fingerprint=cursor_fingerprint,
+        fallback_cursor = ""
+        if saved_cursor and head_next_cursor and saved_cursor != head_next_cursor:
+            fallback_cursor = head_next_cursor
+
+        async for note in self._iter_resume_notes_with_cursor_fallback(
+            iter_pages=iter_pages,
+            primary_cursor=resume_cursor,
+            fallback_cursor=fallback_cursor,
+            seen_note_ids=seen_note_ids,
+            fingerprint=cursor_fingerprint,
+        ):
+            yield note
+
+    async def _iter_resume_notes_with_cursor_fallback(
+        self,
+        *,
+        iter_pages: Callable[..., AsyncIterator[XiaohongshuPageBatch]],
+        primary_cursor: str,
+        fallback_cursor: str,
+        seen_note_ids: set[str],
+        fingerprint: str,
+    ) -> AsyncIterator[XiaohongshuNote]:
+        current_cursor = primary_cursor
+        tried_fallback = False
+
+        while current_cursor:
+            try:
+                async for batch in iter_pages(start_cursor=current_cursor):
+                    page_cursor = batch.request_cursor.strip()
+                    if page_cursor:
+                        self._save_live_cursor(
+                            cursor=page_cursor,
+                            fingerprint=fingerprint,
+                        )
+                    for note in batch.notes:
+                        if note.note_id in seen_note_ids:
+                            continue
+                        seen_note_ids.add(note.note_id)
+                        yield note
+                    if batch.exhausted:
+                        return
+                return
+            except AppError as exc:
+                can_retry_with_fallback = (
+                    (not tried_fallback)
+                    and bool(fallback_cursor)
+                    and (fallback_cursor != current_cursor)
+                    and (exc.code == ErrorCode.UPSTREAM_ERROR)
+                    and ("items_path 无法解析为列表" in exc.message)
                 )
-            for note in batch.notes:
-                if note.note_id in seen_note_ids:
-                    continue
-                seen_note_ids.add(note.note_id)
-                yield note
-            if batch.exhausted:
-                break
+                if not can_retry_with_fallback:
+                    raise
+                current_cursor = fallback_cursor
+                tried_fallback = True
 
     def _build_live_cursor_fingerprint(self) -> str:
         cfg = self._settings.xiaohongshu.web_readonly

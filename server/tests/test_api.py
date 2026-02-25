@@ -238,7 +238,8 @@ def test_xiaohongshu_capture_refresh_from_default_har(monkeypatch) -> None:
 
     old_cookie = os.environ.get("XHS_HEADER_COOKIE", "")
 
-    def _fake_apply():
+    def _fake_apply(*, require_cookie: bool = False):
+        assert require_cookie is True
         capture = routes_module.xhs_capture_tool.RequestCapture(
             request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page?num=30",
             request_method="GET",
@@ -261,11 +262,11 @@ def test_xiaohongshu_capture_refresh_from_default_har(monkeypatch) -> None:
             "XHS_HEADER_X_S_COMMON": "",
             "XHS_HEADER_X_T": "",
         }
-        return Path("/tmp/xhs_detail.har"), capture, updates
+        return "har", Path("/tmp/xhs_detail.har"), capture, updates
 
     monkeypatch.setattr(
         routes_module.xhs_capture_tool,
-        "apply_capture_from_default_har_to_env",
+        "apply_capture_from_default_auth_source_to_env",
         _fake_apply,
     )
 
@@ -285,6 +286,27 @@ def test_xiaohongshu_capture_refresh_from_default_har(monkeypatch) -> None:
             os.environ["XHS_HEADER_COOKIE"] = old_cookie
         elif "XHS_HEADER_COOKIE" in os.environ:
             os.environ.pop("XHS_HEADER_COOKIE", None)
+
+
+def test_xiaohongshu_capture_refresh_requires_cookie(monkeypatch) -> None:
+    _reset_xiaohongshu_state()
+
+    def _fake_apply(*, require_cookie: bool = False):
+        assert require_cookie is True
+        raise ValueError("HAR/cURL 未包含 Cookie，请使用包含敏感数据的抓包导出。")
+
+    monkeypatch.setattr(
+        routes_module.xhs_capture_tool,
+        "apply_capture_from_default_auth_source_to_env",
+        _fake_apply,
+    )
+
+    resp = client.post("/api/xiaohongshu/capture/refresh")
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["code"] == "INVALID_INPUT"
+    assert "未包含 Cookie" in body["message"]
 
 
 def test_editable_config_update_and_reset(tmp_path) -> None:

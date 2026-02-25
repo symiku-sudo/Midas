@@ -5,6 +5,7 @@ import com.midas.client.util.EditableConfigField
 import com.midas.client.util.EditableConfigFormMapper
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -81,5 +82,29 @@ class EditableConfigFormMapperTest {
         val exception = runCatching { EditableConfigFormMapper.buildPayload(fields) }.exceptionOrNull()
         assertTrue(exception is IllegalArgumentException)
         assertTrue(exception?.message?.contains("JSON 数组") == true)
+    }
+
+    @Test
+    fun validateField_shouldReturnErrorMessageForInvalidNumber() {
+        val field = EditableConfigField(
+            path = "xiaohongshu.default_limit",
+            type = ConfigFieldType.INTEGER,
+            textValue = "12a",
+        )
+
+        val error = EditableConfigFormMapper.validateField(field)
+        assertTrue(error?.contains("xiaohongshu.default_limit") == true)
+    }
+
+    @Test
+    fun validateField_shouldReturnNullForValidValue() {
+        val field = EditableConfigField(
+            path = "xiaohongshu.default_limit",
+            type = ConfigFieldType.INTEGER,
+            textValue = "12",
+        )
+
+        val error = EditableConfigFormMapper.validateField(field)
+        assertNull(error)
     }
 }

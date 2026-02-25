@@ -33,6 +33,14 @@ tools/wsl_android_build.sh
 tools/wsl_android_build.sh :app:assembleDebug :app:testDebugUnitTest
 ```
 
+脚本默认把 WSL 构建缓存写入独立目录（`.gradle-wsl/`、`.build-wsl/`、`.kotlin-wsl/`），避免与 Windows/Android Studio 的缓存互相污染。
+
+如果你已经遇到过 `different roots` 这类路径混用报错，先在 `android/` 下执行一次清理再重编译：
+
+```bash
+rm -rf .gradle app/build build .kotlin
+```
+
 > 说明：客户端默认地址 `http://10.0.2.2:8000/`（Android 模拟器访问宿主机）。
 
 ## 结构

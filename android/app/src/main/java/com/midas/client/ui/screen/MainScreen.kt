@@ -319,7 +319,7 @@ fun MainScreen(viewModel: MainViewModel) {
                     onStartSync = viewModel::startXiaohongshuSync,
                     onSaveNotes = viewModel::saveCurrentXiaohongshuSummaries,
                     onPruneSyncedNoteIds = viewModel::pruneUnsavedXiaohongshuSyncedNotes,
-                    onRefreshCaptureFromHar = viewModel::refreshXiaohongshuCaptureFromDefaultHar,
+                    onRefreshAuthConfig = viewModel::refreshXiaohongshuAuthConfig,
                     onSaveSingleNote = viewModel::saveSingleXiaohongshuSummary,
                     modifier = Modifier
                         .fillMaxSize()
@@ -746,7 +746,7 @@ private fun XiaohongshuPanel(
     onStartSync: () -> Unit,
     onSaveNotes: () -> Unit,
     onPruneSyncedNoteIds: () -> Unit,
-    onRefreshCaptureFromHar: () -> Unit,
+    onRefreshAuthConfig: () -> Unit,
     onSaveSingleNote: (XiaohongshuSummaryItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -780,10 +780,10 @@ private fun XiaohongshuPanel(
             Text(if (state.isPruningSyncedNoteIds) "清理中..." else "清理无效ID")
         }
         Button(
-            onClick = onRefreshCaptureFromHar,
+            onClick = onRefreshAuthConfig,
             enabled = !state.isRefreshingCaptureConfig && !state.isSyncing,
         ) {
-            Text(if (state.isRefreshingCaptureConfig) "更新中..." else "从默认HAR更新")
+            Text(if (state.isRefreshingCaptureConfig) "更新中..." else "更新auth配置")
         }
         Text(
             text = "清理已被标记为“已同步”但你并未保存的笔记，下次同步时会重新尝试生成。",
@@ -791,7 +791,7 @@ private fun XiaohongshuPanel(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
-            text = "读取 har_capture_path 指向的 HAR，自动更新小红书请求头。",
+            text = "优先读取默认 HAR，失败后回退默认 cURL，自动更新小红书请求头。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

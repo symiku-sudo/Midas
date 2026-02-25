@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import re
 import shlex
 import sys
 from dataclasses import dataclass
@@ -53,14 +54,18 @@ class RequestCapture:
 
 
 def parse_curl_text(curl_text: str) -> RequestCapture:
-    normalized = curl_text.replace("\\\n", " ").strip()
+    normalized = _normalize_curl_text(curl_text)
     if not normalized:
         raise ValueError("curl 内容为空。")
 
-    tokens = shlex.split(normalized, posix=True)
+    try:
+        tokens = shlex.split(normalized, posix=True)
+    except ValueError:
+        # Fallback for some shell-specific escaping variants.
+        tokens = shlex.split(normalized, posix=False)
     if not tokens:
         raise ValueError("无法解析 curl 内容。")
-    if tokens[0] == "curl":
+    if tokens[0].lower() in {"curl", "curl.exe"}:
         tokens = tokens[1:]
 
     method = ""
@@ -79,6 +84,30 @@ def parse_curl_text(curl_text: str) -> RequestCapture:
             i += 1
             if i < len(tokens):
                 _merge_header(headers, tokens[i])
+        elif token.startswith("--header="):
+            _merge_header(headers, token.split("=", 1)[1])
+        elif token.startswith("-H") and token != "-H":
+            _merge_header(headers, token[2:])
+        elif token in {"-b", "--cookie"}:
+            i += 1
+            if i < len(tokens):
+                _merge_header(headers, f"Cookie: {tokens[i]}")
+        elif token.startswith("--cookie="):
+            _merge_header(headers, f"Cookie: {token.split('=', 1)[1]}")
+        elif token.startswith("-b="):
+            _merge_header(headers, f"Cookie: {token.split('=', 1)[1]}")
+        elif token in {"-A", "--user-agent"}:
+            i += 1
+            if i < len(tokens):
+                _merge_header(headers, f"User-Agent: {tokens[i]}")
+        elif token.startswith("--user-agent="):
+            _merge_header(headers, f"User-Agent: {token.split('=', 1)[1]}")
+        elif token in {"-e", "--referer", "--referrer"}:
+            i += 1
+            if i < len(tokens):
+                _merge_header(headers, f"Referer: {tokens[i]}")
+        elif token.startswith("--referer=") or token.startswith("--referrer="):
+            _merge_header(headers, f"Referer: {token.split('=', 1)[1]}")
         elif token in {
             "-d",
             "--data",
@@ -94,6 +123,8 @@ def parse_curl_text(curl_text: str) -> RequestCapture:
             i += 1
             if i < len(tokens):
                 url = tokens[i].strip()
+        elif token.startswith("--url="):
+            url = token.split("=", 1)[1].strip()
         elif token.startswith("http://") or token.startswith("https://"):
             url = token.strip()
         i += 1
@@ -113,6 +144,14 @@ def parse_curl_text(curl_text: str) -> RequestCapture:
         request_headers=headers,
         request_body=body,
     )
+
+
+def _normalize_curl_text(raw: str) -> str:
+    normalized = raw.replace("\r\n", "\n")
+    # Handle multiline copy styles:
+    # bash continuation "\" / cmd continuation "^" / powershell continuation "`".
+    normalized = re.sub(r"[ \t]*(\\|\^|`)\n[ \t]*", " ", normalized)
+    return normalized.strip()
 
 
 def extract_best_har_capture(
@@ -236,34 +275,29 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        capture: RequestCapture
         if args.har is None and args.curl is None and args.curl_file is None:
-            default_har = resolve_default_har_path()
-            if default_har is None:
-                raise ValueError(
-                    "请提供 --har/--curl/--curl-file，或在 config.yaml 配置 "
-                    "xiaohongshu.web_readonly.har_capture_path。"
-                )
-            if not default_har.exists():
-                raise ValueError(f"默认 HAR 文件不存在: {default_har}")
-            args.har = default_har
-
-        if args.har is not None:
-            capture = extract_best_har_capture(
-                load_json_file(args.har), select_url_contains=args.select_url_contains
+            _source, _capture_path, capture = load_capture_from_default_sources(
+                select_url_contains=args.select_url_contains
             )
         else:
-            if args.curl is not None:
-                curl_text = args.curl
-            elif args.curl_file is not None:
-                curl_text = args.curl_file.read_text(encoding="utf-8")
+            if args.har is not None:
+                capture = extract_best_har_capture(
+                    load_json_file(args.har), select_url_contains=args.select_url_contains
+                )
             else:
-                raise ValueError("请提供 --har 或 --curl/--curl-file。")
+                if args.curl is not None:
+                    curl_text = args.curl
+                elif args.curl_file is not None:
+                    curl_text = args.curl_file.read_text(encoding="utf-8")
+                else:
+                    raise ValueError("请提供 --har 或 --curl/--curl-file。")
 
-            capture = parse_curl_text(curl_text)
-            if args.response_json is not None:
-                payload = load_json_file(args.response_json)
-                inference, _ = infer_fields_from_payload(payload)
-                capture.inference = inference
+                capture = parse_curl_text(curl_text)
+                if args.response_json is not None:
+                    payload = load_json_file(args.response_json)
+                    inference, _ = infer_fields_from_payload(payload)
+                    capture.inference = inference
 
         if args.dry_run:
             _assert_xhs_host(capture.request_url)
@@ -298,7 +332,8 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         type=Path,
         help=(
             "HAR 文件路径。若不传且未传 --curl/--curl-file，"
-            "将回退到 config.yaml 的 xiaohongshu.web_readonly.har_capture_path。"
+            "将优先回退到 config.yaml 的 "
+            "xiaohongshu.web_readonly.har_capture_path。"
         ),
     )
     src_group.add_argument("--curl-file", type=Path, help="包含 cURL 文本的文件路径。")
@@ -341,12 +376,67 @@ def resolve_default_har_path() -> Path | None:
     return (SERVER_ROOT / candidate).resolve()
 
 
+def resolve_default_curl_path() -> Path | None:
+    raw_path = load_settings().xiaohongshu.web_readonly.curl_capture_path.strip()
+    if not raw_path:
+        return None
+
+    candidate = Path(raw_path).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    return (SERVER_ROOT / candidate).resolve()
+
+
+def load_capture_from_default_sources(
+    *,
+    select_url_contains: str = "",
+) -> tuple[str, Path, RequestCapture]:
+    failures: list[str] = []
+
+    try:
+        har_path = resolve_default_har_path()
+        if har_path is None:
+            raise ValueError(
+                "config.yaml 未配置 xiaohongshu.web_readonly.har_capture_path。"
+            )
+        if not har_path.exists():
+            raise ValueError(f"HAR 文件不存在: {har_path}")
+        capture = extract_best_har_capture(
+            load_json_file(har_path),
+            select_url_contains=select_url_contains,
+        )
+        return "har", har_path, capture
+    except Exception as exc:
+        failures.append(f"HAR: {exc}")
+
+    try:
+        curl_path = resolve_default_curl_path()
+        if curl_path is None:
+            raise ValueError(
+                "config.yaml 未配置 xiaohongshu.web_readonly.curl_capture_path。"
+            )
+        if not curl_path.exists():
+            raise ValueError(f"cURL 文件不存在: {curl_path}")
+        capture = parse_curl_text(curl_path.read_text(encoding="utf-8"))
+        return "curl", curl_path, capture
+    except Exception as exc:
+        failures.append(f"cURL: {exc}")
+
+    raise ValueError(
+        "请提供 --har/--curl/--curl-file，或在 config.yaml 配置并准备默认抓包文件。"
+        + "；".join(failures)
+    )
+
+
 def apply_capture_to_env(
     capture: RequestCapture,
     *,
     env_path: Path,
+    require_cookie: bool = False,
 ) -> tuple[RequestCapture, dict[str, str]]:
     _assert_xhs_host(capture.request_url)
+    if require_cookie:
+        _assert_capture_has_cookie(capture)
     updates = build_env_updates(capture)
     upsert_env_file(env_path, updates)
     return capture, updates
@@ -356,6 +446,7 @@ def apply_capture_from_default_har_to_env(
     *,
     env_path: Path = DEFAULT_ENV_PATH,
     select_url_contains: str = "",
+    require_cookie: bool = False,
 ) -> tuple[Path, RequestCapture, dict[str, str]]:
     har_path = resolve_default_har_path()
     if har_path is None:
@@ -369,8 +460,77 @@ def apply_capture_from_default_har_to_env(
         load_json_file(har_path),
         select_url_contains=select_url_contains,
     )
-    capture, updates = apply_capture_to_env(capture, env_path=env_path)
+    capture, updates = apply_capture_to_env(
+        capture,
+        env_path=env_path,
+        require_cookie=require_cookie,
+    )
     return har_path, capture, updates
+
+
+def apply_capture_from_default_curl_to_env(
+    *,
+    env_path: Path = DEFAULT_ENV_PATH,
+    require_cookie: bool = False,
+) -> tuple[Path, RequestCapture, dict[str, str]]:
+    curl_path = resolve_default_curl_path()
+    if curl_path is None:
+        raise ValueError(
+            "config.yaml 未配置 xiaohongshu.web_readonly.curl_capture_path。"
+        )
+    if not curl_path.exists():
+        raise ValueError(f"cURL 文件不存在: {curl_path}")
+
+    capture = parse_curl_text(curl_path.read_text(encoding="utf-8"))
+    capture, updates = apply_capture_to_env(
+        capture,
+        env_path=env_path,
+        require_cookie=require_cookie,
+    )
+    return curl_path, capture, updates
+
+
+def apply_capture_from_default_auth_source_to_env(
+    *,
+    env_path: Path = DEFAULT_ENV_PATH,
+    select_url_contains: str = "",
+    require_cookie: bool = False,
+) -> tuple[str, Path, RequestCapture, dict[str, str]]:
+    failures: list[str] = []
+
+    try:
+        capture_path, capture, updates = apply_capture_from_default_har_to_env(
+            env_path=env_path,
+            select_url_contains=select_url_contains,
+            require_cookie=require_cookie,
+        )
+        return "har", capture_path, capture, updates
+    except Exception as exc:
+        failures.append(f"HAR: {exc}")
+
+    try:
+        capture_path, capture, updates = apply_capture_from_default_curl_to_env(
+            env_path=env_path,
+            require_cookie=require_cookie,
+        )
+        return "curl", capture_path, capture, updates
+    except Exception as exc:
+        failures.append(f"cURL: {exc}")
+
+    raise ValueError(
+        "默认抓包配置不可用。"
+        + "；".join(failures)
+    )
+
+
+def _assert_capture_has_cookie(capture: RequestCapture) -> None:
+    cookie = _get_header(capture.request_headers, "Cookie")
+    if cookie:
+        return
+    raise ValueError(
+        "HAR/cURL 未包含 Cookie，请使用包含敏感数据的抓包导出，"
+        "或用浏览器“Copy as cURL”重新导入。"
+    )
 
 
 def build_env_updates(capture: RequestCapture) -> dict[str, str]:

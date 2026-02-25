@@ -640,7 +640,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun refreshXiaohongshuCaptureFromDefaultHar() {
+    fun refreshXiaohongshuAuthConfig() {
         val baseUrl = normalizeCurrentBaseUrl()
         if (_xiaohongshuState.value.isRefreshingCaptureConfig) {
             return
@@ -650,7 +650,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _xiaohongshuState.update {
                 it.copy(
                     isRefreshingCaptureConfig = true,
-                    captureRefreshStatus = "正在读取默认 HAR...",
+                    captureRefreshStatus = "正在更新 auth 配置...",
                     pruneStatus = "",
                     saveStatus = "",
                     errorMessage = "",
@@ -668,7 +668,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         it.copy(
                             isRefreshingCaptureConfig = false,
                             captureRefreshStatus = (
-                                "已更新抓包配置：${result.data.requestMethod} ${result.data.requestUrlHost}" +
+                                "已更新auth配置：${result.data.requestMethod} ${result.data.requestUrlHost}" +
                                     "（headers=${result.data.headersCount}$missingHint）"
                                 ),
                         )

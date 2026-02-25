@@ -66,6 +66,15 @@ object EditableConfigFormMapper {
         return payload
     }
 
+    fun validateField(field: EditableConfigField): String? {
+        return runCatching {
+            parseFieldValue(field)
+            null
+        }.getOrElse { throwable ->
+            throwable.message ?: "字段 ${field.path} 配置格式错误。"
+        }
+    }
+
     private fun collectFields(
         prefix: String,
         value: Any?,

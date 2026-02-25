@@ -1,4 +1,8 @@
 .gradle/
+.gradle-wsl/
+.gradle-user-home-wsl/
+.kotlin-wsl/
+.build-wsl/
 .idea/
 local.properties
 **/build/

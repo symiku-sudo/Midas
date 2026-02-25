@@ -52,6 +52,7 @@ xiaohongshu:
       X-T: "${XHS_HEADER_X_T}"
     request_body: ""
     har_capture_path: .tmp/xhs_detail.har
+    curl_capture_path: .tmp/xhs.curl
     detail_fetch_mode: auto
     detail_request_url_template: ""
     detail_request_method: GET

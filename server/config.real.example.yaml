@@ -57,6 +57,7 @@ xiaohongshu:
       X-T: "${XHS_HEADER_X_T}"
     request_body: ""
     har_capture_path: .tmp/xhs_detail.har
+    curl_capture_path: .tmp/xhs.curl
     # auto: 列表正文不足时再请求详情；always: 总是请求详情；never: 只用列表
     detail_fetch_mode: auto
     # 可选：详情接口模板，支持 {note_id} / {xsec_token}

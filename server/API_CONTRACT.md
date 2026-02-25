@@ -278,8 +278,12 @@ Success `data`:
 
 ## `POST /api/xiaohongshu/capture/refresh`
 
-用途：使用 `config.yaml` 中 `xiaohongshu.web_readonly.har_capture_path` 指向的 HAR 文件，
-自动执行 `xhs_capture_to_config`，并刷新运行时抓包请求头配置。
+用途：自动更新小红书 auth 抓包配置并刷新运行时请求头。
+
+行为：
+- 先读取 `config.yaml` 的 `xiaohongshu.web_readonly.har_capture_path`。
+- 若 HAR 不可用或不合法，则回退读取 `xiaohongshu.web_readonly.curl_capture_path`。
+- 若两者都不可用，返回 `400 INVALID_INPUT`。
 
 Success `data`:
 
@@ -293,6 +297,12 @@ Success `data`:
   "empty_keys": ["XHS_HEADER_COOKIE"]
 }
 ```
+
+说明：
+- 字段名 `har_path` 为兼容保留；当回退到 cURL 时，该字段会返回 cURL 文件路径。
+
+失败场景：
+- HAR/cURL 不包含 `Cookie`：返回 `400 INVALID_INPUT`，提示重新导出包含敏感数据的抓包。
 
 ## `GET /api/config/editable`
 

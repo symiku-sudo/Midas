@@ -7,10 +7,18 @@ ANDROID_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 DEFAULT_JAVA_HOME="$HOME/.local/jdk/jdk-17"
 DEFAULT_ANDROID_SDK_ROOT="$HOME/Android/Sdk"
 DEFAULT_GRADLE_BIN="$ANDROID_DIR/gradle_package/gradle-8.7/bin/gradle"
+DEFAULT_PROJECT_CACHE_DIR="$ANDROID_DIR/.gradle-wsl"
+DEFAULT_GRADLE_USER_HOME="$ANDROID_DIR/.gradle-user-home-wsl"
+DEFAULT_BUILD_ROOT="$ANDROID_DIR/.build-wsl"
+DEFAULT_KOTLIN_PERSISTENT_DIR="$ANDROID_DIR/.kotlin-wsl"
 
 JAVA_HOME="${JAVA_HOME:-$DEFAULT_JAVA_HOME}"
 ANDROID_SDK_ROOT="${ANDROID_SDK_ROOT:-${ANDROID_HOME:-$DEFAULT_ANDROID_SDK_ROOT}}"
 GRADLE_BIN="${GRADLE_BIN:-$DEFAULT_GRADLE_BIN}"
+PROJECT_CACHE_DIR="${PROJECT_CACHE_DIR:-$DEFAULT_PROJECT_CACHE_DIR}"
+GRADLE_USER_HOME="${GRADLE_USER_HOME:-$DEFAULT_GRADLE_USER_HOME}"
+BUILD_ROOT="${BUILD_ROOT:-$DEFAULT_BUILD_ROOT}"
+KOTLIN_PERSISTENT_DIR="${KOTLIN_PERSISTENT_DIR:-$DEFAULT_KOTLIN_PERSISTENT_DIR}"
 
 usage() {
   cat <<'EOF'
@@ -26,6 +34,10 @@ Environment overrides:
   JAVA_HOME
   ANDROID_SDK_ROOT (or ANDROID_HOME)
   GRADLE_BIN
+  PROJECT_CACHE_DIR
+  GRADLE_USER_HOME
+  BUILD_ROOT
+  KOTLIN_PERSISTENT_DIR
 EOF
 }
 
@@ -53,6 +65,7 @@ export JAVA_HOME
 export PATH="$JAVA_HOME/bin:$PATH"
 export ANDROID_SDK_ROOT
 export ANDROID_HOME="$ANDROID_SDK_ROOT"
+export GRADLE_USER_HOME
 
 if ! command -v java >/dev/null 2>&1; then
   echo "[wsl_android_build] java is not available in PATH after JAVA_HOME setup."
@@ -91,7 +104,17 @@ fi
 echo "[wsl_android_build] JAVA_HOME=$JAVA_HOME"
 echo "[wsl_android_build] ANDROID_SDK_ROOT=$ANDROID_SDK_ROOT"
 echo "[wsl_android_build] GRADLE_BIN=$GRADLE_BIN"
+echo "[wsl_android_build] PROJECT_CACHE_DIR=$PROJECT_CACHE_DIR"
+echo "[wsl_android_build] GRADLE_USER_HOME=$GRADLE_USER_HOME"
+echo "[wsl_android_build] BUILD_ROOT=$BUILD_ROOT"
+echo "[wsl_android_build] KOTLIN_PERSISTENT_DIR=$KOTLIN_PERSISTENT_DIR"
 echo "[wsl_android_build] tasks=${TASKS[*]}"
 
+mkdir -p "$PROJECT_CACHE_DIR" "$GRADLE_USER_HOME" "$BUILD_ROOT" "$KOTLIN_PERSISTENT_DIR"
+
 cd "$ANDROID_DIR"
-"$GRADLE_BIN" "${TASKS[@]}"
+"$GRADLE_BIN" \
+  --project-cache-dir "$PROJECT_CACHE_DIR" \
+  -Pkotlin.project.persistent.dir="$KOTLIN_PERSISTENT_DIR" \
+  -PmidasBuildRoot="$BUILD_ROOT" \
+  "${TASKS[@]}"

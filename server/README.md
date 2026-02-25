@@ -76,14 +76,20 @@ curl -X POST http://127.0.0.1:8000/api/notes/xiaohongshu/synced/prune
 server/.venv/bin/python server/tools/prune_unsaved_synced_notes.py --dry-run --show-ids
 ```
 
-## Refresh XHS capture from default HAR
+## Refresh XHS auth config
 
-若 `config.yaml` 已配置 `xiaohongshu.web_readonly.har_capture_path`，
-可直接刷新抓包请求头（等价于执行 `xhs_capture_to_config`）：
+若 `config.yaml` 已配置默认抓包路径，可直接刷新 auth 配置：
+- 优先读取 `xiaohongshu.web_readonly.har_capture_path`
+- HAR 不可用时回退 `xiaohongshu.web_readonly.curl_capture_path`
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/xiaohongshu/capture/refresh
 ```
+
+注意：
+- 若 HAR 不包含 `Cookie`（常见于脱敏导出），接口会返回 `400`。
+- 若 HAR 不可用，会自动尝试 `curl_capture_path` 指向的 cURL 文件。
+- 两者都不含 Cookie 时会失败，请重新导出“包含敏感数据”的 HAR/cURL。
 
 ## Real-run config (Bilibili path)
 

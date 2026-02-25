@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from tools.xhs_capture_to_config import (
     FieldInference,
     RequestCapture,
     apply_capture_to_config,
+    apply_capture_from_default_auth_source_to_env,
     build_env_updates,
     extract_best_har_capture,
     infer_fields_from_payload,
@@ -27,6 +30,34 @@ def test_parse_curl_text_basic() -> None:
     assert capture.request_method == "POST"
     assert capture.request_headers["Cookie"] == "a=b; c=d"
     assert capture.request_body == '{"cursor":""}'
+
+
+def test_parse_curl_text_supports_cookie_option_b() -> None:
+    curl = (
+        "curl 'https://edith.xiaohongshu.com/api/sns/web/v1/collect/list' "
+        "-b 'a=b; c=d' "
+        "-A 'UA'"
+    )
+    capture = parse_curl_text(curl)
+
+    assert capture.request_url == "https://edith.xiaohongshu.com/api/sns/web/v1/collect/list"
+    assert capture.request_method == "GET"
+    assert capture.request_headers["Cookie"] == "a=b; c=d"
+    assert capture.request_headers["User-Agent"] == "UA"
+
+
+def test_parse_curl_text_supports_windows_multiline_continuation() -> None:
+    curl = (
+        "curl \"https://edith.xiaohongshu.com/api/sns/web/v1/collect/list\" ^\n"
+        "  --cookie \"a=b; c=d\" ^\n"
+        "  --user-agent \"UA-WIN\""
+    )
+    capture = parse_curl_text(curl)
+
+    assert capture.request_url == "https://edith.xiaohongshu.com/api/sns/web/v1/collect/list"
+    assert capture.request_method == "GET"
+    assert capture.request_headers["Cookie"] == "a=b; c=d"
+    assert capture.request_headers["User-Agent"] == "UA-WIN"
 
 
 def test_infer_fields_from_payload() -> None:
@@ -195,3 +226,140 @@ def test_upsert_env_file_keeps_existing_secret_when_new_value_empty(tmp_path) ->
 
     text = env_path.read_text(encoding="utf-8")
     assert "XHS_HEADER_COOKIE=keep-me" in text
+
+
+def test_apply_capture_from_default_auth_source_prefers_har(tmp_path, monkeypatch) -> None:
+    har_path = tmp_path / "xhs.har"
+    curl_path = tmp_path / "xhs.curl"
+    env_path = tmp_path / ".env"
+
+    har_path.write_text(
+        json.dumps(
+            {
+                "log": {
+                    "entries": [
+                        {
+                            "request": {
+                                "method": "GET",
+                                "url": "https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
+                                "headers": [{"name": "Cookie", "value": "har_cookie=1"}],
+                            },
+                            "response": {
+                                "status": 200,
+                                "content": {
+                                    "text": json.dumps(
+                                        {
+                                            "code": 0,
+                                            "data": {
+                                                "notes": [
+                                                    {
+                                                        "note_id": "n1",
+                                                        "title": "标题",
+                                                        "desc": "正文",
+                                                        "url": "https://www.xiaohongshu.com/explore/n1",
+                                                    }
+                                                ]
+                                            },
+                                        }
+                                    )
+                                },
+                            },
+                        }
+                    ]
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+    curl_path.write_text(
+        "curl 'https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page' "
+        "-H 'Cookie: curl_cookie=1'",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "tools.xhs_capture_to_config.resolve_default_har_path",
+        lambda: har_path,
+    )
+    monkeypatch.setattr(
+        "tools.xhs_capture_to_config.resolve_default_curl_path",
+        lambda: curl_path,
+    )
+
+    source, path, capture, updates = apply_capture_from_default_auth_source_to_env(
+        env_path=env_path,
+        require_cookie=True,
+    )
+
+    assert source == "har"
+    assert path == har_path
+    assert capture.request_url.startswith("https://edith.xiaohongshu.com/")
+    assert updates["XHS_HEADER_COOKIE"] == "har_cookie=1"
+    assert "XHS_HEADER_COOKIE=har_cookie=1" in env_path.read_text(encoding="utf-8")
+
+
+def test_apply_capture_from_default_auth_source_falls_back_to_curl(
+    tmp_path, monkeypatch
+) -> None:
+    har_path = tmp_path / "xhs.har"
+    curl_path = tmp_path / "xhs.curl"
+    env_path = tmp_path / ".env"
+
+    har_path.write_text(json.dumps({"log": {"entries": []}}), encoding="utf-8")
+    curl_path.write_text(
+        "curl 'https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page' "
+        "-H 'Cookie: curl_cookie=1' "
+        "-H 'User-Agent: ua-test'",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "tools.xhs_capture_to_config.resolve_default_har_path",
+        lambda: har_path,
+    )
+    monkeypatch.setattr(
+        "tools.xhs_capture_to_config.resolve_default_curl_path",
+        lambda: curl_path,
+    )
+
+    source, path, capture, updates = apply_capture_from_default_auth_source_to_env(
+        env_path=env_path,
+        require_cookie=True,
+    )
+
+    assert source == "curl"
+    assert path == curl_path
+    assert capture.request_method == "GET"
+    assert updates["XHS_HEADER_COOKIE"] == "curl_cookie=1"
+    assert "XHS_HEADER_COOKIE=curl_cookie=1" in env_path.read_text(encoding="utf-8")
+
+
+def test_apply_capture_from_default_auth_source_raises_when_both_invalid(
+    tmp_path, monkeypatch
+) -> None:
+    har_path = tmp_path / "xhs.har"
+    curl_path = tmp_path / "xhs.curl"
+
+    har_path.write_text(json.dumps({"log": {"entries": []}}), encoding="utf-8")
+    curl_path.write_text(
+        "curl 'https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page' "
+        "-H 'User-Agent: ua-test'",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "tools.xhs_capture_to_config.resolve_default_har_path",
+        lambda: har_path,
+    )
+    monkeypatch.setattr(
+        "tools.xhs_capture_to_config.resolve_default_curl_path",
+        lambda: curl_path,
+    )
+
+    with pytest.raises(ValueError) as exc_info:
+        apply_capture_from_default_auth_source_to_env(
+            env_path=tmp_path / ".env",
+            require_cookie=True,
+        )
+    assert "HAR:" in str(exc_info.value)
+    assert "cURL:" in str(exc_info.value)
