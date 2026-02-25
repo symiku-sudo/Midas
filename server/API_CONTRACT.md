@@ -259,6 +259,41 @@ Success `data`:
 - 删除“已保存笔记”不会删除去重表 `xiaohongshu_synced_notes` 里的 `note_id`。
 - 因此同一 `note_id` 下次同步仍会被判定为重复并跳过。
 
+## `POST /api/notes/xiaohongshu/synced/prune`
+
+用途：清理去重表中“未保存到笔记库”的 `note_id`。
+
+适用场景：
+- 某次同步生成失败或未保存，导致后续被去重跳过。
+- 希望让这部分条目在后续同步中可再次生成总结。
+
+Success `data`:
+
+```json
+{
+  "candidate_count": 7,
+  "deleted_count": 7
+}
+```
+
+## `POST /api/xiaohongshu/capture/refresh`
+
+用途：使用 `config.yaml` 中 `xiaohongshu.web_readonly.har_capture_path` 指向的 HAR 文件，
+自动执行 `xhs_capture_to_config`，并刷新运行时抓包请求头配置。
+
+Success `data`:
+
+```json
+{
+  "har_path": "/mnt/d/MyWork/midas/server/.tmp/xhs_detail.har",
+  "request_url_host": "edith.xiaohongshu.com",
+  "request_method": "GET",
+  "headers_count": 18,
+  "non_empty_keys": 8,
+  "empty_keys": ["XHS_HEADER_COOKIE"]
+}
+```
+
 ## `GET /api/config/editable`
 
 用途：读取“可由客户端修改”的配置子集（已排除敏感项）。

@@ -29,6 +29,7 @@ data class SettingsUiState(
     val testStatus: String = "",
     val saveStatus: String = "",
     val editableConfigFields: List<EditableConfigField> = emptyList(),
+    val configFieldErrors: Map<String, String> = emptyMap(),
     val isConfigLoading: Boolean = false,
     val isConfigSaving: Boolean = false,
     val isConfigResetting: Boolean = false,
@@ -48,11 +49,17 @@ data class XiaohongshuUiState(
     val limitInput: String = "5",
     val isSyncing: Boolean = false,
     val isSavingNotes: Boolean = false,
+    val isPruningSyncedNoteIds: Boolean = false,
+    val isRefreshingCaptureConfig: Boolean = false,
+    val savingSingleNoteIds: Set<String> = emptySet(),
+    val savedNoteIds: Set<String> = emptySet(),
     val progressCurrent: Int = 0,
     val progressTotal: Int = 0,
     val progressMessage: String = "",
     val errorMessage: String = "",
     val saveStatus: String = "",
+    val pruneStatus: String = "",
+    val captureRefreshStatus: String = "",
     val summaries: List<XiaohongshuSummaryItem> = emptyList(),
     val statsText: String = "",
 )
@@ -85,6 +92,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val notesState: StateFlow<NotesUiState> = _notesState.asStateFlow()
 
     private var syncPollingJob: Job? = null
+    private var autoSaveConfigJob: Job? = null
 
     init {
         loadEditableConfig()
@@ -156,28 +164,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onEditableConfigFieldTextChange(path: String, newValue: String) {
+        val updatedFields = EditableConfigFormMapper.updateText(
+            fields = _settingsState.value.editableConfigFields,
+            path = path,
+            text = newValue,
+        )
+        val error = updatedFields.firstOrNull { it.path == path }
+            ?.let { EditableConfigFormMapper.validateField(it) }
         _settingsState.update {
+            val nextErrors = it.configFieldErrors.toMutableMap()
+            if (error.isNullOrBlank()) {
+                nextErrors.remove(path)
+            } else {
+                nextErrors[path] = error
+            }
             it.copy(
-                editableConfigFields = EditableConfigFormMapper.updateText(
-                    fields = it.editableConfigFields,
-                    path = path,
-                    text = newValue,
-                ),
-                configStatus = "",
+                editableConfigFields = updatedFields,
+                configFieldErrors = nextErrors,
+                configStatus = error ?: "",
             )
+        }
+        if (error.isNullOrBlank()) {
+            scheduleAutoSaveConfig()
+        } else {
+            autoSaveConfigJob?.cancel()
         }
     }
 
     fun onEditableConfigFieldBooleanChange(path: String, newValue: Boolean) {
+        val updatedFields = EditableConfigFormMapper.updateBoolean(
+            fields = _settingsState.value.editableConfigFields,
+            path = path,
+            value = newValue,
+        )
+        val error = updatedFields.firstOrNull { it.path == path }
+            ?.let { EditableConfigFormMapper.validateField(it) }
         _settingsState.update {
+            val nextErrors = it.configFieldErrors.toMutableMap()
+            if (error.isNullOrBlank()) {
+                nextErrors.remove(path)
+            } else {
+                nextErrors[path] = error
+            }
             it.copy(
-                editableConfigFields = EditableConfigFormMapper.updateBoolean(
-                    fields = it.editableConfigFields,
-                    path = path,
-                    value = newValue,
-                ),
-                configStatus = "",
+                editableConfigFields = updatedFields,
+                configFieldErrors = nextErrors,
+                configStatus = error ?: "",
             )
+        }
+        if (error.isNullOrBlank()) {
+            scheduleAutoSaveConfig()
+        } else {
+            autoSaveConfigJob?.cancel()
         }
     }
 
@@ -197,6 +235,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         it.copy(
                             isConfigLoading = false,
                             editableConfigFields = EditableConfigFormMapper.flatten(result.data.settings),
+                            configFieldErrors = emptyMap(),
                             configStatus = "已拉取可编辑配置。",
                         )
                     }
@@ -206,56 +245,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _settingsState.update {
                         it.copy(
                             isConfigLoading = false,
-                            configStatus = ErrorMessageMapper.format(
-                                code = result.code,
-                                message = result.message,
-                                context = ErrorContext.CONFIG,
-                            ),
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    fun saveEditableConfig() {
-        val baseUrl = normalizeCurrentBaseUrl()
-        val fields = _settingsState.value.editableConfigFields
-        if (fields.isEmpty()) {
-            _settingsState.update { it.copy(configStatus = "请先加载可编辑配置。") }
-            return
-        }
-
-        val parsed = runCatching { EditableConfigFormMapper.buildPayload(fields) }.getOrElse { throwable ->
-            _settingsState.update {
-                it.copy(configStatus = throwable.message ?: "配置格式错误。")
-            }
-            return
-        }
-
-        viewModelScope.launch {
-            _settingsState.update {
-                it.copy(
-                    isConfigSaving = true,
-                    configStatus = "正在保存配置...",
-                )
-            }
-
-            when (val result = apiRepository.updateEditableConfig(baseUrl, parsed)) {
-                is AppResult.Success -> {
-                    _settingsState.update {
-                        it.copy(
-                            isConfigSaving = false,
-                            editableConfigFields = EditableConfigFormMapper.flatten(result.data.settings),
-                            configStatus = "配置已保存并生效。",
-                        )
-                    }
-                }
-
-                is AppResult.Error -> {
-                    _settingsState.update {
-                        it.copy(
-                            isConfigSaving = false,
+                            configFieldErrors = emptyMap(),
                             configStatus = ErrorMessageMapper.format(
                                 code = result.code,
                                 message = result.message,
@@ -270,6 +260,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun resetEditableConfig() {
         val baseUrl = normalizeCurrentBaseUrl()
+        autoSaveConfigJob?.cancel()
         viewModelScope.launch {
             _settingsState.update {
                 it.copy(
@@ -284,6 +275,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         it.copy(
                             isConfigResetting = false,
                             editableConfigFields = EditableConfigFormMapper.flatten(result.data.settings),
+                            configFieldErrors = emptyMap(),
                             configStatus = "已恢复默认配置。",
                         )
                     }
@@ -293,6 +285,66 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _settingsState.update {
                         it.copy(
                             isConfigResetting = false,
+                            configStatus = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.CONFIG,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun scheduleAutoSaveConfig() {
+        autoSaveConfigJob?.cancel()
+        autoSaveConfigJob = viewModelScope.launch {
+            delay(600)
+            val baseUrl = normalizeCurrentBaseUrl()
+            val snapshot = _settingsState.value
+            if (snapshot.editableConfigFields.isEmpty()) {
+                return@launch
+            }
+            if (snapshot.configFieldErrors.isNotEmpty()) {
+                _settingsState.update {
+                    it.copy(configStatus = "请先修正红色配置项。")
+                }
+                return@launch
+            }
+
+            val parsed = runCatching {
+                EditableConfigFormMapper.buildPayload(snapshot.editableConfigFields)
+            }.getOrElse { throwable ->
+                _settingsState.update {
+                    it.copy(configStatus = throwable.message ?: "配置格式错误。")
+                }
+                return@launch
+            }
+
+            _settingsState.update {
+                it.copy(
+                    isConfigSaving = true,
+                    configStatus = "正在自动保存配置...",
+                )
+            }
+
+            when (val result = apiRepository.updateEditableConfig(baseUrl, parsed)) {
+                is AppResult.Success -> {
+                    _settingsState.update {
+                        it.copy(
+                            isConfigSaving = false,
+                            editableConfigFields = EditableConfigFormMapper.flatten(result.data.settings),
+                            configFieldErrors = emptyMap(),
+                            configStatus = "配置已自动保存。",
+                        )
+                    }
+                }
+
+                is AppResult.Error -> {
+                    _settingsState.update {
+                        it.copy(
+                            isConfigSaving = false,
                             configStatus = ErrorMessageMapper.format(
                                 code = result.code,
                                 message = result.message,
@@ -382,7 +434,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onXiaohongshuLimitInputChange(newValue: String) {
-        _xiaohongshuState.update { it.copy(limitInput = newValue, errorMessage = "", saveStatus = "") }
+        _xiaohongshuState.update {
+            it.copy(
+                limitInput = newValue,
+                errorMessage = "",
+                saveStatus = "",
+                pruneStatus = "",
+                captureRefreshStatus = "",
+            )
+        }
     }
 
     fun startXiaohongshuSync() {
@@ -399,11 +459,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     isSyncing = true,
                     isSavingNotes = false,
+                    savingSingleNoteIds = emptySet(),
+                    savedNoteIds = emptySet(),
                     progressCurrent = 0,
                     progressTotal = limit,
                     progressMessage = "正在创建同步任务...",
                     errorMessage = "",
                     saveStatus = "",
+                    pruneStatus = "",
+                    captureRefreshStatus = "",
                     summaries = emptyList(),
                     statsText = "",
                 )
@@ -446,12 +510,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         viewModelScope.launch {
-            _xiaohongshuState.update { it.copy(isSavingNotes = true, saveStatus = "") }
+            _xiaohongshuState.update {
+                it.copy(
+                    isSavingNotes = true,
+                    saveStatus = "",
+                    pruneStatus = "",
+                    captureRefreshStatus = "",
+                )
+            }
             when (val result = apiRepository.saveXiaohongshuNotes(baseUrl, summaries)) {
                 is AppResult.Success -> {
                     _xiaohongshuState.update {
+                        val savedIds = it.summaries.map { item -> item.noteId }.toSet()
                         it.copy(
                             isSavingNotes = false,
+                            savingSingleNoteIds = emptySet(),
+                            savedNoteIds = savedIds,
                             saveStatus = "已保存 ${result.data.savedCount} 条小红书笔记。",
                         )
                     }
@@ -463,6 +537,150 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         it.copy(
                             isSavingNotes = false,
                             saveStatus = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun saveSingleXiaohongshuSummary(item: XiaohongshuSummaryItem) {
+        val baseUrl = normalizeCurrentBaseUrl()
+        val noteId = item.noteId
+        val current = _xiaohongshuState.value
+        if (noteId in current.savedNoteIds) {
+            _xiaohongshuState.update { it.copy(saveStatus = "该笔记已保存。") }
+            return
+        }
+        if (noteId in current.savingSingleNoteIds) {
+            return
+        }
+
+        viewModelScope.launch {
+            _xiaohongshuState.update {
+                it.copy(
+                    saveStatus = "",
+                    pruneStatus = "",
+                    captureRefreshStatus = "",
+                    savingSingleNoteIds = it.savingSingleNoteIds + noteId,
+                )
+            }
+            when (val result = apiRepository.saveXiaohongshuNotes(baseUrl, listOf(item))) {
+                is AppResult.Success -> {
+                    _xiaohongshuState.update {
+                        it.copy(
+                            savingSingleNoteIds = it.savingSingleNoteIds - noteId,
+                            savedNoteIds = it.savedNoteIds + noteId,
+                            saveStatus = "已保存该篇小红书笔记。",
+                        )
+                    }
+                    loadSavedNotes()
+                }
+
+                is AppResult.Error -> {
+                    _xiaohongshuState.update {
+                        it.copy(
+                            savingSingleNoteIds = it.savingSingleNoteIds - noteId,
+                            saveStatus = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun pruneUnsavedXiaohongshuSyncedNotes() {
+        val baseUrl = normalizeCurrentBaseUrl()
+        if (_xiaohongshuState.value.isPruningSyncedNoteIds) {
+            return
+        }
+
+        viewModelScope.launch {
+            _xiaohongshuState.update {
+                it.copy(
+                    isPruningSyncedNoteIds = true,
+                    pruneStatus = "正在清理去重表...",
+                    captureRefreshStatus = "",
+                    saveStatus = "",
+                    errorMessage = "",
+                )
+            }
+            when (val result = apiRepository.pruneUnsavedXiaohongshuSyncedNotes(baseUrl)) {
+                is AppResult.Success -> {
+                    _xiaohongshuState.update {
+                        it.copy(
+                            isPruningSyncedNoteIds = false,
+                            pruneStatus = "已清理 ${result.data.deletedCount} 条无效去重 ID（候选 ${result.data.candidateCount} 条）。",
+                        )
+                    }
+                }
+
+                is AppResult.Error -> {
+                    _xiaohongshuState.update {
+                        it.copy(
+                            isPruningSyncedNoteIds = false,
+                            pruneStatus = "",
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun refreshXiaohongshuCaptureFromDefaultHar() {
+        val baseUrl = normalizeCurrentBaseUrl()
+        if (_xiaohongshuState.value.isRefreshingCaptureConfig) {
+            return
+        }
+
+        viewModelScope.launch {
+            _xiaohongshuState.update {
+                it.copy(
+                    isRefreshingCaptureConfig = true,
+                    captureRefreshStatus = "正在读取默认 HAR...",
+                    pruneStatus = "",
+                    saveStatus = "",
+                    errorMessage = "",
+                )
+            }
+            when (val result = apiRepository.refreshXiaohongshuCapture(baseUrl)) {
+                is AppResult.Success -> {
+                    val emptyKeys = result.data.emptyKeys
+                    val missingHint = if (emptyKeys.isNotEmpty()) {
+                        "，空字段 ${emptyKeys.joinToString(",")}"
+                    } else {
+                        ""
+                    }
+                    _xiaohongshuState.update {
+                        it.copy(
+                            isRefreshingCaptureConfig = false,
+                            captureRefreshStatus = (
+                                "已更新抓包配置：${result.data.requestMethod} ${result.data.requestUrlHost}" +
+                                    "（headers=${result.data.headersCount}$missingHint）"
+                                ),
+                        )
+                    }
+                }
+
+                is AppResult.Error -> {
+                    _xiaohongshuState.update {
+                        it.copy(
+                            isRefreshingCaptureConfig = false,
+                            captureRefreshStatus = "",
+                            errorMessage = ErrorMessageMapper.format(
                                 code = result.code,
                                 message = result.message,
                                 context = ErrorContext.XIAOHONGSHU_SYNC,

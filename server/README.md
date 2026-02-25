@@ -11,6 +11,8 @@
 - `POST /api/notes/xiaohongshu/save-batch`
 - `GET /api/notes/xiaohongshu`
 - `DELETE /api/notes/xiaohongshu/{note_id}` / `DELETE /api/notes/xiaohongshu`
+- `POST /api/notes/xiaohongshu/synced/prune`
+- `POST /api/xiaohongshu/capture/refresh`
 - `GET /api/config/editable`
 - `PUT /api/config/editable`
 - `POST /api/config/editable/reset`
@@ -62,10 +64,25 @@ tools/clean_tmp.sh
 server/.venv/bin/python server/tools/prune_unsaved_synced_notes.py --show-ids
 ```
 
+也可直接通过 API 执行正式清理（非 dry-run）：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/notes/xiaohongshu/synced/prune
+```
+
 仅预览不删除：
 
 ```bash
 server/.venv/bin/python server/tools/prune_unsaved_synced_notes.py --dry-run --show-ids
+```
+
+## Refresh XHS capture from default HAR
+
+若 `config.yaml` 已配置 `xiaohongshu.web_readonly.har_capture_path`，
+可直接刷新抓包请求头（等价于执行 `xhs_capture_to_config`）：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/xiaohongshu/capture/refresh
 ```
 
 ## Real-run config (Bilibili path)

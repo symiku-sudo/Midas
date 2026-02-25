@@ -40,6 +40,7 @@ class XiaohongshuWebReadonlyConfig(BaseModel):
     request_method: str = "GET"
     request_headers: dict[str, str] = Field(default_factory=dict)
     request_body: str = ""
+    har_capture_path: str = ".tmp/xhs_detail.har"
     detail_fetch_mode: str = "auto"  # auto / always / never
     detail_request_url_template: str = ""
     detail_request_method: str = "GET"

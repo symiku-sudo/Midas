@@ -42,6 +42,16 @@ class NoteLibraryRepository:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS xiaohongshu_synced_notes (
+                    note_id TEXT PRIMARY KEY,
+                    title TEXT NOT NULL,
+                    source_url TEXT NOT NULL,
+                    synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
             conn.commit()
 
     def save_bilibili_note(
@@ -147,3 +157,34 @@ class NoteLibraryRepository:
             cursor = conn.execute("DELETE FROM saved_xiaohongshu_notes")
             conn.commit()
             return int(cursor.rowcount)
+
+    def prune_unsaved_xiaohongshu_synced_notes(self) -> tuple[int, int]:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT COUNT(*) AS candidate_count
+                FROM xiaohongshu_synced_notes AS synced
+                LEFT JOIN saved_xiaohongshu_notes AS saved
+                  ON saved.note_id = synced.note_id
+                WHERE saved.note_id IS NULL
+                """
+            ).fetchone()
+            candidate_count = int(row["candidate_count"]) if row is not None else 0
+            if candidate_count <= 0:
+                return 0, 0
+
+            cursor = conn.execute(
+                """
+                DELETE FROM xiaohongshu_synced_notes
+                WHERE note_id IN (
+                    SELECT synced.note_id
+                    FROM xiaohongshu_synced_notes AS synced
+                    LEFT JOIN saved_xiaohongshu_notes AS saved
+                      ON saved.note_id = synced.note_id
+                    WHERE saved.note_id IS NULL
+                )
+                """
+            )
+            conn.commit()
+            deleted_count = int(cursor.rowcount)
+            return candidate_count, deleted_count

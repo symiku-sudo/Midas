@@ -103,6 +103,20 @@ data class NotesSaveBatchData(
     @Json(name = "saved_count") val savedCount: Int
 )
 
+data class XiaohongshuSyncedNotesPruneData(
+    @Json(name = "candidate_count") val candidateCount: Int,
+    @Json(name = "deleted_count") val deletedCount: Int
+)
+
+data class XiaohongshuCaptureRefreshData(
+    @Json(name = "har_path") val harPath: String,
+    @Json(name = "request_url_host") val requestUrlHost: String,
+    @Json(name = "request_method") val requestMethod: String,
+    @Json(name = "headers_count") val headersCount: Int,
+    @Json(name = "non_empty_keys") val nonEmptyKeys: Int,
+    @Json(name = "empty_keys") val emptyKeys: List<String>
+)
+
 data class EditableConfigData(
     val settings: Map<String, Any?>
 )

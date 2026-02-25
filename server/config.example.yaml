@@ -51,6 +51,7 @@ xiaohongshu:
       X-S-Common: "${XHS_HEADER_X_S_COMMON}"
       X-T: "${XHS_HEADER_X_T}"
     request_body: ""
+    har_capture_path: .tmp/xhs_detail.har
     detail_fetch_mode: auto
     detail_request_url_template: ""
     detail_request_method: GET

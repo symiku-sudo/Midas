@@ -4,6 +4,7 @@ import os
 import time
 from pathlib import Path
 
+import app.api.routes as routes_module
 from fastapi.testclient import TestClient
 
 from app.api.routes import (
@@ -198,6 +199,92 @@ def test_xiaohongshu_saved_notes_crud_and_dedupe_independent() -> None:
     assert sync_again_body["data"]["new_count"] == 1
     assert sync_again_body["data"]["skipped_count"] == 1
     assert sync_again_body["data"]["summaries"][0]["note_id"] != first_summary["note_id"]
+
+
+def test_prune_unsaved_xiaohongshu_synced_notes() -> None:
+    _reset_xiaohongshu_state()
+
+    sync_resp = client.post("/api/xiaohongshu/sync", json={"limit": 2})
+    assert sync_resp.status_code == 200
+    sync_body = sync_resp.json()
+    assert sync_body["ok"] is True
+    summaries = sync_body["data"]["summaries"]
+    assert len(summaries) == 2
+
+    save_resp = client.post(
+        "/api/notes/xiaohongshu/save-batch",
+        json={"notes": [summaries[0]]},
+    )
+    assert save_resp.status_code == 200
+    assert save_resp.json()["data"]["saved_count"] == 1
+
+    prune_resp = client.post("/api/notes/xiaohongshu/synced/prune")
+    assert prune_resp.status_code == 200
+    prune_body = prune_resp.json()
+    assert prune_body["ok"] is True
+    assert prune_body["data"]["candidate_count"] == 1
+    assert prune_body["data"]["deleted_count"] == 1
+
+    prune_again_resp = client.post("/api/notes/xiaohongshu/synced/prune")
+    assert prune_again_resp.status_code == 200
+    prune_again_body = prune_again_resp.json()
+    assert prune_again_body["ok"] is True
+    assert prune_again_body["data"]["candidate_count"] == 0
+    assert prune_again_body["data"]["deleted_count"] == 0
+
+
+def test_xiaohongshu_capture_refresh_from_default_har(monkeypatch) -> None:
+    _reset_xiaohongshu_state()
+
+    old_cookie = os.environ.get("XHS_HEADER_COOKIE", "")
+
+    def _fake_apply():
+        capture = routes_module.xhs_capture_tool.RequestCapture(
+            request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page?num=30",
+            request_method="GET",
+            request_headers={
+                "Accept": "application/json",
+                "Cookie": "new_cookie=1",
+                "User-Agent": "ua-test",
+            },
+            request_body="",
+            inference=None,
+        )
+        updates = {
+            "XHS_REQUEST_URL": capture.request_url,
+            "XHS_HEADER_ACCEPT": "application/json",
+            "XHS_HEADER_COOKIE": "new_cookie=1",
+            "XHS_HEADER_ORIGIN": "",
+            "XHS_HEADER_REFERER": "",
+            "XHS_HEADER_USER_AGENT": "ua-test",
+            "XHS_HEADER_X_S": "",
+            "XHS_HEADER_X_S_COMMON": "",
+            "XHS_HEADER_X_T": "",
+        }
+        return Path("/tmp/xhs_detail.har"), capture, updates
+
+    monkeypatch.setattr(
+        routes_module.xhs_capture_tool,
+        "apply_capture_from_default_har_to_env",
+        _fake_apply,
+    )
+
+    try:
+        resp = client.post("/api/xiaohongshu/capture/refresh")
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["data"]["request_url_host"] == "edith.xiaohongshu.com"
+        assert body["data"]["request_method"] == "GET"
+        assert body["data"]["headers_count"] == 3
+        assert body["data"]["non_empty_keys"] == 4
+        assert "XHS_HEADER_X_T" in body["data"]["empty_keys"]
+        assert os.environ.get("XHS_HEADER_COOKIE") == "new_cookie=1"
+    finally:
+        if old_cookie:
+            os.environ["XHS_HEADER_COOKIE"] = old_cookie
+        elif "XHS_HEADER_COOKIE" in os.environ:
+            os.environ.pop("XHS_HEADER_COOKIE", None)
 
 
 def test_editable_config_update_and_reset(tmp_path) -> None:

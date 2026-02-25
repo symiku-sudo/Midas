@@ -29,7 +29,6 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -76,14 +75,6 @@ private data class ConfigFieldSpec(
 )
 
 private val configFieldSpecs = listOf(
-    ConfigFieldSpec(
-        path = "llm.enabled",
-        section = "总结能力",
-        title = "启用 LLM 总结",
-        description = "关闭后使用本地降级摘要，不请求模型。",
-        defaultValue = "true",
-        control = ConfigControlKind.SWITCH,
-    ),
     ConfigFieldSpec(
         path = "llm.model",
         section = "总结能力",
@@ -300,7 +291,6 @@ fun MainScreen(viewModel: MainViewModel) {
                     onTestConnection = viewModel::testConnection,
                     onConfigTextChange = viewModel::onEditableConfigFieldTextChange,
                     onConfigBooleanChange = viewModel::onEditableConfigFieldBooleanChange,
-                    onSaveConfig = viewModel::saveEditableConfig,
                     onResetConfig = viewModel::resetEditableConfig,
                     modifier = Modifier
                         .fillMaxSize()
@@ -328,6 +318,9 @@ fun MainScreen(viewModel: MainViewModel) {
                     onLimitChange = viewModel::onXiaohongshuLimitInputChange,
                     onStartSync = viewModel::startXiaohongshuSync,
                     onSaveNotes = viewModel::saveCurrentXiaohongshuSummaries,
+                    onPruneSyncedNoteIds = viewModel::pruneUnsavedXiaohongshuSyncedNotes,
+                    onRefreshCaptureFromHar = viewModel::refreshXiaohongshuCaptureFromDefaultHar,
+                    onSaveSingleNote = viewModel::saveSingleXiaohongshuSummary,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
@@ -362,7 +355,6 @@ private fun SettingsPanel(
     onTestConnection: () -> Unit,
     onConfigTextChange: (String, String) -> Unit,
     onConfigBooleanChange: (String, Boolean) -> Unit,
-    onSaveConfig: () -> Unit,
     onResetConfig: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -396,14 +388,11 @@ private fun SettingsPanel(
         HorizontalDivider()
         Text("运行配置", style = MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(
-                onClick = onSaveConfig,
-                enabled = !state.isConfigSaving && state.editableConfigFields.isNotEmpty(),
-            ) {
-                Text(if (state.isConfigSaving) "保存中..." else "保存配置")
-            }
             Button(onClick = onResetConfig, enabled = !state.isConfigResetting) {
                 Text(if (state.isConfigResetting) "恢复中..." else "恢复默认")
+            }
+            if (state.isConfigSaving) {
+                Text("自动保存中...", style = MaterialTheme.typography.bodySmall)
             }
         }
         if (state.isConfigLoading) {
@@ -411,11 +400,17 @@ private fun SettingsPanel(
         }
         EditableConfigFieldsPanel(
             fields = state.editableConfigFields,
+            fieldErrors = state.configFieldErrors,
             onTextChange = onConfigTextChange,
             onBooleanChange = onConfigBooleanChange,
         )
         if (state.configStatus.isNotBlank()) {
-            Text(text = state.configStatus)
+            val statusColor = if (state.configFieldErrors.isNotEmpty()) {
+                Color(0xFFC62828)
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            }
+            Text(text = state.configStatus, color = statusColor)
         }
     }
 }
@@ -423,6 +418,7 @@ private fun SettingsPanel(
 @Composable
 private fun EditableConfigFieldsPanel(
     fields: List<EditableConfigField>,
+    fieldErrors: Map<String, String>,
     onTextChange: (String, String) -> Unit,
     onBooleanChange: (String, Boolean) -> Unit,
 ) {
@@ -450,6 +446,7 @@ private fun EditableConfigFieldsPanel(
             ConfigFieldEditor(
                 spec = spec,
                 field = field,
+                errorMessage = fieldErrors[spec.path],
                 onTextChange = onTextChange,
                 onBooleanChange = onBooleanChange,
             )
@@ -462,14 +459,32 @@ private fun EditableConfigFieldsPanel(
 private fun ConfigFieldEditor(
     spec: ConfigFieldSpec,
     field: EditableConfigField,
+    errorMessage: String?,
     onTextChange: (String, String) -> Unit,
     onBooleanChange: (String, Boolean) -> Unit,
 ) {
+    val hasError = !errorMessage.isNullOrBlank()
     val isCustomized = isConfigFieldCustomized(spec = spec, field = field)
-    val indicatorText = if (isCustomized) "已修改" else "默认"
-    val indicatorColor = if (isCustomized) Color(0xFF2E7D32) else MaterialTheme.colorScheme.onSurfaceVariant
-    val containerColor = if (isCustomized) Color(0xFFF1F8E9) else MaterialTheme.colorScheme.surface
-    val borderColor = if (isCustomized) Color(0xFF66BB6A) else MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
+    val indicatorText = when {
+        hasError -> "格式错误"
+        isCustomized -> "已修改"
+        else -> "默认"
+    }
+    val indicatorColor = when {
+        hasError -> Color(0xFFC62828)
+        isCustomized -> Color(0xFF2E7D32)
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val containerColor = when {
+        hasError -> Color(0xFFFFEBEE)
+        isCustomized -> Color(0xFFF1F8E9)
+        else -> MaterialTheme.colorScheme.surface
+    }
+    val borderColor = when {
+        hasError -> Color(0xFFEF5350)
+        isCustomized -> Color(0xFF66BB6A)
+        else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
+    }
 
     Card(
         modifier = Modifier
@@ -530,6 +545,7 @@ private fun ConfigFieldEditor(
                         path = spec.path,
                         options = spec.options,
                         currentValue = field.textValue,
+                        isError = hasError,
                         onSelect = { selected ->
                             onTextChange(spec.path, selected)
                         },
@@ -543,11 +559,19 @@ private fun ConfigFieldEditor(
                         onValueChange = { value ->
                             onTextChange(spec.path, value)
                         },
+                        isError = hasError,
                         modifier = Modifier.fillMaxWidth(),
                         singleLine = !isList,
                         minLines = if (isList) 2 else 1,
                     )
                 }
+            }
+            if (hasError) {
+                Text(
+                    text = errorMessage ?: "字段格式错误。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = Color(0xFFC62828),
+                )
             }
         }
     }
@@ -558,22 +582,19 @@ private fun ConfigDropdownField(
     path: String,
     options: List<ConfigOption>,
     currentValue: String,
+    isError: Boolean,
     onSelect: (String) -> Unit,
 ) {
     var expanded by remember(path) { mutableStateOf(false) }
     val matched = options.firstOrNull { option -> option.value == currentValue }
-    if (matched == null && options.isNotEmpty()) {
-        LaunchedEffect(path, currentValue) {
-            onSelect(options.first().value)
-        }
-    }
-    val selectedLabel = matched?.label ?: options.firstOrNull()?.label ?: "请选择"
+    val selectedLabel = matched?.label ?: if (currentValue.isNotBlank()) "当前值：$currentValue" else "请选择"
 
     Box(modifier = Modifier.fillMaxWidth()) {
         OutlinedTextField(
             value = selectedLabel,
             onValueChange = {},
             readOnly = true,
+            isError = isError,
             trailingIcon = { Text("▼") },
             singleLine = true,
             modifier = Modifier.fillMaxWidth(),
@@ -724,6 +745,9 @@ private fun XiaohongshuPanel(
     onLimitChange: (String) -> Unit,
     onStartSync: () -> Unit,
     onSaveNotes: () -> Unit,
+    onPruneSyncedNoteIds: () -> Unit,
+    onRefreshCaptureFromHar: () -> Unit,
+    onSaveSingleNote: (XiaohongshuSummaryItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -749,6 +773,28 @@ private fun XiaohongshuPanel(
                 Text(if (state.isSavingNotes) "保存中..." else "批量保存本次结果")
             }
         }
+        Button(
+            onClick = onPruneSyncedNoteIds,
+            enabled = !state.isPruningSyncedNoteIds && !state.isSyncing,
+        ) {
+            Text(if (state.isPruningSyncedNoteIds) "清理中..." else "清理无效ID")
+        }
+        Button(
+            onClick = onRefreshCaptureFromHar,
+            enabled = !state.isRefreshingCaptureConfig && !state.isSyncing,
+        ) {
+            Text(if (state.isRefreshingCaptureConfig) "更新中..." else "从默认HAR更新")
+        }
+        Text(
+            text = "清理已被标记为“已同步”但你并未保存的笔记，下次同步时会重新尝试生成。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Text(
+            text = "读取 har_capture_path 指向的 HAR，自动更新小红书请求头。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
 
         if (state.isSyncing) {
             if (state.progressTotal > 0) {
@@ -770,21 +816,60 @@ private fun XiaohongshuPanel(
         if (state.saveStatus.isNotBlank()) {
             Text(text = state.saveStatus, color = Color(0xFF2E7D32))
         }
+        if (state.pruneStatus.isNotBlank()) {
+            Text(text = state.pruneStatus, color = Color(0xFF2E7D32))
+        }
+        if (state.captureRefreshStatus.isNotBlank()) {
+            Text(text = state.captureRefreshStatus, color = Color(0xFF2E7D32))
+        }
         if (state.statsText.isNotBlank()) {
             Text(text = state.statsText, fontWeight = FontWeight.SemiBold)
         }
 
         state.summaries.forEach { summary ->
-            XiaohongshuSummaryCard(summary)
+            XiaohongshuSummaryCard(
+                item = summary,
+                onSave = { onSaveSingleNote(summary) },
+                isSaving = summary.noteId in state.savingSingleNoteIds,
+                isSaved = summary.noteId in state.savedNoteIds,
+                batchSaving = state.isSavingNotes,
+            )
         }
     }
 }
 
 @Composable
-private fun XiaohongshuSummaryCard(item: XiaohongshuSummaryItem) {
+private fun XiaohongshuSummaryCard(
+    item: XiaohongshuSummaryItem,
+    onSave: () -> Unit,
+    isSaving: Boolean,
+    isSaved: Boolean,
+    batchSaving: Boolean,
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(item.title, style = MaterialTheme.typography.titleSmall)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    item.title,
+                    style = MaterialTheme.typography.titleSmall,
+                    modifier = Modifier.weight(1f),
+                )
+                Button(
+                    onClick = onSave,
+                    enabled = !batchSaving && !isSaving && !isSaved,
+                ) {
+                    Text(
+                        when {
+                            isSaved -> "已保存"
+                            isSaving -> "保存中..."
+                            else -> "保存此篇"
+                        }
+                    )
+                }
+            }
             Text("ID: ${item.noteId}", style = MaterialTheme.typography.bodySmall)
             Text(item.sourceUrl, style = MaterialTheme.typography.bodySmall)
             HorizontalDivider()

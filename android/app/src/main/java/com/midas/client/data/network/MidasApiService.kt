@@ -11,6 +11,8 @@ import com.midas.client.data.model.EditableConfigUpdateRequest
 import com.midas.client.data.model.HealthData
 import com.midas.client.data.model.NotesDeleteData
 import com.midas.client.data.model.NotesSaveBatchData
+import com.midas.client.data.model.XiaohongshuCaptureRefreshData
+import com.midas.client.data.model.XiaohongshuSyncedNotesPruneData
 import com.midas.client.data.model.XiaohongshuSyncData
 import com.midas.client.data.model.XiaohongshuSyncJobCreateData
 import com.midas.client.data.model.XiaohongshuSyncJobStatusData
@@ -70,6 +72,14 @@ interface MidasApiService {
 
     @DELETE("api/notes/xiaohongshu")
     suspend fun clearXiaohongshuNotes(): Response<ApiEnvelope<NotesDeleteData>>
+
+    @POST("api/notes/xiaohongshu/synced/prune")
+    suspend fun pruneUnsavedXiaohongshuSyncedNotes():
+        Response<ApiEnvelope<XiaohongshuSyncedNotesPruneData>>
+
+    @POST("api/xiaohongshu/capture/refresh")
+    suspend fun refreshXiaohongshuCapture():
+        Response<ApiEnvelope<XiaohongshuCaptureRefreshData>>
 
     @GET("api/config/editable")
     suspend fun getEditableConfig(): Response<ApiEnvelope<EditableConfigData>>

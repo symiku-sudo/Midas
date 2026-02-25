@@ -8,6 +8,7 @@ from app.models.schemas import (
     BilibiliSavedNotesData,
     XiaohongshuSavedNote,
     XiaohongshuSavedNotesData,
+    XiaohongshuSyncedNotesPruneData,
     XiaohongshuSummaryItem,
 )
 from app.repositories.note_repo import NoteLibraryRepository
@@ -96,6 +97,15 @@ class NoteLibraryService:
 
     def clear_xiaohongshu_notes(self) -> int:
         return self._repository.clear_xiaohongshu_notes()
+
+    def prune_unsaved_xiaohongshu_synced_notes(self) -> XiaohongshuSyncedNotesPruneData:
+        candidate_count, deleted_count = (
+            self._repository.prune_unsaved_xiaohongshu_synced_notes()
+        )
+        return XiaohongshuSyncedNotesPruneData(
+            candidate_count=candidate_count,
+            deleted_count=deleted_count,
+        )
 
     def _normalize_bilibili_title(
         self,

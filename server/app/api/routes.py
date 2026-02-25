@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from functools import lru_cache
+from urllib.parse import urlparse
 
 from fastapi import APIRouter, Request
 
@@ -17,7 +19,9 @@ from app.models.schemas import (
     HealthData,
     NotesDeleteData,
     NotesSaveBatchData,
+    XiaohongshuCaptureRefreshData,
     XiaohongshuNotesSaveRequest,
+    XiaohongshuSyncedNotesPruneData,
     XiaohongshuSyncJobCreateData,
     XiaohongshuSyncJobError,
     XiaohongshuSyncJobStatusData,
@@ -28,6 +32,7 @@ from app.services.editable_config import EditableConfigService
 from app.services.note_library import NoteLibraryService
 from app.services.xiaohongshu import XiaohongshuSyncService
 from app.services.xiaohongshu_job import XiaohongshuSyncJobManager
+from tools import xhs_capture_to_config as xhs_capture_tool
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -157,6 +162,53 @@ async def clear_xiaohongshu_notes(request: Request) -> dict:
     service = _get_note_library_service()
     deleted_count = service.clear_xiaohongshu_notes()
     data = NotesDeleteData(deleted_count=deleted_count)
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/notes/xiaohongshu/synced/prune")
+async def prune_unsaved_xiaohongshu_synced_notes(request: Request) -> dict:
+    service = _get_note_library_service()
+    result = service.prune_unsaved_xiaohongshu_synced_notes()
+    data = XiaohongshuSyncedNotesPruneData(
+        candidate_count=result.candidate_count,
+        deleted_count=result.deleted_count,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/xiaohongshu/capture/refresh")
+async def refresh_xiaohongshu_capture(request: Request) -> dict:
+    try:
+        har_path, capture, updates = xhs_capture_tool.apply_capture_from_default_har_to_env()
+    except ValueError as exc:
+        raise AppError(
+            code=ErrorCode.INVALID_INPUT,
+            message=str(exc),
+            status_code=400,
+        ) from exc
+    except Exception as exc:
+        logger.exception("Failed to refresh xiaohongshu capture from default HAR.")
+        raise AppError(
+            code=ErrorCode.INTERNAL_ERROR,
+            message="刷新小红书抓包配置失败。",
+            status_code=500,
+            details={"error": str(exc)},
+        ) from exc
+
+    for key, value in updates.items():
+        if value:
+            os.environ[key] = value
+    _reload_runtime_services()
+
+    empty_keys = sorted([key for key, value in updates.items() if not value])
+    data = XiaohongshuCaptureRefreshData(
+        har_path=str(har_path),
+        request_url_host=urlparse(capture.request_url).netloc,
+        request_method=capture.request_method,
+        headers_count=len(capture.request_headers),
+        non_empty_keys=len(updates) - len(empty_keys),
+        empty_keys=empty_keys,
+    )
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 

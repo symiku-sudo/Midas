@@ -4,12 +4,19 @@ import argparse
 import base64
 import json
 import shlex
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
 import yaml
+
+SERVER_ROOT = Path(__file__).resolve().parents[1]
+if str(SERVER_ROOT) not in sys.path:
+    sys.path.insert(0, str(SERVER_ROOT))
+
+from app.core.config import load_settings
 
 _HEADER_SKIP = {
     "content-length",
@@ -24,6 +31,7 @@ _NOTE_ID_CANDIDATES = ["note_id", "noteid", "id", "item_id"]
 _TITLE_CANDIDATES = ["title", "note_title", "name"]
 _CONTENT_CANDIDATES = ["desc", "content", "note_text", "text"]
 _SOURCE_URL_CANDIDATES = ["url", "source_url", "jump_url", "link"]
+DEFAULT_ENV_PATH = SERVER_ROOT / ".env"
 
 
 @dataclass
@@ -228,6 +236,17 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
+        if args.har is None and args.curl is None and args.curl_file is None:
+            default_har = resolve_default_har_path()
+            if default_har is None:
+                raise ValueError(
+                    "请提供 --har/--curl/--curl-file，或在 config.yaml 配置 "
+                    "xiaohongshu.web_readonly.har_capture_path。"
+                )
+            if not default_har.exists():
+                raise ValueError(f"默认 HAR 文件不存在: {default_har}")
+            args.har = default_har
+
         if args.har is not None:
             capture = extract_best_har_capture(
                 load_json_file(args.har), select_url_contains=args.select_url_contains
@@ -246,9 +265,9 @@ def main() -> int:
                 inference, _ = infer_fields_from_payload(payload)
                 capture.inference = inference
 
-        _assert_xhs_host(capture.request_url)
-        updates = build_env_updates(capture)
         if args.dry_run:
+            _assert_xhs_host(capture.request_url)
+            updates = build_env_updates(capture)
             _print_summary(
                 capture=capture,
                 output_path=args.env,
@@ -257,7 +276,10 @@ def main() -> int:
             )
             return 0
 
-        upsert_env_file(args.env, updates)
+        capture, updates = apply_capture_to_env(
+            capture,
+            env_path=args.env,
+        )
         _print_summary(capture=capture, output_path=args.env, updated_keys=updates)
         return 0
     except Exception as exc:
@@ -266,13 +288,19 @@ def main() -> int:
 
 
 def _build_arg_parser() -> argparse.ArgumentParser:
-    server_root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(
         description="把浏览器抓包（HAR 或 cURL）转换为 server/.env 的 XHS_* 变量。"
     )
 
-    src_group = parser.add_mutually_exclusive_group(required=True)
-    src_group.add_argument("--har", type=Path, help="HAR 文件路径。")
+    src_group = parser.add_mutually_exclusive_group(required=False)
+    src_group.add_argument(
+        "--har",
+        type=Path,
+        help=(
+            "HAR 文件路径。若不传且未传 --curl/--curl-file，"
+            "将回退到 config.yaml 的 xiaohongshu.web_readonly.har_capture_path。"
+        ),
+    )
     src_group.add_argument("--curl-file", type=Path, help="包含 cURL 文本的文件路径。")
     src_group.add_argument("--curl", type=str, help="直接传入 cURL 文本。")
 
@@ -291,7 +319,7 @@ def _build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--env",
         type=Path,
-        default=server_root / ".env",
+        default=DEFAULT_ENV_PATH,
         help="输出 .env 文件路径（默认 server/.env）。",
     )
     parser.add_argument(
@@ -300,6 +328,49 @@ def _build_arg_parser() -> argparse.ArgumentParser:
         help="仅打印将更新的变量摘要，不写文件。",
     )
     return parser
+
+
+def resolve_default_har_path() -> Path | None:
+    raw_path = load_settings().xiaohongshu.web_readonly.har_capture_path.strip()
+    if not raw_path:
+        return None
+
+    candidate = Path(raw_path).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    return (SERVER_ROOT / candidate).resolve()
+
+
+def apply_capture_to_env(
+    capture: RequestCapture,
+    *,
+    env_path: Path,
+) -> tuple[RequestCapture, dict[str, str]]:
+    _assert_xhs_host(capture.request_url)
+    updates = build_env_updates(capture)
+    upsert_env_file(env_path, updates)
+    return capture, updates
+
+
+def apply_capture_from_default_har_to_env(
+    *,
+    env_path: Path = DEFAULT_ENV_PATH,
+    select_url_contains: str = "",
+) -> tuple[Path, RequestCapture, dict[str, str]]:
+    har_path = resolve_default_har_path()
+    if har_path is None:
+        raise ValueError(
+            "config.yaml 未配置 xiaohongshu.web_readonly.har_capture_path。"
+        )
+    if not har_path.exists():
+        raise ValueError(f"HAR 文件不存在: {har_path}")
+
+    capture = extract_best_har_capture(
+        load_json_file(har_path),
+        select_url_contains=select_url_contains,
+    )
+    capture, updates = apply_capture_to_env(capture, env_path=env_path)
+    return har_path, capture, updates
 
 
 def build_env_updates(capture: RequestCapture) -> dict[str, str]:

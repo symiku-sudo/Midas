@@ -90,6 +90,20 @@ class NotesSaveBatchData(BaseModel):
     saved_count: int
 
 
+class XiaohongshuSyncedNotesPruneData(BaseModel):
+    candidate_count: int
+    deleted_count: int
+
+
+class XiaohongshuCaptureRefreshData(BaseModel):
+    har_path: str
+    request_url_host: str
+    request_method: str
+    headers_count: int
+    non_empty_keys: int
+    empty_keys: list[str]
+
+
 class EditableConfigData(BaseModel):
     settings: dict[str, Any]
 
