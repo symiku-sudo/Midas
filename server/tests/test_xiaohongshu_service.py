@@ -76,6 +76,15 @@ class CaptureLLM:
         return "# 总结\n\n这是一段测试总结。"
 
 
+class IterWebSource:
+    def __init__(self, notes: list[XiaohongshuNote]) -> None:
+        self._notes = notes
+
+    async def iter_recent(self):
+        for note in self._notes:
+            yield note
+
+
 @pytest.mark.asyncio
 async def test_sync_circuit_breaker(tmp_path) -> None:
     settings = Settings(
@@ -203,6 +212,125 @@ async def test_web_readonly_success_sets_last_sync_state(tmp_path) -> None:
     assert result.new_count == 1
     assert result.fetched_count == 1
     assert repo.get_state("last_live_sync_ts") is not None
+
+
+@pytest.mark.asyncio
+async def test_web_readonly_skip_does_not_consume_requested_limit(tmp_path) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=str(tmp_path / "midas.db"),
+            min_live_sync_interval_seconds=0,
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://www.xiaohongshu.com/api/some/path"
+            ),
+        )
+    )
+    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
+    repo.mark_synced("w1", "old-1", "https://www.xiaohongshu.com/explore/w1")
+    repo.mark_synced("w2", "old-2", "https://www.xiaohongshu.com/explore/w2")
+    source = IterWebSource(
+        [
+            XiaohongshuNote(
+                note_id="w1",
+                title="web-title-1",
+                content="web-content-1",
+                source_url="https://www.xiaohongshu.com/explore/w1",
+            ),
+            XiaohongshuNote(
+                note_id="w2",
+                title="web-title-2",
+                content="web-content-2",
+                source_url="https://www.xiaohongshu.com/explore/w2",
+            ),
+            XiaohongshuNote(
+                note_id="w3",
+                title="web-title-3",
+                content="web-content-3",
+                source_url="https://www.xiaohongshu.com/explore/w3",
+            ),
+            XiaohongshuNote(
+                note_id="w4",
+                title="web-title-4",
+                content="web-content-4",
+                source_url="https://www.xiaohongshu.com/explore/w4",
+            ),
+            XiaohongshuNote(
+                note_id="w5",
+                title="web-title-5",
+                content="web-content-5",
+                source_url="https://www.xiaohongshu.com/explore/w5",
+            ),
+        ]
+    )
+    service = XiaohongshuSyncService(
+        settings=settings,
+        repository=repo,
+        web_source=source,
+        llm_service=SimpleLLM(),
+    )
+
+    result = await service.sync(limit=2, confirm_live=True)
+
+    assert result.requested_limit == 2
+    assert result.new_count == 2
+    assert result.skipped_count == 2
+    assert result.fetched_count == 4
+    assert [item.note_id for item in result.summaries] == ["w3", "w4"]
+    assert repo.is_synced("w5") is False
+
+
+@pytest.mark.asyncio
+async def test_web_readonly_stops_when_all_note_ids_are_already_synced(tmp_path) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=str(tmp_path / "midas.db"),
+            min_live_sync_interval_seconds=0,
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://www.xiaohongshu.com/api/some/path"
+            ),
+        )
+    )
+    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
+    notes = [
+        XiaohongshuNote(
+            note_id="w1",
+            title="web-title-1",
+            content="web-content-1",
+            source_url="https://www.xiaohongshu.com/explore/w1",
+        ),
+        XiaohongshuNote(
+            note_id="w2",
+            title="web-title-2",
+            content="web-content-2",
+            source_url="https://www.xiaohongshu.com/explore/w2",
+        ),
+        XiaohongshuNote(
+            note_id="w3",
+            title="web-title-3",
+            content="web-content-3",
+            source_url="https://www.xiaohongshu.com/explore/w3",
+        ),
+    ]
+    for note in notes:
+        repo.mark_synced(note.note_id, note.title, note.source_url)
+
+    service = XiaohongshuSyncService(
+        settings=settings,
+        repository=repo,
+        web_source=IterWebSource(notes),
+        llm_service=SimpleLLM(),
+    )
+
+    result = await service.sync(limit=2, confirm_live=True)
+
+    assert result.requested_limit == 2
+    assert result.new_count == 0
+    assert result.skipped_count == 3
+    assert result.fetched_count == 3
+    assert result.failed_count == 0
+    assert result.summaries == []
 
 
 @pytest.mark.asyncio

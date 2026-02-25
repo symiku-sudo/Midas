@@ -190,6 +190,8 @@ curl -X POST http://127.0.0.1:8000/api/config/editable/reset
 - Default LLM mode is enabled (`llm.enabled=true`); set `llm.api_key` before real run.
 - Default Xiaohongshu integration mode is `web_readonly`.
 - Synced note IDs persist in `xiaohongshu.db_path` (default `.tmp/midas.db`).
+- 小红书同步中的 `limit` 是“有效新增（`new_count`）目标”；命中去重表的条目只计入 `skipped_count`，不会占用 `limit`。
+- 同步会自动按 cursor 翻页，直到凑满 `limit` 条有效笔记，或收藏列表已遍历完。
 - 删除“已保存小红书笔记”不会删除去重表中的 `note_id`，后续同步仍会跳过已处理笔记。
 - `web_readonly` 模式仍属于非官方接口回放，务必低频、低并发、只读请求，优先保护账号安全。
 

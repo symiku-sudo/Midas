@@ -155,6 +155,12 @@ Request:
 - `confirm_live` 仅在 `xiaohongshu.mode=web_readonly` 时需要设为 `true`。
 - 默认 `false`，用于防止误触发真实账号请求。
 - 对视频型笔记，会走“音频导出 -> ASR 转写 -> LLM 总结”，并合并正文（若存在）。
+- `limit` 表示“有效同步目标条数”，对应 `new_count`。
+- 命中去重表的笔记会计入 `skipped_count`，但不会占用 `limit` 名额。
+- 服务端会自动翻页（cursor）继续拉取，直到：
+  - `new_count >= limit`，或
+  - 已遍历完当前收藏列表（即无更多可检查 `note_id`）。
+- `fetched_count` 表示本次实际检查过的笔记条数（含跳过与失败）。
 
 Success `data`:
 
@@ -369,7 +375,7 @@ Success `data`（运行中）:
   "requested_limit": 5,
   "current": 2,
   "total": 5,
-  "message": "已处理笔记：mock-note-002",
+  "message": "已完成有效同步：2/5（mock-note-002）",
   "result": null,
   "error": null
 }

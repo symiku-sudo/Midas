@@ -9,7 +9,7 @@ import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import AsyncIterator, Awaitable, Callable, Iterator
 from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
 import httpx
@@ -70,48 +70,55 @@ class MockXiaohongshuSource:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
-    def fetch_recent(self, limit: int) -> list[XiaohongshuNote]:
+    def iter_recent(self) -> Iterator[XiaohongshuNote]:
         records = self._load_records()
+        for index, record in enumerate(records):
+            yield self._build_note_from_record(index=index, record=record)
+
+    def fetch_recent(self, limit: int) -> list[XiaohongshuNote]:
         notes: list[XiaohongshuNote] = []
-        for index, record in enumerate(records[:limit]):
-            note_id = str(record.get("note_id", "")).strip()
-            title = str(record.get("title", "")).strip()
-            content = str(record.get("content", "")).strip()
-            source_url = str(record.get("source_url", "")).strip()
-            raw_images = record.get("image_urls", [])
-            image_urls = []
-            if isinstance(raw_images, list):
-                image_urls = [
-                    str(item).strip()
-                    for item in raw_images
-                    if isinstance(item, str) and str(item).strip()
-                ]
-            is_video = bool(record.get("is_video", False))
-
-            if not note_id:
-                raise AppError(
-                    code=ErrorCode.UPSTREAM_ERROR,
-                    message=f"mock 数据第 {index + 1} 条缺少 note_id。",
-                    status_code=500,
-                )
-            if not title:
-                title = f"未命名笔记 {note_id}"
-            if not content:
-                content = "（空内容）"
-            if not source_url:
-                source_url = f"https://www.xiaohongshu.com/explore/{note_id}"
-
-            notes.append(
-                XiaohongshuNote(
-                    note_id=note_id,
-                    title=title,
-                    content=content,
-                    source_url=source_url,
-                    image_urls=image_urls,
-                    is_video=is_video,
-                )
-            )
+        for index, note in enumerate(self.iter_recent()):
+            if index >= limit:
+                break
+            notes.append(note)
         return notes
+
+    def _build_note_from_record(self, *, index: int, record: dict[str, str]) -> XiaohongshuNote:
+        note_id = str(record.get("note_id", "")).strip()
+        title = str(record.get("title", "")).strip()
+        content = str(record.get("content", "")).strip()
+        source_url = str(record.get("source_url", "")).strip()
+        raw_images = record.get("image_urls", [])
+        image_urls = []
+        if isinstance(raw_images, list):
+            image_urls = [
+                str(item).strip()
+                for item in raw_images
+                if isinstance(item, str) and str(item).strip()
+            ]
+        is_video = bool(record.get("is_video", False))
+
+        if not note_id:
+            raise AppError(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message=f"mock 数据第 {index + 1} 条缺少 note_id。",
+                status_code=500,
+            )
+        if not title:
+            title = f"未命名笔记 {note_id}"
+        if not content:
+            content = "（空内容）"
+        if not source_url:
+            source_url = f"https://www.xiaohongshu.com/explore/{note_id}"
+
+        return XiaohongshuNote(
+            note_id=note_id,
+            title=title,
+            content=content,
+            source_url=source_url,
+            image_urls=image_urls,
+            is_video=is_video,
+        )
 
     def _load_records(self) -> list[dict[str, str]]:
         mock_path = self._settings.xiaohongshu.mock_notes_path.strip()
@@ -177,6 +184,14 @@ class XiaohongshuWebReadonlySource:
         self._settings = settings
 
     async def fetch_recent(self, limit: int) -> list[XiaohongshuNote]:
+        notes: list[XiaohongshuNote] = []
+        async for note in self.iter_recent():
+            notes.append(note)
+            if len(notes) >= limit:
+                break
+        return notes
+
+    async def iter_recent(self) -> AsyncIterator[XiaohongshuNote]:
         cfg = self._settings.xiaohongshu.web_readonly
         request_url = cfg.request_url.strip()
         if not request_url:
@@ -218,16 +233,13 @@ class XiaohongshuWebReadonlySource:
         max_images = max(int(cfg.max_images_per_note), 0)
         timeout = self._settings.xiaohongshu.request_timeout_seconds
 
-        notes: list[XiaohongshuNote] = []
         page_url = request_url
         page_body = body
         seen_page_tokens: set[tuple[str, str | None]] = set()
-        max_pages = max(min(limit * 3, 120), 6)
-        page_index = 0
+        emitted_any = False
 
         async with httpx.AsyncClient(timeout=timeout) as client:
-            while len(notes) < limit and page_index < max_pages:
-                page_index += 1
+            while True:
                 payload = await self._request_json(
                     client=client,
                     method=method,
@@ -245,130 +257,24 @@ class XiaohongshuWebReadonlySource:
                     )
 
                 for record in records:
-                    if len(notes) >= limit:
-                        break
                     if not isinstance(record, dict):
                         continue
-
-                    note_id = self._read_str(record, cfg.note_id_field)
-                    if not note_id:
-                        continue
-
-                    title = (
-                        self._read_str(record, cfg.title_field) or f"未命名笔记 {note_id}"
-                    )
-                    source_url = self._read_str(record, cfg.source_url_field)
-                    if not source_url:
-                        source_url = f"https://www.xiaohongshu.com/explore/{note_id}"
-                    is_video = self._is_video_note(record)
-
-                    content = self._pick_valid_content(
-                        payload=record,
-                        candidates=cfg.content_field_candidates,
-                        title=title,
-                    )
-                    image_urls = self._extract_image_urls(
-                        payload=record,
-                        candidates=cfg.image_field_candidates,
-                        max_count=max_images,
-                    )
-
-                    # Primary extraction path in MVP:
-                    # parse note detail from explore page initial state.
-                    page_note = await self._fetch_note_from_page(
+                    note = await self._extract_note_from_record(
                         client=client,
-                        note_id=note_id,
-                        source_url=source_url,
                         record=record,
+                        cfg=cfg,
                         headers=headers,
-                        host_allowlist=cfg.host_allowlist,
-                    )
-                    if page_note is not None:
-                        page_title = self._read_str(page_note, "title")
-                        if page_title:
-                            title = page_title
-
-                        page_content = self._pick_valid_content(
-                            payload=page_note,
-                            candidates=[
-                                "desc",
-                                "content",
-                                "note_desc",
-                                "noteDesc",
-                                "note_text",
-                            ],
-                            title=title,
-                        )
-                        if page_content:
-                            content = page_content
-
-                        page_images = self._extract_image_urls(
-                            payload=page_note,
-                            candidates=["imageList", "image_list", "images", "cover"],
-                            max_count=max_images,
-                        )
-                        image_urls = self._merge_image_urls(
-                            primary=page_images,
-                            secondary=image_urls,
-                            max_count=max_images,
-                        )
-                        is_video = is_video or self._is_video_note(page_note)
-
-                    # Secondary extraction path:
-                    # optional JSON detail endpoint when page extraction is insufficient.
-                    if (not is_video) and self._should_fetch_detail(
                         detail_fetch_mode=detail_fetch_mode,
-                        content=content,
-                        image_urls=image_urls,
-                    ):
-                        detail_payload = await self._fetch_detail_payload(
-                            client=client,
-                            detail_url_template=detail_url_template,
-                            detail_method=detail_method,
-                            detail_headers=detail_headers,
-                            detail_body=detail_body,
-                            note_id=note_id,
-                            source_url=source_url,
-                            record=record,
-                            host_allowlist=cfg.host_allowlist,
-                        )
-                        if detail_payload is not None:
-                            is_video = is_video or self._is_video_note(detail_payload)
-                            detail_content = self._pick_valid_content(
-                                payload=detail_payload,
-                                candidates=cfg.detail_content_field_candidates,
-                                title=title,
-                            )
-                            if detail_content:
-                                content = detail_content
-
-                            detail_images = self._extract_image_urls(
-                                payload=detail_payload,
-                                candidates=cfg.detail_image_field_candidates,
-                                max_count=max_images,
-                            )
-                            image_urls = self._merge_image_urls(
-                                primary=detail_images,
-                                secondary=image_urls,
-                                max_count=max_images,
-                            )
-
-                    if not content and not is_video:
-                        continue
-
-                    notes.append(
-                        XiaohongshuNote(
-                            note_id=note_id,
-                            title=title,
-                            content=content,
-                            source_url=source_url,
-                            image_urls=image_urls,
-                            is_video=is_video,
-                        )
+                        detail_url_template=detail_url_template,
+                        detail_method=detail_method,
+                        detail_headers=detail_headers,
+                        detail_body=detail_body,
+                        max_images=max_images,
                     )
-
-                if len(notes) >= limit:
-                    break
+                    if note is None:
+                        continue
+                    emitted_any = True
+                    yield note
 
                 has_more = self._extract_has_more(payload)
                 next_cursor = self._extract_next_cursor(payload)
@@ -393,7 +299,7 @@ class XiaohongshuWebReadonlySource:
                     break
                 seen_page_tokens.add(page_token)
 
-        if not notes:
+        if not emitted_any:
             raise AppError(
                 code=ErrorCode.UPSTREAM_ERROR,
                 message=(
@@ -402,7 +308,129 @@ class XiaohongshuWebReadonlySource:
                 ),
                 status_code=502,
             )
-        return notes
+
+    async def _extract_note_from_record(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        record: dict,
+        cfg,
+        headers: dict[str, str],
+        detail_fetch_mode: str,
+        detail_url_template: str,
+        detail_method: str,
+        detail_headers: dict[str, str],
+        detail_body: str | None,
+        max_images: int,
+    ) -> XiaohongshuNote | None:
+        note_id = self._read_str(record, cfg.note_id_field)
+        if not note_id:
+            return None
+
+        title = self._read_str(record, cfg.title_field) or f"未命名笔记 {note_id}"
+        source_url = self._read_str(record, cfg.source_url_field)
+        if not source_url:
+            source_url = f"https://www.xiaohongshu.com/explore/{note_id}"
+        is_video = self._is_video_note(record)
+
+        content = self._pick_valid_content(
+            payload=record,
+            candidates=cfg.content_field_candidates,
+            title=title,
+        )
+        image_urls = self._extract_image_urls(
+            payload=record,
+            candidates=cfg.image_field_candidates,
+            max_count=max_images,
+        )
+
+        page_note = await self._fetch_note_from_page(
+            client=client,
+            note_id=note_id,
+            source_url=source_url,
+            record=record,
+            headers=headers,
+            host_allowlist=cfg.host_allowlist,
+        )
+        if page_note is not None:
+            page_title = self._read_str(page_note, "title")
+            if page_title:
+                title = page_title
+
+            page_content = self._pick_valid_content(
+                payload=page_note,
+                candidates=[
+                    "desc",
+                    "content",
+                    "note_desc",
+                    "noteDesc",
+                    "note_text",
+                ],
+                title=title,
+            )
+            if page_content:
+                content = page_content
+
+            page_images = self._extract_image_urls(
+                payload=page_note,
+                candidates=["imageList", "image_list", "images", "cover"],
+                max_count=max_images,
+            )
+            image_urls = self._merge_image_urls(
+                primary=page_images,
+                secondary=image_urls,
+                max_count=max_images,
+            )
+            is_video = is_video or self._is_video_note(page_note)
+
+        if (not is_video) and self._should_fetch_detail(
+            detail_fetch_mode=detail_fetch_mode,
+            content=content,
+            image_urls=image_urls,
+        ):
+            detail_payload = await self._fetch_detail_payload(
+                client=client,
+                detail_url_template=detail_url_template,
+                detail_method=detail_method,
+                detail_headers=detail_headers,
+                detail_body=detail_body,
+                note_id=note_id,
+                source_url=source_url,
+                record=record,
+                host_allowlist=cfg.host_allowlist,
+            )
+            if detail_payload is not None:
+                is_video = is_video or self._is_video_note(detail_payload)
+                detail_content = self._pick_valid_content(
+                    payload=detail_payload,
+                    candidates=cfg.detail_content_field_candidates,
+                    title=title,
+                )
+                if detail_content:
+                    content = detail_content
+
+                detail_images = self._extract_image_urls(
+                    payload=detail_payload,
+                    candidates=cfg.detail_image_field_candidates,
+                    max_count=max_images,
+                )
+                image_urls = self._merge_image_urls(
+                    primary=detail_images,
+                    secondary=image_urls,
+                    max_count=max_images,
+                )
+
+        if not content and not is_video:
+            return None
+
+        return XiaohongshuNote(
+            note_id=note_id,
+            title=title,
+            content=content,
+            source_url=source_url,
+            image_urls=image_urls,
+            is_video=is_video,
+        )
 
     def _normalize_method(self, raw_method: str, *, field_name: str) -> str:
         method = raw_method.strip().upper() or "GET"
@@ -1083,9 +1111,7 @@ class XiaohongshuSyncService:
             )
 
         mode = self._settings.xiaohongshu.mode.strip().lower()
-        if mode == "mock":
-            notes = self._source.fetch_recent(requested_limit)
-        elif mode == "web_readonly":
+        if mode == "web_readonly":
             if not confirm_live:
                 raise AppError(
                     code=ErrorCode.INVALID_INPUT,
@@ -1095,38 +1121,49 @@ class XiaohongshuSyncService:
                     status_code=400,
                 )
             self._enforce_live_sync_interval()
-            notes = await self._web_source.fetch_recent(requested_limit)
-        else:
+        elif mode != "mock":
             raise AppError(
                 code=ErrorCode.INVALID_INPUT,
                 message="当前仅支持 xiaohongshu.mode=mock 或 web_readonly。",
                 status_code=400,
             )
 
-        fetched_count = len(notes)
         await self._emit_progress(
             progress_callback,
             current=0,
-            total=fetched_count,
-            message="已拉取笔记列表，开始处理。",
+            total=requested_limit,
+            message=f"开始同步，目标有效笔记 {requested_limit} 条。",
         )
 
+        fetched_count = 0
         processed_count = 0
         new_count = 0
         skipped_count = 0
         failed_count = 0
         consecutive_failures = 0
         summaries: list[XiaohongshuSummaryItem] = []
+        first_note = True
+        seen_note_ids: set[str] = set()
 
-        for index, note in enumerate(notes):
+        async for note in self._iter_candidate_notes(mode=mode, requested_limit=requested_limit):
+            if mode != "mock":
+                if first_note:
+                    first_note = False
+                else:
+                    await self._delay_between_requests(mode=mode)
+
+            if note.note_id in seen_note_ids:
+                continue
+            seen_note_ids.add(note.note_id)
+            fetched_count += 1
             if self._repository.is_synced(note.note_id):
                 skipped_count += 1
                 processed_count += 1
                 await self._emit_progress(
                     progress_callback,
-                    current=processed_count,
-                    total=fetched_count,
-                    message=f"已跳过重复笔记：{note.note_id}",
+                    current=new_count,
+                    total=requested_limit,
+                    message=f"已跳过重复笔记：{note.note_id}（有效 {new_count}/{requested_limit}）",
                 )
                 continue
 
@@ -1159,9 +1196,9 @@ class XiaohongshuSyncService:
                 processed_count += 1
                 await self._emit_progress(
                     progress_callback,
-                    current=processed_count,
-                    total=fetched_count,
-                    message=f"已处理笔记：{note.note_id}",
+                    current=new_count,
+                    total=requested_limit,
+                    message=f"已完成有效同步：{new_count}/{requested_limit}（{note.note_id}）",
                 )
             except AppError as exc:
                 failed_count += 1
@@ -1169,9 +1206,9 @@ class XiaohongshuSyncService:
                 processed_count += 1
                 await self._emit_progress(
                     progress_callback,
-                    current=processed_count,
-                    total=fetched_count,
-                    message=f"处理失败笔记：{note.note_id}",
+                    current=new_count,
+                    total=requested_limit,
+                    message=f"处理失败笔记：{note.note_id}（有效 {new_count}/{requested_limit}）",
                 )
                 if (
                     consecutive_failures
@@ -1195,8 +1232,8 @@ class XiaohongshuSyncService:
                         },
                     ) from exc
 
-            if index < fetched_count - 1:
-                await self._delay_between_requests(mode=mode)
+            if new_count >= requested_limit:
+                break
 
         result = XiaohongshuSyncData(
             requested_limit=requested_limit,
@@ -1212,6 +1249,29 @@ class XiaohongshuSyncService:
             self._repository.set_state("last_live_sync_ts", str(int(time.time())))
 
         return result
+
+    async def _iter_candidate_notes(
+        self, *, mode: str, requested_limit: int
+    ) -> AsyncIterator[XiaohongshuNote]:
+        if mode == "mock":
+            iter_recent = getattr(self._source, "iter_recent", None)
+            if callable(iter_recent):
+                for note in iter_recent():
+                    yield note
+                return
+            for note in self._source.fetch_recent(requested_limit):
+                yield note
+            return
+
+        iter_recent = getattr(self._web_source, "iter_recent", None)
+        if callable(iter_recent):
+            async for note in iter_recent():
+                yield note
+            return
+
+        notes = await self._web_source.fetch_recent(requested_limit)
+        for note in notes:
+            yield note
 
     async def _summarize_video_note(self, note: XiaohongshuNote) -> str:
         transcript = ""

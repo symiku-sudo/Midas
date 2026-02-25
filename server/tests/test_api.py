@@ -68,10 +68,11 @@ def test_xiaohongshu_sync_and_dedupe() -> None:
     assert second.status_code == 200
     second_body = second.json()
     assert second_body["ok"] is True
-    assert second_body["data"]["fetched_count"] == 3
-    assert second_body["data"]["new_count"] == 0
+    assert second_body["data"]["fetched_count"] == 5
+    assert second_body["data"]["new_count"] == 2
     assert second_body["data"]["skipped_count"] == 3
     assert second_body["data"]["failed_count"] == 0
+    assert len(second_body["data"]["summaries"]) == 2
 
 
 def test_xiaohongshu_sync_limit_exceeded() -> None:
@@ -194,8 +195,9 @@ def test_xiaohongshu_saved_notes_crud_and_dedupe_independent() -> None:
     sync_again = client.post("/api/xiaohongshu/sync", json={"limit": 1})
     assert sync_again.status_code == 200
     sync_again_body = sync_again.json()
-    assert sync_again_body["data"]["new_count"] == 0
+    assert sync_again_body["data"]["new_count"] == 1
     assert sync_again_body["data"]["skipped_count"] == 1
+    assert sync_again_body["data"]["summaries"][0]["note_id"] != first_summary["note_id"]
 
 
 def test_editable_config_update_and_reset(tmp_path) -> None:
