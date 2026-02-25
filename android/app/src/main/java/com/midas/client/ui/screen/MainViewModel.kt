@@ -10,6 +10,8 @@ import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.data.repo.MidasRepository
 import com.midas.client.data.repo.SettingsRepository
 import com.midas.client.util.AppResult
+import com.midas.client.util.EditableConfigField
+import com.midas.client.util.EditableConfigFormMapper
 import com.midas.client.util.ErrorContext
 import com.midas.client.util.ErrorMessageMapper
 import com.midas.client.util.UrlNormalizer
@@ -20,16 +22,13 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import org.json.JSONArray
-import org.json.JSONException
-import org.json.JSONObject
 
 data class SettingsUiState(
     val baseUrlInput: String = "",
     val isTesting: Boolean = false,
     val testStatus: String = "",
     val saveStatus: String = "",
-    val editableConfigInput: String = "",
+    val editableConfigFields: List<EditableConfigField> = emptyList(),
     val isConfigLoading: Boolean = false,
     val isConfigSaving: Boolean = false,
     val isConfigResetting: Boolean = false,
@@ -152,8 +151,30 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun onEditableConfigInputChange(newValue: String) {
-        _settingsState.update { it.copy(editableConfigInput = newValue, configStatus = "") }
+    fun onEditableConfigFieldTextChange(path: String, newValue: String) {
+        _settingsState.update {
+            it.copy(
+                editableConfigFields = EditableConfigFormMapper.updateText(
+                    fields = it.editableConfigFields,
+                    path = path,
+                    text = newValue,
+                ),
+                configStatus = "",
+            )
+        }
+    }
+
+    fun onEditableConfigFieldBooleanChange(path: String, newValue: Boolean) {
+        _settingsState.update {
+            it.copy(
+                editableConfigFields = EditableConfigFormMapper.updateBoolean(
+                    fields = it.editableConfigFields,
+                    path = path,
+                    value = newValue,
+                ),
+                configStatus = "",
+            )
+        }
     }
 
     fun loadEditableConfig() {
@@ -171,7 +192,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _settingsState.update {
                         it.copy(
                             isConfigLoading = false,
-                            editableConfigInput = prettySettingsJson(result.data.settings),
+                            editableConfigFields = EditableConfigFormMapper.flatten(result.data.settings),
                             configStatus = "已拉取可编辑配置。",
                         )
                     }
@@ -195,15 +216,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun saveEditableConfig() {
         val baseUrl = normalizeCurrentBaseUrl()
-        val raw = _settingsState.value.editableConfigInput.trim()
-        if (raw.isEmpty()) {
-            _settingsState.update { it.copy(configStatus = "请先加载或填写配置 JSON。") }
+        val fields = _settingsState.value.editableConfigFields
+        if (fields.isEmpty()) {
+            _settingsState.update { it.copy(configStatus = "请先加载可编辑配置。") }
             return
         }
 
-        val parsed = runCatching { parseSettingsJson(raw) }.getOrElse { throwable ->
+        val parsed = runCatching { EditableConfigFormMapper.buildPayload(fields) }.getOrElse { throwable ->
             _settingsState.update {
-                it.copy(configStatus = "JSON 解析失败：${throwable.message ?: "格式错误"}")
+                it.copy(configStatus = throwable.message ?: "配置格式错误。")
             }
             return
         }
@@ -221,7 +242,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _settingsState.update {
                         it.copy(
                             isConfigSaving = false,
-                            editableConfigInput = prettySettingsJson(result.data.settings),
+                            editableConfigFields = EditableConfigFormMapper.flatten(result.data.settings),
                             configStatus = "配置已保存并生效。",
                         )
                     }
@@ -258,7 +279,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _settingsState.update {
                         it.copy(
                             isConfigResetting = false,
-                            editableConfigInput = prettySettingsJson(result.data.settings),
+                            editableConfigFields = EditableConfigFormMapper.flatten(result.data.settings),
                             configStatus = "已恢复默认配置。",
                         )
                     }
@@ -691,51 +712,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _xiaohongshuState.update {
             it.copy(isSyncing = false, errorMessage = "同步超时，请稍后重试。")
         }
-    }
-
-    private fun prettySettingsJson(settings: Map<String, Any?>): String {
-        return JSONObject(settings).toString(2)
-    }
-
-    private fun parseSettingsJson(raw: String): Map<String, Any?> {
-        try {
-            val json = JSONObject(raw)
-            return jsonObjectToMap(json)
-        } catch (exc: JSONException) {
-            throw IllegalArgumentException(exc.message ?: "invalid json", exc)
-        }
-    }
-
-    private fun jsonObjectToMap(payload: JSONObject): Map<String, Any?> {
-        val map = linkedMapOf<String, Any?>()
-        val keys = payload.keys()
-        while (keys.hasNext()) {
-            val key = keys.next()
-            val value = payload.opt(key)
-            map[key] = when (value) {
-                is JSONObject -> jsonObjectToMap(value)
-                is JSONArray -> jsonArrayToList(value)
-                JSONObject.NULL -> null
-                else -> value
-            }
-        }
-        return map
-    }
-
-    private fun jsonArrayToList(payload: JSONArray): List<Any?> {
-        val list = mutableListOf<Any?>()
-        for (index in 0 until payload.length()) {
-            val value = payload.opt(index)
-            list.add(
-                when (value) {
-                    is JSONObject -> jsonObjectToMap(value)
-                    is JSONArray -> jsonArrayToList(value)
-                    JSONObject.NULL -> null
-                    else -> value
-                }
-            )
-        }
-        return list
     }
 
     private fun normalizeCurrentBaseUrl(): String {

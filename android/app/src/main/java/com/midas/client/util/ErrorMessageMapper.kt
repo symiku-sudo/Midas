@@ -45,7 +45,7 @@ object ErrorMessageMapper {
 
         return when (context) {
             ErrorContext.CONNECTION -> "服务端地址或请求参数不合法。"
-            ErrorContext.CONFIG -> "配置内容不合法，请检查 JSON 格式与字段值。"
+            ErrorContext.CONFIG -> "配置内容不合法，请检查字段值。"
             ErrorContext.BILIBILI -> "输入链接无效，请使用 bilibili.com 或 b23.tv 链接。"
             ErrorContext.XIAOHONGSHU_SYNC, ErrorContext.XIAOHONGSHU_JOB -> "同步参数不合法，请检查同步数量和配置。"
         }

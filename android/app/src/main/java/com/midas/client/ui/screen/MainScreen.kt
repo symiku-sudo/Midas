@@ -36,6 +36,8 @@ import com.midas.client.data.model.BilibiliSummaryData
 import com.midas.client.data.model.XiaohongshuSavedNote
 import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.ui.components.MarkdownText
+import com.midas.client.util.ConfigFieldType
+import com.midas.client.util.EditableConfigField
 
 private enum class MainTab(val title: String) {
     SETTINGS("设置"),
@@ -81,7 +83,8 @@ fun MainScreen(viewModel: MainViewModel) {
                     onSave = viewModel::saveBaseUrl,
                     onTestConnection = viewModel::testConnection,
                     onLoadConfig = viewModel::loadEditableConfig,
-                    onConfigInputChange = viewModel::onEditableConfigInputChange,
+                    onConfigTextChange = viewModel::onEditableConfigFieldTextChange,
+                    onConfigBooleanChange = viewModel::onEditableConfigFieldBooleanChange,
                     onSaveConfig = viewModel::saveEditableConfig,
                     onResetConfig = viewModel::resetEditableConfig,
                     modifier = Modifier
@@ -144,7 +147,8 @@ private fun SettingsPanel(
     onSave: () -> Unit,
     onTestConnection: () -> Unit,
     onLoadConfig: () -> Unit,
-    onConfigInputChange: (String) -> Unit,
+    onConfigTextChange: (String, String) -> Unit,
+    onConfigBooleanChange: (String, Boolean) -> Unit,
     onSaveConfig: () -> Unit,
     onResetConfig: () -> Unit,
     modifier: Modifier = Modifier,
@@ -188,7 +192,7 @@ private fun SettingsPanel(
             }
             Button(
                 onClick = onSaveConfig,
-                enabled = !state.isConfigSaving && state.editableConfigInput.isNotBlank(),
+                enabled = !state.isConfigSaving && state.editableConfigFields.isNotEmpty(),
             ) {
                 Text(if (state.isConfigSaving) "保存中..." else "保存配置")
             }
@@ -196,16 +200,73 @@ private fun SettingsPanel(
                 Text(if (state.isConfigResetting) "恢复中..." else "恢复默认")
             }
         }
-        OutlinedTextField(
-            value = state.editableConfigInput,
-            onValueChange = onConfigInputChange,
-            label = { Text("可编辑配置 JSON") },
-            modifier = Modifier.fillMaxWidth(),
-            minLines = 10,
+        EditableConfigFieldsPanel(
+            fields = state.editableConfigFields,
+            onTextChange = onConfigTextChange,
+            onBooleanChange = onConfigBooleanChange,
         )
         if (state.configStatus.isNotBlank()) {
             Text(text = state.configStatus)
         }
+    }
+}
+
+@Composable
+private fun EditableConfigFieldsPanel(
+    fields: List<EditableConfigField>,
+    onTextChange: (String, String) -> Unit,
+    onBooleanChange: (String, Boolean) -> Unit,
+) {
+    if (fields.isEmpty()) {
+        Text(
+            text = "点击“加载配置”后可逐项编辑；布尔值使用开关，其他类型使用输入框。",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        return
+    }
+
+    val groups = fields.groupBy { field -> field.path.substringBefore(".") }
+    groups.forEach { (groupName, groupFields) ->
+        Text(groupName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
+        groupFields.forEach { field ->
+            when (field.type) {
+                ConfigFieldType.BOOLEAN -> {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(field.path)
+                            Text(
+                                text = "布尔开关",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        Switch(
+                            checked = field.boolValue,
+                            onCheckedChange = { checked ->
+                                onBooleanChange(field.path, checked)
+                            },
+                        )
+                    }
+                }
+
+                else -> {
+                    val isList = field.type == ConfigFieldType.LIST_JSON
+                    OutlinedTextField(
+                        value = field.textValue,
+                        onValueChange = { value ->
+                            onTextChange(field.path, value)
+                        },
+                        label = { Text(field.path) },
+                        modifier = Modifier.fillMaxWidth(),
+                        singleLine = !isList,
+                        minLines = if (isList) 2 else 1,
+                    )
+                }
+            }
+        }
+        HorizontalDivider()
     }
 }
 
