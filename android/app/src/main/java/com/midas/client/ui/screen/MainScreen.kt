@@ -132,8 +132,12 @@ private val configFieldSpecs = listOf(
         path = "asr.language",
         section = "总结能力",
         title = "转写语言",
-        description = "Whisper 语言代码，中文填 zh，英文可填 en。",
-        control = ConfigControlKind.TEXT,
+        description = "当前仅支持中文或英文。",
+        control = ConfigControlKind.DROPDOWN,
+        options = listOf(
+            ConfigOption(value = "zh", label = "中文（zh）"),
+            ConfigOption(value = "en", label = "英文（en）"),
+        ),
     ),
     ConfigFieldSpec(
         path = "xiaohongshu.mode",
@@ -166,6 +170,53 @@ private val configFieldSpecs = listOf(
         title = "单次最大同步条数",
         description = "客户端可请求的上限，防止单次任务过大。",
         control = ConfigControlKind.TEXT,
+    ),
+    ConfigFieldSpec(
+        path = "xiaohongshu.random_delay_min_seconds",
+        section = "小红书同步",
+        title = "请求间最小随机间隔（秒）",
+        description = "同一轮同步中，相邻两次请求之间的最小等待时间。",
+        control = ConfigControlKind.TEXT,
+    ),
+    ConfigFieldSpec(
+        path = "xiaohongshu.random_delay_max_seconds",
+        section = "小红书同步",
+        title = "请求间最大随机间隔（秒）",
+        description = "同一轮同步中，相邻两次请求之间的最大等待时间。",
+        control = ConfigControlKind.TEXT,
+    ),
+    ConfigFieldSpec(
+        path = "xiaohongshu.min_live_sync_interval_seconds",
+        section = "小红书同步",
+        title = "两次真实同步最小间隔（秒）",
+        description = "两次 web_readonly 真实同步任务之间的最短间隔。",
+        control = ConfigControlKind.TEXT,
+    ),
+    ConfigFieldSpec(
+        path = "xiaohongshu.request_timeout_seconds",
+        section = "小红书同步",
+        title = "小红书请求超时（秒）",
+        description = "单次小红书上游请求的超时时间。",
+        control = ConfigControlKind.TEXT,
+    ),
+    ConfigFieldSpec(
+        path = "xiaohongshu.circuit_breaker_failures",
+        section = "小红书同步",
+        title = "连续失败熔断阈值",
+        description = "连续失败达到该次数时，本次同步任务会中断。",
+        control = ConfigControlKind.TEXT,
+    ),
+    ConfigFieldSpec(
+        path = "xiaohongshu.web_readonly.detail_fetch_mode",
+        section = "小红书同步",
+        title = "详情抓取策略",
+        description = "auto=按需抓，always=总是抓，never=不抓详情。",
+        control = ConfigControlKind.DROPDOWN,
+        options = listOf(
+            ConfigOption(value = "auto", label = "按需抓取（auto）"),
+            ConfigOption(value = "always", label = "总是抓取（always）"),
+            ConfigOption(value = "never", label = "不抓详情（never）"),
+        ),
     ),
     ConfigFieldSpec(
         path = "runtime.log_level",
@@ -470,8 +521,15 @@ private fun ConfigDropdownField(
                 value = selectedLabel,
                 onValueChange = {},
                 readOnly = true,
+                trailingIcon = { Text("▼") },
+                singleLine = true,
+                modifier = Modifier
+                    .fillMaxWidth(),
+            )
+            Box(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .height(56.dp)
                     .clickable { expanded = true },
             )
             DropdownMenu(
