@@ -10,14 +10,19 @@ from app.core.config import get_settings
 from app.core.errors import AppError, ErrorCode
 from app.core.response import success_response
 from app.models.schemas import (
+    BilibiliNoteSaveRequest,
     BilibiliSummaryRequest,
     HealthData,
+    NotesDeleteData,
+    NotesSaveBatchData,
+    XiaohongshuNotesSaveRequest,
     XiaohongshuSyncJobCreateData,
     XiaohongshuSyncJobError,
     XiaohongshuSyncJobStatusData,
     XiaohongshuSyncRequest,
 )
 from app.services.bilibili import BilibiliSummarizer
+from app.services.note_library import NoteLibraryService
 from app.services.xiaohongshu import XiaohongshuSyncService
 from app.services.xiaohongshu_job import XiaohongshuSyncJobManager
 
@@ -42,6 +47,12 @@ def _get_xiaohongshu_sync_job_manager() -> XiaohongshuSyncJobManager:
     return XiaohongshuSyncJobManager()
 
 
+@lru_cache(maxsize=1)
+def _get_note_library_service() -> NoteLibraryService:
+    settings = get_settings()
+    return NoteLibraryService(settings)
+
+
 @router.get("/health")
 async def health(request: Request) -> dict:
     data = HealthData().model_dump()
@@ -56,12 +67,81 @@ async def bilibili_summarize(payload: BilibiliSummaryRequest, request: Request) 
     return success_response(data=result.model_dump(), request_id=request.state.request_id)
 
 
+@router.post("/api/notes/bilibili/save")
+async def save_bilibili_note(payload: BilibiliNoteSaveRequest, request: Request) -> dict:
+    service = _get_note_library_service()
+    saved = service.save_bilibili_note(
+        video_url=payload.video_url,
+        summary_markdown=payload.summary_markdown,
+        elapsed_ms=payload.elapsed_ms,
+        transcript_chars=payload.transcript_chars,
+        title=payload.title,
+    )
+    return success_response(data=saved.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/notes/bilibili")
+async def list_bilibili_notes(request: Request) -> dict:
+    service = _get_note_library_service()
+    result = service.list_bilibili_notes()
+    return success_response(data=result.model_dump(), request_id=request.state.request_id)
+
+
+@router.delete("/api/notes/bilibili/{note_id}")
+async def delete_bilibili_note(note_id: str, request: Request) -> dict:
+    service = _get_note_library_service()
+    deleted_count = service.delete_bilibili_note(note_id)
+    data = NotesDeleteData(deleted_count=deleted_count)
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.delete("/api/notes/bilibili")
+async def clear_bilibili_notes(request: Request) -> dict:
+    service = _get_note_library_service()
+    deleted_count = service.clear_bilibili_notes()
+    data = NotesDeleteData(deleted_count=deleted_count)
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
 @router.post("/api/xiaohongshu/sync")
 async def xiaohongshu_sync(payload: XiaohongshuSyncRequest, request: Request) -> dict:
     logger.info("Receive xiaohongshu sync request, limit=%s", payload.limit)
     service = _get_xiaohongshu_sync_service()
     result = await service.sync(limit=payload.limit, confirm_live=payload.confirm_live)
     return success_response(data=result.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/notes/xiaohongshu/save-batch")
+async def save_xiaohongshu_notes(
+    payload: XiaohongshuNotesSaveRequest, request: Request
+) -> dict:
+    service = _get_note_library_service()
+    saved_count = service.save_xiaohongshu_notes(payload.notes)
+    data = NotesSaveBatchData(saved_count=saved_count)
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/notes/xiaohongshu")
+async def list_xiaohongshu_notes(request: Request) -> dict:
+    service = _get_note_library_service()
+    result = service.list_xiaohongshu_notes()
+    return success_response(data=result.model_dump(), request_id=request.state.request_id)
+
+
+@router.delete("/api/notes/xiaohongshu/{note_id}")
+async def delete_xiaohongshu_note(note_id: str, request: Request) -> dict:
+    service = _get_note_library_service()
+    deleted_count = service.delete_xiaohongshu_note(note_id)
+    data = NotesDeleteData(deleted_count=deleted_count)
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.delete("/api/notes/xiaohongshu")
+async def clear_xiaohongshu_notes(request: Request) -> dict:
+    service = _get_note_library_service()
+    deleted_count = service.clear_xiaohongshu_notes()
+    data = NotesDeleteData(deleted_count=deleted_count)
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 
 @router.post("/api/xiaohongshu/sync/jobs")

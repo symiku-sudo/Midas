@@ -60,6 +60,83 @@ Success `data`:
 }
 ```
 
+## `POST /api/notes/bilibili/save`
+
+用途：手动保存一次 B 站总结结果到笔记库。
+
+Request:
+
+```json
+{
+  "video_url": "https://www.bilibili.com/video/BV...",
+  "summary_markdown": "# 总结...",
+  "elapsed_ms": 12345,
+  "transcript_chars": 8888,
+  "title": "可选标题"
+}
+```
+
+Success `data`:
+
+```json
+{
+  "note_id": "9b7f....",
+  "title": "可选标题",
+  "video_url": "https://www.bilibili.com/video/BV...",
+  "summary_markdown": "# 总结...",
+  "elapsed_ms": 12345,
+  "transcript_chars": 8888,
+  "saved_at": "2026-02-25 13:20:00"
+}
+```
+
+## `GET /api/notes/bilibili`
+
+用途：按时间倒序列出已保存 B 站笔记。
+
+Success `data`:
+
+```json
+{
+  "total": 2,
+  "items": [
+    {
+      "note_id": "9b7f....",
+      "title": "可选标题",
+      "video_url": "https://www.bilibili.com/video/BV...",
+      "summary_markdown": "# 总结...",
+      "elapsed_ms": 12345,
+      "transcript_chars": 8888,
+      "saved_at": "2026-02-25 13:20:00"
+    }
+  ]
+}
+```
+
+## `DELETE /api/notes/bilibili/{note_id}`
+
+用途：删除单条已保存 B 站笔记。
+
+Success `data`:
+
+```json
+{
+  "deleted_count": 1
+}
+```
+
+## `DELETE /api/notes/bilibili`
+
+用途：清空所有已保存 B 站笔记。
+
+Success `data`:
+
+```json
+{
+  "deleted_count": 12
+}
+```
+
 ## `POST /api/xiaohongshu/sync`
 
 Request:
@@ -95,6 +172,82 @@ Success `data`:
   ]
 }
 ```
+
+## `POST /api/notes/xiaohongshu/save-batch`
+
+用途：批量保存小红书总结结果到笔记库。
+
+Request:
+
+```json
+{
+  "notes": [
+    {
+      "note_id": "mock-note-001",
+      "title": "...",
+      "source_url": "...",
+      "summary_markdown": "..."
+    }
+  ]
+}
+```
+
+Success `data`:
+
+```json
+{
+  "saved_count": 1
+}
+```
+
+## `GET /api/notes/xiaohongshu`
+
+用途：按时间倒序列出已保存小红书笔记。
+
+Success `data`:
+
+```json
+{
+  "total": 2,
+  "items": [
+    {
+      "note_id": "mock-note-001",
+      "title": "...",
+      "source_url": "...",
+      "summary_markdown": "...",
+      "saved_at": "2026-02-25 13:20:00"
+    }
+  ]
+}
+```
+
+## `DELETE /api/notes/xiaohongshu/{note_id}`
+
+用途：删除单条已保存小红书笔记。
+
+Success `data`:
+
+```json
+{
+  "deleted_count": 1
+}
+```
+
+## `DELETE /api/notes/xiaohongshu`
+
+用途：清空所有已保存小红书笔记。
+
+Success `data`:
+
+```json
+{
+  "deleted_count": 8
+}
+```
+
+说明：
+- 删除“已保存笔记”不会删除去重表 `xiaohongshu_synced_notes` 里的 `note_id`。
+- 因此同一 `note_id` 下次同步仍会被判定为重复并跳过。
 
 ## `POST /api/xiaohongshu/sync/jobs`
 

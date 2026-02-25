@@ -20,6 +20,29 @@ class BilibiliSummaryData(BaseModel):
     transcript_chars: int
 
 
+class BilibiliNoteSaveRequest(BaseModel):
+    video_url: str = Field(min_length=3, max_length=2000)
+    summary_markdown: str = Field(min_length=1)
+    elapsed_ms: int = Field(ge=0)
+    transcript_chars: int = Field(ge=0)
+    title: str = Field(default="", max_length=200)
+
+
+class BilibiliSavedNote(BaseModel):
+    note_id: str
+    title: str
+    video_url: str
+    summary_markdown: str
+    elapsed_ms: int
+    transcript_chars: int
+    saved_at: str
+
+
+class BilibiliSavedNotesData(BaseModel):
+    total: int
+    items: list[BilibiliSavedNote]
+
+
 class XiaohongshuSyncRequest(BaseModel):
     limit: int | None = Field(default=None, ge=1, le=100)
     confirm_live: bool = False
@@ -40,6 +63,31 @@ class XiaohongshuSyncData(BaseModel):
     failed_count: int
     circuit_opened: bool
     summaries: list[XiaohongshuSummaryItem]
+
+
+class XiaohongshuNotesSaveRequest(BaseModel):
+    notes: list[XiaohongshuSummaryItem] = Field(min_length=1)
+
+
+class XiaohongshuSavedNote(BaseModel):
+    note_id: str
+    title: str
+    source_url: str
+    summary_markdown: str
+    saved_at: str
+
+
+class XiaohongshuSavedNotesData(BaseModel):
+    total: int
+    items: list[XiaohongshuSavedNote]
+
+
+class NotesDeleteData(BaseModel):
+    deleted_count: int
+
+
+class NotesSaveBatchData(BaseModel):
+    saved_count: int
 
 
 class XiaohongshuSyncJobCreateData(BaseModel):

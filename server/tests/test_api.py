@@ -6,6 +6,7 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 from app.api.routes import (
+    _get_note_library_service,
     _get_xiaohongshu_sync_job_manager,
     _get_xiaohongshu_sync_service,
 )
@@ -16,6 +17,7 @@ client = TestClient(app)
 
 
 def _reset_xiaohongshu_state() -> None:
+    _get_note_library_service.cache_clear()
     _get_xiaohongshu_sync_service.cache_clear()
     _get_xiaohongshu_sync_job_manager.cache_clear()
     get_settings.cache_clear()
@@ -117,3 +119,77 @@ def test_xiaohongshu_sync_job_not_found() -> None:
     body = resp.json()
     assert body["ok"] is False
     assert body["code"] == "INVALID_INPUT"
+
+
+def test_bilibili_saved_notes_crud() -> None:
+    _reset_xiaohongshu_state()
+
+    save = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": "https://www.bilibili.com/video/BV1xx411c7mD",
+            "summary_markdown": "# 总结\n\n测试内容",
+            "elapsed_ms": 123,
+            "transcript_chars": 456,
+            "title": "测试B站笔记",
+        },
+    )
+    assert save.status_code == 200
+    save_body = save.json()
+    assert save_body["ok"] is True
+    note_id = save_body["data"]["note_id"]
+    assert note_id
+
+    listed = client.get("/api/notes/bilibili")
+    assert listed.status_code == 200
+    listed_body = listed.json()
+    assert listed_body["ok"] is True
+    assert listed_body["data"]["total"] == 1
+    assert listed_body["data"]["items"][0]["note_id"] == note_id
+
+    deleted = client.delete(f"/api/notes/bilibili/{note_id}")
+    assert deleted.status_code == 200
+    assert deleted.json()["data"]["deleted_count"] == 1
+
+    listed_after = client.get("/api/notes/bilibili")
+    assert listed_after.status_code == 200
+    assert listed_after.json()["data"]["total"] == 0
+
+
+def test_xiaohongshu_saved_notes_crud_and_dedupe_independent() -> None:
+    _reset_xiaohongshu_state()
+
+    sync_resp = client.post("/api/xiaohongshu/sync", json={"limit": 1})
+    assert sync_resp.status_code == 200
+    sync_body = sync_resp.json()
+    assert sync_body["ok"] is True
+    assert sync_body["data"]["new_count"] == 1
+    first_summary = sync_body["data"]["summaries"][0]
+
+    save_resp = client.post(
+        "/api/notes/xiaohongshu/save-batch",
+        json={"notes": [first_summary]},
+    )
+    assert save_resp.status_code == 200
+    assert save_resp.json()["data"]["saved_count"] == 1
+
+    listed = client.get("/api/notes/xiaohongshu")
+    assert listed.status_code == 200
+    listed_body = listed.json()
+    assert listed_body["data"]["total"] == 1
+    note_id = listed_body["data"]["items"][0]["note_id"]
+
+    deleted = client.delete(f"/api/notes/xiaohongshu/{note_id}")
+    assert deleted.status_code == 200
+    assert deleted.json()["data"]["deleted_count"] == 1
+
+    listed_after = client.get("/api/notes/xiaohongshu")
+    assert listed_after.status_code == 200
+    assert listed_after.json()["data"]["total"] == 0
+
+    # Saved note deletion should not affect xiaohongshu dedupe table.
+    sync_again = client.post("/api/xiaohongshu/sync", json={"limit": 1})
+    assert sync_again.status_code == 200
+    sync_again_body = sync_again.json()
+    assert sync_again_body["data"]["new_count"] == 0
+    assert sync_again_body["data"]["skipped_count"] == 1
