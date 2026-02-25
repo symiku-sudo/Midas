@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -584,6 +585,112 @@ async def test_web_readonly_detail_fetch_extracts_content_and_images(monkeypatch
     assert len(_FakeClient.calls) == 3
     assert any("/explore/n1" in url for url in _FakeClient.calls)
     assert any("/note/detail?" in url for url in _FakeClient.calls)
+
+
+@pytest.mark.asyncio
+async def test_web_readonly_paginate_until_limit(monkeypatch) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=".tmp/test-midas.db",
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url=(
+                    "https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page?num=2&cursor="
+                ),
+                request_method="GET",
+                request_headers={"Cookie": "a=b"},
+                items_path="data.notes",
+                note_id_field="note_id",
+                title_field="title",
+                content_field_candidates=["desc"],
+            ),
+        )
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+
+    class _FakeResp:
+        def __init__(
+            self, payload: dict | None = None, text: str = "", status_code: int = 200
+        ) -> None:
+            self.status_code = status_code
+            self._payload = payload or {}
+            self.text = text
+
+        def json(self) -> dict:
+            return self._payload
+
+    class _FakeClient:
+        list_urls: list[str] = []
+
+        def __init__(self, *_, **__):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, **kwargs):
+            url = kwargs["url"]
+            if "collect/page" in url:
+                self.list_urls.append(url)
+                cursor = parse_qs(urlparse(url).query).get("cursor", [""])[0]
+                if cursor == "":
+                    return _FakeResp(
+                        {
+                            "data": {
+                                "notes": [
+                                    {
+                                        "note_id": "n1",
+                                        "title": "标题1",
+                                        "desc": "正文1",
+                                    },
+                                    {
+                                        "note_id": "n2",
+                                        "title": "标题2",
+                                        "desc": "正文2",
+                                    },
+                                ],
+                                "has_more": True,
+                                "cursor": "cursor-page-2",
+                            }
+                        }
+                    )
+                if cursor == "cursor-page-2":
+                    return _FakeResp(
+                        {
+                            "data": {
+                                "notes": [
+                                    {
+                                        "note_id": "n3",
+                                        "title": "标题3",
+                                        "desc": "正文3",
+                                    },
+                                    {
+                                        "note_id": "n4",
+                                        "title": "标题4",
+                                        "desc": "正文4",
+                                    },
+                                ],
+                                "has_more": False,
+                                "cursor": "cursor-page-3",
+                            }
+                        }
+                    )
+                return _FakeResp({"data": {"notes": [], "has_more": False}})
+
+            # Note page fallback can safely fail in this case.
+            if "/explore/" in url:
+                return _FakeResp(status_code=404)
+            return _FakeResp({"data": {"notes": [], "has_more": False}})
+
+    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeClient)
+
+    notes = await source.fetch_recent(limit=3)
+    assert [item.note_id for item in notes] == ["n1", "n2", "n3"]
+    assert len(_FakeClient.list_urls) == 2
+    assert "cursor=cursor-page-2" in _FakeClient.list_urls[1]
 
 
 @pytest.mark.asyncio

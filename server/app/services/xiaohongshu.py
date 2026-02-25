@@ -10,7 +10,7 @@ import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable
-from urllib.parse import quote, urlparse
+from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
 import httpx
 
@@ -153,6 +153,25 @@ class XiaohongshuWebReadonlySource:
     _INITIAL_STATE_PATTERN = re.compile(
         r"window\.__INITIAL_STATE__\s*=\s*(\{.*?\})\s*;?\s*</script>", re.S
     )
+    _HAS_MORE_PATHS = (
+        "data.has_more",
+        "data.hasMore",
+        "has_more",
+        "hasMore",
+        "data.page.has_more",
+        "data.page.hasMore",
+    )
+    _CURSOR_PATHS = (
+        "data.cursor",
+        "data.next_cursor",
+        "data.nextCursor",
+        "cursor",
+        "next_cursor",
+        "nextCursor",
+        "data.page.cursor",
+        "data.page.next_cursor",
+        "data.page.nextCursor",
+    )
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -199,140 +218,180 @@ class XiaohongshuWebReadonlySource:
         max_images = max(int(cfg.max_images_per_note), 0)
         timeout = self._settings.xiaohongshu.request_timeout_seconds
 
+        notes: list[XiaohongshuNote] = []
+        page_url = request_url
+        page_body = body
+        seen_page_tokens: set[tuple[str, str | None]] = set()
+        max_pages = max(min(limit * 3, 120), 6)
+        page_index = 0
+
         async with httpx.AsyncClient(timeout=timeout) as client:
-            payload = await self._request_json(
-                client=client,
-                method=method,
-                url=request_url,
-                headers=headers,
-                body=body,
-            )
-
-            records = self._dig(payload, cfg.items_path)
-            if not isinstance(records, list):
-                raise AppError(
-                    code=ErrorCode.UPSTREAM_ERROR,
-                    message=f"响应中 items_path 无法解析为列表：{cfg.items_path}",
-                    status_code=502,
-                )
-
-            notes: list[XiaohongshuNote] = []
-            for record in records:
-                if len(notes) >= limit:
-                    break
-                if not isinstance(record, dict):
-                    continue
-
-                note_id = self._read_str(record, cfg.note_id_field)
-                if not note_id:
-                    continue
-
-                title = (
-                    self._read_str(record, cfg.title_field) or f"未命名笔记 {note_id}"
-                )
-                source_url = self._read_str(record, cfg.source_url_field)
-                if not source_url:
-                    source_url = f"https://www.xiaohongshu.com/explore/{note_id}"
-                is_video = self._is_video_note(record)
-
-                content = self._pick_valid_content(
-                    payload=record,
-                    candidates=cfg.content_field_candidates,
-                    title=title,
-                )
-                image_urls = self._extract_image_urls(
-                    payload=record,
-                    candidates=cfg.image_field_candidates,
-                    max_count=max_images,
-                )
-
-                # Primary extraction path in MVP:
-                # parse note detail from explore page initial state.
-                page_note = await self._fetch_note_from_page(
+            while len(notes) < limit and page_index < max_pages:
+                page_index += 1
+                payload = await self._request_json(
                     client=client,
-                    note_id=note_id,
-                    source_url=source_url,
-                    record=record,
+                    method=method,
+                    url=page_url,
                     headers=headers,
-                    host_allowlist=cfg.host_allowlist,
+                    body=page_body,
                 )
-                if page_note is not None:
-                    page_title = self._read_str(page_note, "title")
-                    if page_title:
-                        title = page_title
 
-                    page_content = self._pick_valid_content(
-                        payload=page_note,
-                        candidates=["desc", "content", "note_desc", "noteDesc", "note_text"],
+                records = self._dig(payload, cfg.items_path)
+                if not isinstance(records, list):
+                    raise AppError(
+                        code=ErrorCode.UPSTREAM_ERROR,
+                        message=f"响应中 items_path 无法解析为列表：{cfg.items_path}",
+                        status_code=502,
+                    )
+
+                for record in records:
+                    if len(notes) >= limit:
+                        break
+                    if not isinstance(record, dict):
+                        continue
+
+                    note_id = self._read_str(record, cfg.note_id_field)
+                    if not note_id:
+                        continue
+
+                    title = (
+                        self._read_str(record, cfg.title_field) or f"未命名笔记 {note_id}"
+                    )
+                    source_url = self._read_str(record, cfg.source_url_field)
+                    if not source_url:
+                        source_url = f"https://www.xiaohongshu.com/explore/{note_id}"
+                    is_video = self._is_video_note(record)
+
+                    content = self._pick_valid_content(
+                        payload=record,
+                        candidates=cfg.content_field_candidates,
                         title=title,
                     )
-                    if page_content:
-                        content = page_content
-
-                    page_images = self._extract_image_urls(
-                        payload=page_note,
-                        candidates=["imageList", "image_list", "images", "cover"],
+                    image_urls = self._extract_image_urls(
+                        payload=record,
+                        candidates=cfg.image_field_candidates,
                         max_count=max_images,
                     )
-                    image_urls = self._merge_image_urls(
-                        primary=page_images,
-                        secondary=image_urls,
-                        max_count=max_images,
-                    )
-                    is_video = is_video or self._is_video_note(page_note)
 
-                # Secondary extraction path:
-                # optional JSON detail endpoint when page extraction is insufficient.
-                if (not is_video) and self._should_fetch_detail(
-                    detail_fetch_mode=detail_fetch_mode,
-                    content=content,
-                    image_urls=image_urls,
-                ):
-                    detail_payload = await self._fetch_detail_payload(
+                    # Primary extraction path in MVP:
+                    # parse note detail from explore page initial state.
+                    page_note = await self._fetch_note_from_page(
                         client=client,
-                        detail_url_template=detail_url_template,
-                        detail_method=detail_method,
-                        detail_headers=detail_headers,
-                        detail_body=detail_body,
                         note_id=note_id,
                         source_url=source_url,
                         record=record,
+                        headers=headers,
                         host_allowlist=cfg.host_allowlist,
                     )
-                    if detail_payload is not None:
-                        is_video = is_video or self._is_video_note(detail_payload)
-                        detail_content = self._pick_valid_content(
-                            payload=detail_payload,
-                            candidates=cfg.detail_content_field_candidates,
+                    if page_note is not None:
+                        page_title = self._read_str(page_note, "title")
+                        if page_title:
+                            title = page_title
+
+                        page_content = self._pick_valid_content(
+                            payload=page_note,
+                            candidates=[
+                                "desc",
+                                "content",
+                                "note_desc",
+                                "noteDesc",
+                                "note_text",
+                            ],
                             title=title,
                         )
-                        if detail_content:
-                            content = detail_content
+                        if page_content:
+                            content = page_content
 
-                        detail_images = self._extract_image_urls(
-                            payload=detail_payload,
-                            candidates=cfg.detail_image_field_candidates,
+                        page_images = self._extract_image_urls(
+                            payload=page_note,
+                            candidates=["imageList", "image_list", "images", "cover"],
                             max_count=max_images,
                         )
                         image_urls = self._merge_image_urls(
-                            primary=detail_images,
+                            primary=page_images,
                             secondary=image_urls,
                             max_count=max_images,
                         )
+                        is_video = is_video or self._is_video_note(page_note)
 
-                if not content and not is_video:
-                    continue
-
-                notes.append(
-                    XiaohongshuNote(
-                        note_id=note_id,
-                        title=title,
+                    # Secondary extraction path:
+                    # optional JSON detail endpoint when page extraction is insufficient.
+                    if (not is_video) and self._should_fetch_detail(
+                        detail_fetch_mode=detail_fetch_mode,
                         content=content,
-                        source_url=source_url,
                         image_urls=image_urls,
-                        is_video=is_video,
+                    ):
+                        detail_payload = await self._fetch_detail_payload(
+                            client=client,
+                            detail_url_template=detail_url_template,
+                            detail_method=detail_method,
+                            detail_headers=detail_headers,
+                            detail_body=detail_body,
+                            note_id=note_id,
+                            source_url=source_url,
+                            record=record,
+                            host_allowlist=cfg.host_allowlist,
+                        )
+                        if detail_payload is not None:
+                            is_video = is_video or self._is_video_note(detail_payload)
+                            detail_content = self._pick_valid_content(
+                                payload=detail_payload,
+                                candidates=cfg.detail_content_field_candidates,
+                                title=title,
+                            )
+                            if detail_content:
+                                content = detail_content
+
+                            detail_images = self._extract_image_urls(
+                                payload=detail_payload,
+                                candidates=cfg.detail_image_field_candidates,
+                                max_count=max_images,
+                            )
+                            image_urls = self._merge_image_urls(
+                                primary=detail_images,
+                                secondary=image_urls,
+                                max_count=max_images,
+                            )
+
+                    if not content and not is_video:
+                        continue
+
+                    notes.append(
+                        XiaohongshuNote(
+                            note_id=note_id,
+                            title=title,
+                            content=content,
+                            source_url=source_url,
+                            image_urls=image_urls,
+                            is_video=is_video,
+                        )
                     )
+
+                if len(notes) >= limit:
+                    break
+
+                has_more = self._extract_has_more(payload)
+                next_cursor = self._extract_next_cursor(payload)
+                if not has_more and not next_cursor:
+                    break
+                if not next_cursor:
+                    break
+
+                next_page = self._build_next_page_request(
+                    method=method,
+                    current_url=page_url,
+                    current_body=page_body,
+                    next_cursor=next_cursor,
                 )
+                if next_page is None:
+                    break
+                if next_page == (page_url, page_body):
+                    break
+                page_url, page_body = next_page
+                page_token = (page_url, page_body)
+                if page_token in seen_page_tokens:
+                    break
+                seen_page_tokens.add(page_token)
 
         if not notes:
             raise AppError(
@@ -443,6 +502,89 @@ class XiaohongshuWebReadonlySource:
                 status_code=502,
             )
         return payload
+
+    def _extract_has_more(self, payload: dict) -> bool:
+        for path in self._HAS_MORE_PATHS:
+            value = self._read_value(payload, path)
+            parsed = self._coerce_bool(value)
+            if parsed is not None:
+                return parsed
+        return False
+
+    def _extract_next_cursor(self, payload: dict) -> str:
+        for path in self._CURSOR_PATHS:
+            value = self._read_str(payload, path)
+            if value:
+                return value
+        return ""
+
+    def _coerce_bool(self, value: object) -> bool | None:
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, int):
+            return value != 0
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"1", "true", "yes", "y"}:
+                return True
+            if normalized in {"0", "false", "no", "n"}:
+                return False
+        return None
+
+    def _build_next_page_request(
+        self,
+        *,
+        method: str,
+        current_url: str,
+        current_body: str | None,
+        next_cursor: str,
+    ) -> tuple[str, str | None] | None:
+        if not next_cursor:
+            return None
+
+        if method == "GET":
+            parsed = urlparse(current_url)
+            query_items = parse_qsl(parsed.query, keep_blank_values=True)
+            cursor_key = next(
+                (key for key, _ in query_items if "cursor" in key.lower()),
+                "cursor",
+            )
+            replaced = False
+            next_query_items: list[tuple[str, str]] = []
+            for key, value in query_items:
+                if key == cursor_key:
+                    next_query_items.append((key, next_cursor))
+                    replaced = True
+                else:
+                    next_query_items.append((key, value))
+            if not replaced:
+                next_query_items.append((cursor_key, next_cursor))
+            next_query = urlencode(next_query_items, doseq=True)
+            next_url = urlunparse(parsed._replace(query=next_query))
+            return next_url, None
+
+        if method == "POST":
+            body_obj: dict[str, object]
+            if current_body:
+                try:
+                    parsed_body = json.loads(current_body)
+                except json.JSONDecodeError:
+                    return None
+                if not isinstance(parsed_body, dict):
+                    return None
+                body_obj = dict(parsed_body)
+            else:
+                body_obj = {}
+
+            cursor_key = next(
+                (key for key in body_obj.keys() if "cursor" in str(key).lower()),
+                "cursor",
+            )
+            body_obj[cursor_key] = next_cursor
+            next_body = json.dumps(body_obj, ensure_ascii=False, separators=(",", ":"))
+            return current_url, next_body
+
+        return None
 
     async def _fetch_note_from_page(
         self,

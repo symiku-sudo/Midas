@@ -667,7 +667,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             val stats = if (result == null) {
                                 "同步完成（未返回结果明细）。"
                             } else {
-                                "同步完成：拉取 ${result.fetchedCount}，新增 ${result.newCount}，跳过 ${result.skippedCount}，失败 ${result.failedCount}"
+                                "同步完成：请求 ${result.requestedLimit}，拉取 ${result.fetchedCount}，新增 ${result.newCount}，跳过 ${result.skippedCount}，失败 ${result.failedCount}"
                             }
                             _xiaohongshuState.update {
                                 it.copy(
