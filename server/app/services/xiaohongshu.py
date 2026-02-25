@@ -1000,9 +1000,6 @@ class XiaohongshuSyncService:
                         image_urls=note.image_urls,
                     )
                 summary = self._ensure_source_link(summary, note.source_url)
-                self._repository.mark_synced(
-                    note_id=note.note_id, title=note.title, source_url=note.source_url
-                )
                 summaries.append(
                     XiaohongshuSummaryItem(
                         note_id=note.note_id,
@@ -1010,6 +1007,10 @@ class XiaohongshuSyncService:
                         source_url=note.source_url,
                         summary_markdown=summary,
                     )
+                )
+                # Only mark dedupe id after summary payload is successfully built.
+                self._repository.mark_synced(
+                    note_id=note.note_id, title=note.title, source_url=note.source_url
                 )
                 new_count += 1
                 consecutive_failures = 0

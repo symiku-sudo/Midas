@@ -104,6 +104,33 @@ async def test_sync_circuit_breaker(tmp_path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_sync_failure_does_not_mark_note_as_synced(tmp_path) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="mock",
+            db_path=str(tmp_path / "midas.db"),
+            circuit_breaker_failures=10,
+            max_limit=30,
+            default_limit=20,
+        )
+    )
+    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
+    service = XiaohongshuSyncService(
+        settings=settings,
+        repository=repo,
+        source=FixedSource(),
+        llm_service=AlwaysFailLLM(),
+    )
+
+    result = await service.sync(limit=2)
+
+    assert result.new_count == 0
+    assert result.failed_count == 2
+    assert repo.is_synced("n1") is False
+    assert repo.is_synced("n2") is False
+
+
+@pytest.mark.asyncio
 async def test_web_readonly_requires_confirm_live(tmp_path) -> None:
     settings = Settings(
         xiaohongshu=XiaohongshuConfig(

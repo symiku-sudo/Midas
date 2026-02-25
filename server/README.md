@@ -54,6 +54,20 @@ tools/clean_tmp.sh
 - 若需保留小红书去重状态数据库：`tools/clean_tmp.sh --keep-db`。
 - 若服务正在运行，脚本默认会拒绝清理；可先 `tools/dev_server.sh stop`。
 
+## Prune unsaved synced note IDs
+
+当去重表里有“未保存到笔记库”的小红书 `note_id` 时，可批量清理：
+
+```bash
+server/.venv/bin/python server/tools/prune_unsaved_synced_notes.py --show-ids
+```
+
+仅预览不删除：
+
+```bash
+server/.venv/bin/python server/tools/prune_unsaved_synced_notes.py --dry-run --show-ids
+```
+
 ## Real-run config (Bilibili path)
 
 ```bash

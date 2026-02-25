@@ -80,6 +80,13 @@ cp config.real.example.yaml config.yaml
 - 系统命令可用：`yt-dlp`、`ffmpeg`
 - Python 依赖：`faster-whisper`（当 `asr.mode=faster_whisper`）
 
+### 2.3) 清理“未保存但已去重”的小红书 note_id
+
+```bash
+server/.venv/bin/python server/tools/prune_unsaved_synced_notes.py --dry-run --show-ids
+server/.venv/bin/python server/tools/prune_unsaved_synced_notes.py --show-ids
+```
+
 ### 3) 启动 Android 客户端
 
 - 用 Android Studio 打开 `android/` 目录。
