@@ -90,6 +90,14 @@ class NotesSaveBatchData(BaseModel):
     saved_count: int
 
 
+class EditableConfigData(BaseModel):
+    settings: dict[str, Any]
+
+
+class EditableConfigUpdateRequest(BaseModel):
+    settings: dict[str, Any]
+
+
 class XiaohongshuSyncJobCreateData(BaseModel):
     job_id: str
     status: str

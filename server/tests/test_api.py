@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import os
 import time
 from pathlib import Path
 
 from fastapi.testclient import TestClient
 
 from app.api.routes import (
+    _get_editable_config_service,
     _get_note_library_service,
     _get_xiaohongshu_sync_job_manager,
     _get_xiaohongshu_sync_service,
@@ -17,6 +19,7 @@ client = TestClient(app)
 
 
 def _reset_xiaohongshu_state() -> None:
+    _get_editable_config_service.cache_clear()
     _get_note_library_service.cache_clear()
     _get_xiaohongshu_sync_service.cache_clear()
     _get_xiaohongshu_sync_job_manager.cache_clear()
@@ -193,3 +196,75 @@ def test_xiaohongshu_saved_notes_crud_and_dedupe_independent() -> None:
     sync_again_body = sync_again.json()
     assert sync_again_body["data"]["new_count"] == 0
     assert sync_again_body["data"]["skipped_count"] == 1
+
+
+def test_editable_config_update_and_reset(tmp_path) -> None:
+    original_config_path = os.environ.get("MIDAS_CONFIG_PATH", "")
+    source_config = Path(original_config_path)
+    temp_config = tmp_path / "config.runtime.yaml"
+    temp_config.write_text(source_config.read_text(encoding="utf-8"), encoding="utf-8")
+
+    try:
+        os.environ["MIDAS_CONFIG_PATH"] = str(temp_config)
+        _reset_xiaohongshu_state()
+
+        get_resp = client.get("/api/config/editable")
+        assert get_resp.status_code == 200
+        get_body = get_resp.json()
+        assert get_body["ok"] is True
+        assert "api_key" not in get_body["data"]["settings"].get("llm", {})
+        assert "cookie" not in get_body["data"]["settings"].get("xiaohongshu", {})
+
+        update_resp = client.put(
+            "/api/config/editable",
+            json={
+                "settings": {
+                    "xiaohongshu": {"default_limit": 7},
+                    "runtime": {"log_level": "DEBUG"},
+                }
+            },
+        )
+        assert update_resp.status_code == 200
+        update_body = update_resp.json()
+        assert update_body["ok"] is True
+        assert update_body["data"]["settings"]["xiaohongshu"]["default_limit"] == 7
+        assert update_body["data"]["settings"]["runtime"]["log_level"] == "DEBUG"
+
+        # Verify new default_limit is effective in runtime behavior.
+        sync_resp = client.post("/api/xiaohongshu/sync", json={})
+        assert sync_resp.status_code == 200
+        assert sync_resp.json()["data"]["requested_limit"] == 7
+
+        reset_resp = client.post("/api/config/editable/reset")
+        assert reset_resp.status_code == 200
+        reset_body = reset_resp.json()
+        assert reset_body["ok"] is True
+        assert reset_body["data"]["settings"]["xiaohongshu"]["default_limit"] == 20
+        assert reset_body["data"]["settings"]["runtime"]["log_level"] == "INFO"
+    finally:
+        if original_config_path:
+            os.environ["MIDAS_CONFIG_PATH"] = original_config_path
+        _reset_xiaohongshu_state()
+
+
+def test_editable_config_rejects_sensitive_keys(tmp_path) -> None:
+    original_config_path = os.environ.get("MIDAS_CONFIG_PATH", "")
+    source_config = Path(original_config_path)
+    temp_config = tmp_path / "config.runtime.yaml"
+    temp_config.write_text(source_config.read_text(encoding="utf-8"), encoding="utf-8")
+
+    try:
+        os.environ["MIDAS_CONFIG_PATH"] = str(temp_config)
+        _reset_xiaohongshu_state()
+        resp = client.put(
+            "/api/config/editable",
+            json={"settings": {"llm": {"api_key": "SHOULD_NOT_PASS"}}},
+        )
+        assert resp.status_code == 400
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["code"] == "INVALID_INPUT"
+    finally:
+        if original_config_path:
+            os.environ["MIDAS_CONFIG_PATH"] = original_config_path
+        _reset_xiaohongshu_state()

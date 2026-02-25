@@ -249,6 +249,86 @@ Success `data`:
 - 删除“已保存笔记”不会删除去重表 `xiaohongshu_synced_notes` 里的 `note_id`。
 - 因此同一 `note_id` 下次同步仍会被判定为重复并跳过。
 
+## `GET /api/config/editable`
+
+用途：读取“可由客户端修改”的配置子集（已排除敏感项）。
+
+Success `data`:
+
+```json
+{
+  "settings": {
+    "llm": {
+      "enabled": true,
+      "api_base": "https://...",
+      "model": "gemini-3-flash-preview",
+      "timeout_seconds": 120
+    },
+    "xiaohongshu": {
+      "default_limit": 20,
+      "max_limit": 30
+    }
+  }
+}
+```
+
+## `PUT /api/config/editable`
+
+用途：更新可编辑配置（部分字段更新）。
+
+Request:
+
+```json
+{
+  "settings": {
+    "xiaohongshu": {
+      "default_limit": 8
+    },
+    "runtime": {
+      "log_level": "DEBUG"
+    }
+  }
+}
+```
+
+Success `data`:
+
+```json
+{
+  "settings": {
+    "xiaohongshu": {
+      "default_limit": 8
+    },
+    "runtime": {
+      "log_level": "DEBUG"
+    }
+  }
+}
+```
+
+说明：
+- 敏感字段不可更新（如 `llm.api_key`、`xiaohongshu.cookie`、`web_readonly.request_headers`）。
+- 更新成功后，服务会热加载新配置用于后续请求。
+
+## `POST /api/config/editable/reset`
+
+用途：将可编辑配置恢复到默认值（基于 `config.example.yaml`）。
+
+Success `data`:
+
+```json
+{
+  "settings": {
+    "runtime": {
+      "log_level": "INFO"
+    },
+    "xiaohongshu": {
+      "default_limit": 20
+    }
+  }
+}
+```
+
 ## `POST /api/xiaohongshu/sync/jobs`
 
 用途：创建异步同步任务（用于客户端显示实时进度）。

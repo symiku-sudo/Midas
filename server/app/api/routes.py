@@ -6,12 +6,14 @@ from functools import lru_cache
 
 from fastapi import APIRouter, Request
 
-from app.core.config import get_settings
+from app.core.config import clear_settings_cache, get_settings
 from app.core.errors import AppError, ErrorCode
 from app.core.response import success_response
 from app.models.schemas import (
     BilibiliNoteSaveRequest,
     BilibiliSummaryRequest,
+    EditableConfigData,
+    EditableConfigUpdateRequest,
     HealthData,
     NotesDeleteData,
     NotesSaveBatchData,
@@ -22,6 +24,7 @@ from app.models.schemas import (
     XiaohongshuSyncRequest,
 )
 from app.services.bilibili import BilibiliSummarizer
+from app.services.editable_config import EditableConfigService
 from app.services.note_library import NoteLibraryService
 from app.services.xiaohongshu import XiaohongshuSyncService
 from app.services.xiaohongshu_job import XiaohongshuSyncJobManager
@@ -51,6 +54,19 @@ def _get_xiaohongshu_sync_job_manager() -> XiaohongshuSyncJobManager:
 def _get_note_library_service() -> NoteLibraryService:
     settings = get_settings()
     return NoteLibraryService(settings)
+
+
+@lru_cache(maxsize=1)
+def _get_editable_config_service() -> EditableConfigService:
+    return EditableConfigService()
+
+
+def _reload_runtime_services() -> None:
+    clear_settings_cache()
+    _get_summarizer.cache_clear()
+    _get_xiaohongshu_sync_service.cache_clear()
+    _get_note_library_service.cache_clear()
+    _get_editable_config_service.cache_clear()
 
 
 @router.get("/health")
@@ -141,6 +157,33 @@ async def clear_xiaohongshu_notes(request: Request) -> dict:
     service = _get_note_library_service()
     deleted_count = service.clear_xiaohongshu_notes()
     data = NotesDeleteData(deleted_count=deleted_count)
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/config/editable")
+async def get_editable_config(request: Request) -> dict:
+    service = _get_editable_config_service()
+    data = EditableConfigData(settings=service.get_editable_settings())
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.put("/api/config/editable")
+async def update_editable_config(
+    payload: EditableConfigUpdateRequest, request: Request
+) -> dict:
+    service = _get_editable_config_service()
+    settings_data = service.update_editable_settings(payload.settings)
+    _reload_runtime_services()
+    data = EditableConfigData(settings=settings_data)
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/config/editable/reset")
+async def reset_editable_config(request: Request) -> dict:
+    service = _get_editable_config_service()
+    settings_data = service.reset_to_defaults()
+    _reload_runtime_services()
+    data = EditableConfigData(settings=settings_data)
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 

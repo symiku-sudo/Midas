@@ -190,3 +190,11 @@ def load_settings() -> Settings:
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
     return load_settings()
+
+
+def get_config_path() -> Path:
+    return _resolve_config_path()
+
+
+def clear_settings_cache() -> None:
+    get_settings.cache_clear()

@@ -11,6 +11,9 @@
 - `POST /api/notes/xiaohongshu/save-batch`
 - `GET /api/notes/xiaohongshu`
 - `DELETE /api/notes/xiaohongshu/{note_id}` / `DELETE /api/notes/xiaohongshu`
+- `GET /api/config/editable`
+- `PUT /api/config/editable`
+- `POST /api/config/editable/reset`
 - `POST /api/xiaohongshu/sync/jobs`
 - `GET /api/xiaohongshu/sync/jobs/{job_id}`
 - Unified response envelope: `ok/code/message/data/request_id`
@@ -140,6 +143,19 @@ curl -X POST http://127.0.0.1:8000/api/notes/xiaohongshu/save-batch \
 
 # 查看小红书已保存笔记
 curl http://127.0.0.1:8000/api/notes/xiaohongshu
+```
+
+```bash
+# 读取可编辑配置（排除 api_key/cookie 等敏感项）
+curl http://127.0.0.1:8000/api/config/editable
+
+# 更新部分配置
+curl -X PUT http://127.0.0.1:8000/api/config/editable \
+  -H 'Content-Type: application/json' \
+  -d '{"settings":{"xiaohongshu":{"default_limit":8},"runtime":{"log_level":"DEBUG"}}}'
+
+# 恢复默认（v0.1 基线）
+curl -X POST http://127.0.0.1:8000/api/config/editable/reset
 ```
 
 ## Notes
