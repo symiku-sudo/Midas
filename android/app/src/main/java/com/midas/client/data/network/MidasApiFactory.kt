@@ -6,6 +6,7 @@ import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import retrofit2.Retrofit
 import retrofit2.converter.moshi.MoshiConverterFactory
+import java.util.concurrent.TimeUnit
 
 object MidasApiFactory {
     private val moshi: Moshi = Moshi.Builder()
@@ -13,6 +14,10 @@ object MidasApiFactory {
         .build()
 
     private val client: OkHttpClient = OkHttpClient.Builder()
+        .connectTimeout(15, TimeUnit.SECONDS)
+        .readTimeout(20, TimeUnit.MINUTES)
+        .writeTimeout(60, TimeUnit.SECONDS)
+        .callTimeout(21, TimeUnit.MINUTES)
         .addInterceptor(HttpLoggingInterceptor().apply {
             level = HttpLoggingInterceptor.Level.BASIC
         })
