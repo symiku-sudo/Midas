@@ -73,6 +73,8 @@ cd server
 cp config.real.example.yaml config.yaml
 ```
 
+`config.yaml` 是本地配置文件，不纳入 Git 版本控制。
+
 然后至少补齐：
 - `llm.api_key`
 - 系统命令可用：`yt-dlp`、`ffmpeg`

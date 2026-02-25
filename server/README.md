@@ -61,6 +61,15 @@ cd server
 cp config.real.example.yaml config.yaml
 ```
 
+`config.yaml` 是本地运行配置，默认不纳入 Git 版本控制。
+
+可用以下命令校验 `config.yaml` 与 `config.example.yaml` 的键结构是否一致（只允许 value 不同）：
+
+```bash
+cd server
+python tools/check_config_keys.py
+```
+
 Then fill:
 - `llm.api_key`
 - Ensure `yt-dlp` and `ffmpeg` are installed on system

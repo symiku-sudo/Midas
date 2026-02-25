@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+import yaml
+
 from app.core.config import Settings, XiaohongshuConfig, XiaohongshuWebReadonlyConfig
 from tools.selfcheck import (
     CheckResult,
     check_bilibili,
+    check_config_key_schema,
     check_llm,
     check_xiaohongshu,
     summarize_results,
@@ -90,3 +95,49 @@ def test_summarize_results_counts() -> None:
     assert pass_count == 1
     assert warn_count == 1
     assert fail_count == 1
+
+
+def test_check_config_key_schema_warns_when_missing_config(
+    monkeypatch, tmp_path: Path
+) -> None:
+    example = {
+        "llm": {"enabled": True},
+    }
+    (tmp_path / "config.example.yaml").write_text(
+        yaml.safe_dump(example, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("tools.selfcheck.SERVER_ROOT", tmp_path)
+
+    results = check_config_key_schema()
+    assert len(results) == 1
+    assert results[0].name == "config.key_schema"
+    assert results[0].status == "warn"
+
+
+def test_check_config_key_schema_fails_on_shape_diff(
+    monkeypatch, tmp_path: Path
+) -> None:
+    example = {
+        "llm": {"enabled": True, "timeout_seconds": 120},
+    }
+    config = {
+        "llm": {"enabled": True},
+    }
+
+    (tmp_path / "config.example.yaml").write_text(
+        yaml.safe_dump(example, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "config.yaml").write_text(
+        yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("tools.selfcheck.SERVER_ROOT", tmp_path)
+
+    results = check_config_key_schema()
+    assert len(results) == 1
+    assert results[0].status == "fail"
+    assert "llm.timeout_seconds" in results[0].message

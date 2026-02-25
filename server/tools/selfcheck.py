@@ -14,6 +14,7 @@ if str(SERVER_ROOT) not in sys.path:
     sys.path.insert(0, str(SERVER_ROOT))
 
 from app.core.config import Settings, load_settings
+from tools.check_config_keys import SchemaIssue, validate_config_key_schema
 
 
 @dataclass(frozen=True)
@@ -25,12 +26,61 @@ class CheckResult:
 
 def run_selfcheck(settings: Settings) -> list[CheckResult]:
     results: list[CheckResult] = []
+    results.extend(check_config_key_schema())
     results.extend(check_runtime(settings))
     results.extend(check_llm(settings))
     results.extend(check_asr(settings))
     results.extend(check_bilibili(settings))
     results.extend(check_xiaohongshu(settings))
     return results
+
+
+def check_config_key_schema() -> list[CheckResult]:
+    example_path = SERVER_ROOT / "config.example.yaml"
+    config_path = SERVER_ROOT / "config.yaml"
+    if not config_path.exists():
+        return [
+            CheckResult(
+                name="config.key_schema",
+                status="warn",
+                message="未发现 config.yaml，当前使用默认模板配置。",
+            )
+        ]
+
+    try:
+        issues = validate_config_key_schema(example_path, config_path)
+    except (FileNotFoundError, ValueError) as exc:
+        return [
+            CheckResult(
+                name="config.key_schema",
+                status="fail",
+                message=str(exc),
+            )
+        ]
+
+    if not issues:
+        return [
+            CheckResult(
+                name="config.key_schema",
+                status="pass",
+                message="config.yaml 与 config.example.yaml 键结构一致。",
+            )
+        ]
+
+    return [
+        CheckResult(
+            name="config.key_schema",
+            status="fail",
+            message=_format_schema_issues(issues),
+        )
+    ]
+
+
+def _format_schema_issues(issues: list[SchemaIssue]) -> str:
+    preview = "; ".join(f"{issue.path}: {issue.message}" for issue in issues[:3])
+    if len(issues) > 3:
+        preview += f"; ... 共 {len(issues)} 处"
+    return preview
 
 
 def check_runtime(settings: Settings) -> list[CheckResult]:
