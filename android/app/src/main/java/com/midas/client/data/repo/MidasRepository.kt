@@ -1,9 +1,17 @@
 package com.midas.client.data.repo
 
 import com.midas.client.data.model.ApiEnvelope
+import com.midas.client.data.model.BilibiliNoteSaveRequest
+import com.midas.client.data.model.BilibiliSavedNote
+import com.midas.client.data.model.BilibiliSavedNotesData
 import com.midas.client.data.model.BilibiliSummaryData
 import com.midas.client.data.model.BilibiliSummaryRequest
 import com.midas.client.data.model.HealthData
+import com.midas.client.data.model.NotesDeleteData
+import com.midas.client.data.model.NotesSaveBatchData
+import com.midas.client.data.model.XiaohongshuNotesSaveRequest
+import com.midas.client.data.model.XiaohongshuSavedNotesData
+import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.data.model.XiaohongshuSyncData
 import com.midas.client.data.model.XiaohongshuSyncJobCreateData
 import com.midas.client.data.model.XiaohongshuSyncJobStatusData
@@ -32,6 +40,56 @@ class MidasRepository {
         }
     }
 
+    suspend fun saveBilibiliNote(
+        baseUrl: String,
+        summary: BilibiliSummaryData,
+        title: String = "",
+    ): AppResult<BilibiliSavedNote> {
+        return runCatching {
+            val api = MidasApiFactory.create(baseUrl)
+            unwrap(
+                api.saveBilibiliNote(
+                    BilibiliNoteSaveRequest(
+                        videoUrl = summary.videoUrl,
+                        summaryMarkdown = summary.summaryMarkdown,
+                        elapsedMs = summary.elapsedMs,
+                        transcriptChars = summary.transcriptChars,
+                        title = title,
+                    )
+                )
+            )
+        }.getOrElse { throwable ->
+            AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
+        }
+    }
+
+    suspend fun listBilibiliNotes(baseUrl: String): AppResult<BilibiliSavedNotesData> {
+        return runCatching {
+            val api = MidasApiFactory.create(baseUrl)
+            unwrap(api.listBilibiliNotes())
+        }.getOrElse { throwable ->
+            AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
+        }
+    }
+
+    suspend fun deleteBilibiliNote(baseUrl: String, noteId: String): AppResult<NotesDeleteData> {
+        return runCatching {
+            val api = MidasApiFactory.create(baseUrl)
+            unwrap(api.deleteBilibiliNote(noteId))
+        }.getOrElse { throwable ->
+            AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
+        }
+    }
+
+    suspend fun clearBilibiliNotes(baseUrl: String): AppResult<NotesDeleteData> {
+        return runCatching {
+            val api = MidasApiFactory.create(baseUrl)
+            unwrap(api.clearBilibiliNotes())
+        }.getOrElse { throwable ->
+            AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
+        }
+    }
+
     suspend fun syncXiaohongshu(
         baseUrl: String,
         limit: Int,
@@ -44,6 +102,45 @@ class MidasRepository {
                     XiaohongshuSyncRequest(limit = limit, confirmLive = confirmLive)
                 )
             )
+        }.getOrElse { throwable ->
+            AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
+        }
+    }
+
+    suspend fun saveXiaohongshuNotes(
+        baseUrl: String,
+        notes: List<XiaohongshuSummaryItem>,
+    ): AppResult<NotesSaveBatchData> {
+        return runCatching {
+            val api = MidasApiFactory.create(baseUrl)
+            unwrap(api.saveXiaohongshuNotes(XiaohongshuNotesSaveRequest(notes = notes)))
+        }.getOrElse { throwable ->
+            AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
+        }
+    }
+
+    suspend fun listXiaohongshuNotes(baseUrl: String): AppResult<XiaohongshuSavedNotesData> {
+        return runCatching {
+            val api = MidasApiFactory.create(baseUrl)
+            unwrap(api.listXiaohongshuNotes())
+        }.getOrElse { throwable ->
+            AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
+        }
+    }
+
+    suspend fun deleteXiaohongshuNote(baseUrl: String, noteId: String): AppResult<NotesDeleteData> {
+        return runCatching {
+            val api = MidasApiFactory.create(baseUrl)
+            unwrap(api.deleteXiaohongshuNote(noteId))
+        }.getOrElse { throwable ->
+            AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
+        }
+    }
+
+    suspend fun clearXiaohongshuNotes(baseUrl: String): AppResult<NotesDeleteData> {
+        return runCatching {
+            val api = MidasApiFactory.create(baseUrl)
+            unwrap(api.clearXiaohongshuNotes())
         }.getOrElse { throwable ->
             AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
         }

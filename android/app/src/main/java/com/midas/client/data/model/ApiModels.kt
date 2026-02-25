@@ -33,6 +33,29 @@ data class BilibiliSummaryData(
     @Json(name = "transcript_chars") val transcriptChars: Int
 )
 
+data class BilibiliNoteSaveRequest(
+    @Json(name = "video_url") val videoUrl: String,
+    @Json(name = "summary_markdown") val summaryMarkdown: String,
+    @Json(name = "elapsed_ms") val elapsedMs: Int,
+    @Json(name = "transcript_chars") val transcriptChars: Int,
+    val title: String = ""
+)
+
+data class BilibiliSavedNote(
+    @Json(name = "note_id") val noteId: String,
+    val title: String,
+    @Json(name = "video_url") val videoUrl: String,
+    @Json(name = "summary_markdown") val summaryMarkdown: String,
+    @Json(name = "elapsed_ms") val elapsedMs: Int,
+    @Json(name = "transcript_chars") val transcriptChars: Int,
+    @Json(name = "saved_at") val savedAt: String
+)
+
+data class BilibiliSavedNotesData(
+    val total: Int,
+    val items: List<BilibiliSavedNote>
+)
+
 data class XiaohongshuSyncRequest(
     val limit: Int? = null,
     @Json(name = "confirm_live") val confirmLive: Boolean = false
@@ -53,6 +76,31 @@ data class XiaohongshuSyncData(
     @Json(name = "failed_count") val failedCount: Int,
     @Json(name = "circuit_opened") val circuitOpened: Boolean,
     val summaries: List<XiaohongshuSummaryItem>
+)
+
+data class XiaohongshuNotesSaveRequest(
+    val notes: List<XiaohongshuSummaryItem>
+)
+
+data class XiaohongshuSavedNote(
+    @Json(name = "note_id") val noteId: String,
+    val title: String,
+    @Json(name = "source_url") val sourceUrl: String,
+    @Json(name = "summary_markdown") val summaryMarkdown: String,
+    @Json(name = "saved_at") val savedAt: String
+)
+
+data class XiaohongshuSavedNotesData(
+    val total: Int,
+    val items: List<XiaohongshuSavedNote>
+)
+
+data class NotesDeleteData(
+    @Json(name = "deleted_count") val deletedCount: Int
+)
+
+data class NotesSaveBatchData(
+    @Json(name = "saved_count") val savedCount: Int
 )
 
 data class XiaohongshuSyncJobCreateData(

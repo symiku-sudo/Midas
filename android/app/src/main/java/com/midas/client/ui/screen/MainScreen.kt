@@ -31,7 +31,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSummaryData
+import com.midas.client.data.model.XiaohongshuSavedNote
 import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.ui.components.MarkdownText
 
@@ -39,6 +41,7 @@ private enum class MainTab(val title: String) {
     SETTINGS("设置"),
     BILIBILI("B站总结"),
     XHS("小红书同步"),
+    NOTES("笔记库"),
 }
 
 @Composable
@@ -46,6 +49,7 @@ fun MainScreen(viewModel: MainViewModel) {
     val settings by viewModel.settingsState.collectAsStateWithLifecycle()
     val bilibili by viewModel.bilibiliState.collectAsStateWithLifecycle()
     val xiaohongshu by viewModel.xiaohongshuState.collectAsStateWithLifecycle()
+    val notes by viewModel.notesState.collectAsStateWithLifecycle()
 
     var selectedTab by remember { mutableStateOf(MainTab.SETTINGS) }
 
@@ -88,6 +92,7 @@ fun MainScreen(viewModel: MainViewModel) {
                     state = bilibili,
                     onVideoUrlChange = viewModel::onBilibiliUrlInputChange,
                     onSubmit = viewModel::submitBilibiliSummary,
+                    onSaveNote = viewModel::saveCurrentBilibiliResult,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
@@ -101,6 +106,23 @@ fun MainScreen(viewModel: MainViewModel) {
                     onLimitChange = viewModel::onXiaohongshuLimitInputChange,
                     onConfirmLiveChange = viewModel::onXiaohongshuConfirmLiveChange,
                     onStartSync = viewModel::startXiaohongshuSync,
+                    onSaveNotes = viewModel::saveCurrentXiaohongshuSummaries,
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(innerPadding)
+                        .padding(16.dp),
+                )
+            }
+
+            MainTab.NOTES -> {
+                NotesPanel(
+                    state = notes,
+                    onKeywordChange = viewModel::onNotesKeywordInputChange,
+                    onRefresh = viewModel::loadSavedNotes,
+                    onDeleteBilibili = viewModel::deleteBilibiliSavedNote,
+                    onClearBilibili = viewModel::clearBilibiliSavedNotes,
+                    onDeleteXiaohongshu = viewModel::deleteXiaohongshuSavedNote,
+                    onClearXiaohongshu = viewModel::clearXiaohongshuSavedNotes,
                     modifier = Modifier
                         .fillMaxSize()
                         .padding(innerPadding)
@@ -153,6 +175,7 @@ private fun BilibiliPanel(
     state: BilibiliUiState,
     onVideoUrlChange: (String) -> Unit,
     onSubmit: () -> Unit,
+    onSaveNote: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -167,8 +190,16 @@ private fun BilibiliPanel(
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
-        Button(onClick = onSubmit, enabled = !state.isLoading) {
-            Text(if (state.isLoading) "处理中..." else "开始总结")
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(onClick = onSubmit, enabled = !state.isLoading) {
+                Text(if (state.isLoading) "处理中..." else "开始总结")
+            }
+            Button(
+                onClick = onSaveNote,
+                enabled = !state.isSavingNote && state.result != null,
+            ) {
+                Text(if (state.isSavingNote) "保存中..." else "保存这次总结")
+            }
         }
         if (state.isLoading) {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -178,6 +209,9 @@ private fun BilibiliPanel(
         }
         if (state.errorMessage.isNotBlank()) {
             Text(text = state.errorMessage, color = Color(0xFFC62828))
+        }
+        if (state.saveStatus.isNotBlank()) {
+            Text(text = state.saveStatus, color = Color(0xFF2E7D32))
         }
         state.result?.let { result ->
             BilibiliResult(result)
@@ -190,7 +224,10 @@ private fun BilibiliResult(result: BilibiliSummaryData) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("链接：${result.videoUrl}", style = MaterialTheme.typography.bodySmall)
-            Text("耗时：${result.elapsedMs} ms，转写字数：${result.transcriptChars}", style = MaterialTheme.typography.bodySmall)
+            Text(
+                "耗时：${result.elapsedMs} ms，转写字数：${result.transcriptChars}",
+                style = MaterialTheme.typography.bodySmall,
+            )
             HorizontalDivider()
             MarkdownText(markdown = result.summaryMarkdown, modifier = Modifier.fillMaxWidth())
         }
@@ -203,6 +240,7 @@ private fun XiaohongshuPanel(
     onLimitChange: (String) -> Unit,
     onConfirmLiveChange: (Boolean) -> Unit,
     onStartSync: () -> Unit,
+    onSaveNotes: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -233,8 +271,16 @@ private fun XiaohongshuPanel(
                 onCheckedChange = onConfirmLiveChange,
             )
         }
-        Button(onClick = onStartSync, enabled = !state.isSyncing) {
-            Text(if (state.isSyncing) "同步中..." else "同步最近收藏")
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(onClick = onStartSync, enabled = !state.isSyncing) {
+                Text(if (state.isSyncing) "同步中..." else "同步最近收藏")
+            }
+            Button(
+                onClick = onSaveNotes,
+                enabled = !state.isSavingNotes && state.summaries.isNotEmpty(),
+            ) {
+                Text(if (state.isSavingNotes) "保存中..." else "批量保存本次结果")
+            }
         }
 
         if (state.isSyncing) {
@@ -254,7 +300,9 @@ private fun XiaohongshuPanel(
         if (state.errorMessage.isNotBlank()) {
             Text(text = state.errorMessage, color = Color(0xFFC62828))
         }
-
+        if (state.saveStatus.isNotBlank()) {
+            Text(text = state.saveStatus, color = Color(0xFF2E7D32))
+        }
         if (state.statsText.isNotBlank()) {
             Text(text = state.statsText, fontWeight = FontWeight.SemiBold)
         }
@@ -274,6 +322,124 @@ private fun XiaohongshuSummaryCard(item: XiaohongshuSummaryItem) {
             Text(item.sourceUrl, style = MaterialTheme.typography.bodySmall)
             HorizontalDivider()
             MarkdownText(markdown = item.summaryMarkdown, modifier = Modifier.fillMaxWidth())
+        }
+    }
+}
+
+@Composable
+private fun NotesPanel(
+    state: NotesUiState,
+    onKeywordChange: (String) -> Unit,
+    onRefresh: () -> Unit,
+    onDeleteBilibili: (String) -> Unit,
+    onClearBilibili: () -> Unit,
+    onDeleteXiaohongshu: (String) -> Unit,
+    onClearXiaohongshu: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val keyword = state.keywordInput.trim()
+    val filteredBilibili = state.bilibiliNotes.filter { item ->
+        keyword.isBlank() || listOf(item.title, item.videoUrl, item.summaryMarkdown)
+            .any { value -> value.contains(keyword, ignoreCase = true) }
+    }
+    val filteredXhs = state.xiaohongshuNotes.filter { item ->
+        keyword.isBlank() || listOf(item.title, item.sourceUrl, item.summaryMarkdown)
+            .any { value -> value.contains(keyword, ignoreCase = true) }
+    }
+
+    Column(
+        modifier = modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("已保存笔记", style = MaterialTheme.typography.titleMedium)
+        OutlinedTextField(
+            value = state.keywordInput,
+            onValueChange = onKeywordChange,
+            label = { Text("关键词检索（标题/链接/内容）") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(onClick = onRefresh, enabled = !state.isLoading) {
+                Text(if (state.isLoading) "刷新中..." else "刷新笔记库")
+            }
+            Button(onClick = onClearBilibili, enabled = state.bilibiliNotes.isNotEmpty()) {
+                Text("清空B站")
+            }
+            Button(onClick = onClearXiaohongshu, enabled = state.xiaohongshuNotes.isNotEmpty()) {
+                Text("清空小红书")
+            }
+        }
+
+        if (state.errorMessage.isNotBlank()) {
+            Text(text = state.errorMessage, color = Color(0xFFC62828))
+        }
+        if (state.actionStatus.isNotBlank()) {
+            Text(text = state.actionStatus, color = Color(0xFF2E7D32))
+        }
+
+        Text(
+            text = "B站笔记（${filteredBilibili.size}/${state.bilibiliNotes.size}）",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        if (filteredBilibili.isEmpty()) {
+            Text("暂无 B 站已保存笔记。", style = MaterialTheme.typography.bodySmall)
+        }
+        filteredBilibili.forEach { item ->
+            BilibiliSavedNoteCard(item = item, onDelete = onDeleteBilibili)
+        }
+
+        Text(
+            text = "小红书笔记（${filteredXhs.size}/${state.xiaohongshuNotes.size}）",
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        if (filteredXhs.isEmpty()) {
+            Text("暂无小红书已保存笔记。", style = MaterialTheme.typography.bodySmall)
+        }
+        filteredXhs.forEach { item ->
+            XiaohongshuSavedNoteCard(item = item, onDelete = onDeleteXiaohongshu)
+        }
+    }
+}
+
+@Composable
+private fun BilibiliSavedNoteCard(
+    item: BilibiliSavedNote,
+    onDelete: (String) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(item.title, style = MaterialTheme.typography.titleSmall)
+            Text("ID: ${item.noteId}", style = MaterialTheme.typography.bodySmall)
+            Text(item.videoUrl, style = MaterialTheme.typography.bodySmall)
+            Text("保存时间：${item.savedAt}", style = MaterialTheme.typography.bodySmall)
+            HorizontalDivider()
+            MarkdownText(markdown = item.summaryMarkdown, modifier = Modifier.fillMaxWidth())
+            Button(onClick = { onDelete(item.noteId) }) {
+                Text("删除此笔记")
+            }
+        }
+    }
+}
+
+@Composable
+private fun XiaohongshuSavedNoteCard(
+    item: XiaohongshuSavedNote,
+    onDelete: (String) -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(item.title, style = MaterialTheme.typography.titleSmall)
+            Text("ID: ${item.noteId}", style = MaterialTheme.typography.bodySmall)
+            Text(item.sourceUrl, style = MaterialTheme.typography.bodySmall)
+            Text("保存时间：${item.savedAt}", style = MaterialTheme.typography.bodySmall)
+            HorizontalDivider()
+            MarkdownText(markdown = item.summaryMarkdown, modifier = Modifier.fillMaxWidth())
+            Button(onClick = { onDelete(item.noteId) }) {
+                Text("删除此笔记")
+            }
         }
     }
 }

@@ -3,7 +3,9 @@ package com.midas.client.ui.screen
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSummaryData
+import com.midas.client.data.model.XiaohongshuSavedNote
 import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.data.repo.MidasRepository
 import com.midas.client.data.repo.SettingsRepository
@@ -29,7 +31,9 @@ data class SettingsUiState(
 data class BilibiliUiState(
     val videoUrlInput: String = "",
     val isLoading: Boolean = false,
+    val isSavingNote: Boolean = false,
     val errorMessage: String = "",
+    val saveStatus: String = "",
     val result: BilibiliSummaryData? = null,
 )
 
@@ -37,12 +41,23 @@ data class XiaohongshuUiState(
     val limitInput: String = "5",
     val confirmLive: Boolean = false,
     val isSyncing: Boolean = false,
+    val isSavingNotes: Boolean = false,
     val progressCurrent: Int = 0,
     val progressTotal: Int = 0,
     val progressMessage: String = "",
     val errorMessage: String = "",
+    val saveStatus: String = "",
     val summaries: List<XiaohongshuSummaryItem> = emptyList(),
     val statsText: String = "",
+)
+
+data class NotesUiState(
+    val keywordInput: String = "",
+    val isLoading: Boolean = false,
+    val errorMessage: String = "",
+    val actionStatus: String = "",
+    val bilibiliNotes: List<BilibiliSavedNote> = emptyList(),
+    val xiaohongshuNotes: List<XiaohongshuSavedNote> = emptyList(),
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
@@ -59,6 +74,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private val _xiaohongshuState = MutableStateFlow(XiaohongshuUiState())
     val xiaohongshuState: StateFlow<XiaohongshuUiState> = _xiaohongshuState.asStateFlow()
+
+    private val _notesState = MutableStateFlow(NotesUiState())
+    val notesState: StateFlow<NotesUiState> = _notesState.asStateFlow()
 
     private var syncPollingJob: Job? = null
 
@@ -120,7 +138,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onBilibiliUrlInputChange(newValue: String) {
-        _bilibiliState.update { it.copy(videoUrlInput = newValue, errorMessage = "") }
+        _bilibiliState.update { it.copy(videoUrlInput = newValue, errorMessage = "", saveStatus = "") }
     }
 
     fun submitBilibiliSummary() {
@@ -133,7 +151,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
         viewModelScope.launch {
             _bilibiliState.update {
-                it.copy(isLoading = true, errorMessage = "", result = null)
+                it.copy(isLoading = true, errorMessage = "", saveStatus = "", result = null)
             }
             when (val result = apiRepository.summarizeBilibili(baseUrl, videoUrl)) {
                 is AppResult.Success -> {
@@ -158,8 +176,45 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun saveCurrentBilibiliResult() {
+        val baseUrl = normalizeCurrentBaseUrl()
+        val summary = _bilibiliState.value.result
+        if (summary == null) {
+            _bilibiliState.update { it.copy(saveStatus = "暂无可保存的总结结果。") }
+            return
+        }
+
+        viewModelScope.launch {
+            _bilibiliState.update { it.copy(isSavingNote = true, saveStatus = "") }
+            when (val result = apiRepository.saveBilibiliNote(baseUrl, summary)) {
+                is AppResult.Success -> {
+                    _bilibiliState.update {
+                        it.copy(
+                            isSavingNote = false,
+                            saveStatus = "已保存 B 站笔记：${result.data.noteId}",
+                        )
+                    }
+                    loadSavedNotes()
+                }
+
+                is AppResult.Error -> {
+                    _bilibiliState.update {
+                        it.copy(
+                            isSavingNote = false,
+                            saveStatus = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.BILIBILI,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     fun onXiaohongshuLimitInputChange(newValue: String) {
-        _xiaohongshuState.update { it.copy(limitInput = newValue, errorMessage = "") }
+        _xiaohongshuState.update { it.copy(limitInput = newValue, errorMessage = "", saveStatus = "") }
     }
 
     fun onXiaohongshuConfirmLiveChange(newValue: Boolean) {
@@ -180,10 +235,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _xiaohongshuState.update {
                 it.copy(
                     isSyncing = true,
+                    isSavingNotes = false,
                     progressCurrent = 0,
                     progressTotal = limit,
                     progressMessage = "正在创建同步任务...",
                     errorMessage = "",
+                    saveStatus = "",
                     summaries = emptyList(),
                     statsText = "",
                 )
@@ -212,6 +269,198 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 is AppResult.Success -> {
                     val jobId = create.data.jobId
                     pollSyncJob(baseUrl, jobId)
+                }
+            }
+        }
+    }
+
+    fun saveCurrentXiaohongshuSummaries() {
+        val baseUrl = normalizeCurrentBaseUrl()
+        val summaries = _xiaohongshuState.value.summaries
+        if (summaries.isEmpty()) {
+            _xiaohongshuState.update { it.copy(saveStatus = "暂无可保存的小红书总结。") }
+            return
+        }
+
+        viewModelScope.launch {
+            _xiaohongshuState.update { it.copy(isSavingNotes = true, saveStatus = "") }
+            when (val result = apiRepository.saveXiaohongshuNotes(baseUrl, summaries)) {
+                is AppResult.Success -> {
+                    _xiaohongshuState.update {
+                        it.copy(
+                            isSavingNotes = false,
+                            saveStatus = "已保存 ${result.data.savedCount} 条小红书笔记。",
+                        )
+                    }
+                    loadSavedNotes()
+                }
+
+                is AppResult.Error -> {
+                    _xiaohongshuState.update {
+                        it.copy(
+                            isSavingNotes = false,
+                            saveStatus = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun onNotesKeywordInputChange(newValue: String) {
+        _notesState.update { it.copy(keywordInput = newValue) }
+    }
+
+    fun loadSavedNotes() {
+        val baseUrl = normalizeCurrentBaseUrl()
+        viewModelScope.launch {
+            _notesState.update { it.copy(isLoading = true, errorMessage = "", actionStatus = "") }
+
+            val bilibiliResult = apiRepository.listBilibiliNotes(baseUrl)
+            if (bilibiliResult is AppResult.Error) {
+                _notesState.update {
+                    it.copy(
+                        isLoading = false,
+                        errorMessage = ErrorMessageMapper.format(
+                            code = bilibiliResult.code,
+                            message = bilibiliResult.message,
+                            context = ErrorContext.BILIBILI,
+                        ),
+                    )
+                }
+                return@launch
+            }
+
+            val xhsResult = apiRepository.listXiaohongshuNotes(baseUrl)
+            if (xhsResult is AppResult.Error) {
+                _notesState.update {
+                    it.copy(
+                        isLoading = false,
+                        errorMessage = ErrorMessageMapper.format(
+                            code = xhsResult.code,
+                            message = xhsResult.message,
+                            context = ErrorContext.XIAOHONGSHU_SYNC,
+                        ),
+                    )
+                }
+                return@launch
+            }
+
+            val bilibiliData = (bilibiliResult as AppResult.Success).data
+            val xhsData = (xhsResult as AppResult.Success).data
+            _notesState.update {
+                it.copy(
+                    isLoading = false,
+                    bilibiliNotes = bilibiliData.items,
+                    xiaohongshuNotes = xhsData.items,
+                )
+            }
+        }
+    }
+
+    fun deleteBilibiliSavedNote(noteId: String) {
+        val baseUrl = normalizeCurrentBaseUrl()
+        viewModelScope.launch {
+            when (val result = apiRepository.deleteBilibiliNote(baseUrl, noteId)) {
+                is AppResult.Success -> {
+                    _notesState.update {
+                        it.copy(actionStatus = "已删除 ${result.data.deletedCount} 条 B 站笔记。", errorMessage = "")
+                    }
+                    loadSavedNotes()
+                }
+
+                is AppResult.Error -> {
+                    _notesState.update {
+                        it.copy(
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.BILIBILI,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun clearBilibiliSavedNotes() {
+        val baseUrl = normalizeCurrentBaseUrl()
+        viewModelScope.launch {
+            when (val result = apiRepository.clearBilibiliNotes(baseUrl)) {
+                is AppResult.Success -> {
+                    _notesState.update {
+                        it.copy(actionStatus = "已清空 ${result.data.deletedCount} 条 B 站笔记。", errorMessage = "")
+                    }
+                    loadSavedNotes()
+                }
+
+                is AppResult.Error -> {
+                    _notesState.update {
+                        it.copy(
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.BILIBILI,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun deleteXiaohongshuSavedNote(noteId: String) {
+        val baseUrl = normalizeCurrentBaseUrl()
+        viewModelScope.launch {
+            when (val result = apiRepository.deleteXiaohongshuNote(baseUrl, noteId)) {
+                is AppResult.Success -> {
+                    _notesState.update {
+                        it.copy(actionStatus = "已删除 ${result.data.deletedCount} 条小红书笔记。", errorMessage = "")
+                    }
+                    loadSavedNotes()
+                }
+
+                is AppResult.Error -> {
+                    _notesState.update {
+                        it.copy(
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun clearXiaohongshuSavedNotes() {
+        val baseUrl = normalizeCurrentBaseUrl()
+        viewModelScope.launch {
+            when (val result = apiRepository.clearXiaohongshuNotes(baseUrl)) {
+                is AppResult.Success -> {
+                    _notesState.update {
+                        it.copy(actionStatus = "已清空 ${result.data.deletedCount} 条小红书笔记。", errorMessage = "")
+                    }
+                    loadSavedNotes()
+                }
+
+                is AppResult.Error -> {
+                    _notesState.update {
+                        it.copy(
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                            ),
+                        )
+                    }
                 }
             }
         }
