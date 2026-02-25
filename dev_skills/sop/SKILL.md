@@ -27,4 +27,4 @@ description: Midas 标准作业流程（SOP）。用于功能开发、缺陷修�
 - 统一响应协议不可破坏：`ok/code/message/data/request_id`。
 - 关键错误码要可被客户端区分：`INVALID_INPUT`、`AUTH_EXPIRED`、`RATE_LIMITED`、`CIRCUIT_OPEN`、`UPSTREAM_ERROR`、`INTERNAL_ERROR`。
 - 任何 API 变更必须同步更新：`server/API_CONTRACT.md`。
-- 阶段收尾必须更新：`WEEKLY_PROGRESS.md`。
+- 阶段收尾必须同步更新：`README.md` 与 `server/README.md`（按改动范围）。

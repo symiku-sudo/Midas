@@ -19,7 +19,7 @@ description: 在 Midas 中实现新功能或增强能力。适用于新增接口
 - 若新增接口或响应字段，必须更新：
   - `server/API_CONTRACT.md`
   - `server/README.md`
-- 周进度文档必须更新：`WEEKLY_PROGRESS.md`。
+- 影响使用方式时，必须更新根 `README.md`。
 
 ## 最低交付
 - 代码改动

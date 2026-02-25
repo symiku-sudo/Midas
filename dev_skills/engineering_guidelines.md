@@ -35,11 +35,11 @@
 - 关键验收项：
   - 接口可用。
   - 错误码可区分。
-  - 文档已同步（`README.md`、`API_CONTRACT.md`、`WEEKLY_PROGRESS.md`）。
+  - 文档已同步（`README.md`、`API_CONTRACT.md`）。
 
 ## 5. 文档与交接
 - 行为变化必须同步更新文档。
-- 每个阶段完成后必须更新 `WEEKLY_PROGRESS.md`，包含：
+- 每个阶段完成后在相关文档中补充阶段结论，至少包含：
   - 已完成
   - 未完成
   - 下次接续建议

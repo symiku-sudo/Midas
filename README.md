@@ -20,7 +20,7 @@
 
 - `server/`：Python 服务端
 - `android/`：Android 客户端工程
-- `WEEKLY_PROGRESS.md`：阶段交接与后续建议
+- `server/API_CONTRACT.md`：服务端接口契约
 
 ## 快速开始
 

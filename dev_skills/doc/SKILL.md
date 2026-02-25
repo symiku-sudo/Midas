@@ -1,6 +1,6 @@
 ---
 name: doc
-description: Midas 文档编写与维护规范。用于 README、API 契约、开发计划、周进度交接文档更新。
+description: Midas 文档编写与维护规范。用于 README、API 契约等文档更新。
 ---
 
 # Doc（文档维护）
@@ -15,8 +15,7 @@ description: Midas 文档编写与维护规范。用于 README、API 契约、�
 ## Midas 文档优先级
 1. `server/API_CONTRACT.md`
 2. `server/README.md`
-3. `WEEKLY_PROGRESS.md`
-4. `PLAN.md` / `midas_request.md`（需求或计划变化时）
+3. `README.md`
 
 ## 交付要求
 - 变更文件列表
