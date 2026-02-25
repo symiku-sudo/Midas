@@ -1,6 +1,8 @@
 package com.midas.client.ui.screen
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,6 +14,8 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -45,6 +49,145 @@ private enum class MainTab(val title: String) {
     XHS("小红书同步"),
     NOTES("笔记库"),
 }
+
+private enum class ConfigControlKind {
+    TEXT,
+    SWITCH,
+    DROPDOWN,
+}
+
+private data class ConfigOption(
+    val value: String,
+    val label: String,
+)
+
+private data class ConfigFieldSpec(
+    val path: String,
+    val section: String,
+    val title: String,
+    val description: String,
+    val control: ConfigControlKind,
+    val options: List<ConfigOption> = emptyList(),
+)
+
+private val configFieldSpecs = listOf(
+    ConfigFieldSpec(
+        path = "llm.enabled",
+        section = "总结能力",
+        title = "启用 LLM 总结",
+        description = "关闭后使用本地降级摘要，不请求模型。",
+        control = ConfigControlKind.SWITCH,
+    ),
+    ConfigFieldSpec(
+        path = "llm.model",
+        section = "总结能力",
+        title = "LLM 模型",
+        description = "填写服务端可用模型名，例如 gemini-3-flash-preview。",
+        control = ConfigControlKind.TEXT,
+    ),
+    ConfigFieldSpec(
+        path = "llm.timeout_seconds",
+        section = "总结能力",
+        title = "LLM 超时（秒）",
+        description = "单次模型请求最长等待时间。",
+        control = ConfigControlKind.TEXT,
+    ),
+    ConfigFieldSpec(
+        path = "asr.mode",
+        section = "总结能力",
+        title = "视频转写模式",
+        description = "faster_whisper 为真实转写，mock 为调试文本。",
+        control = ConfigControlKind.DROPDOWN,
+        options = listOf(
+            ConfigOption(value = "faster_whisper", label = "真实转写（faster_whisper）"),
+            ConfigOption(value = "mock", label = "调试模式（mock）"),
+        ),
+    ),
+    ConfigFieldSpec(
+        path = "asr.model_size",
+        section = "总结能力",
+        title = "Whisper 模型大小",
+        description = "模型越大通常越准，但速度更慢、占用更高。",
+        control = ConfigControlKind.DROPDOWN,
+        options = listOf(
+            ConfigOption(value = "tiny", label = "tiny（最快）"),
+            ConfigOption(value = "base", label = "base（默认）"),
+            ConfigOption(value = "small", label = "small"),
+            ConfigOption(value = "medium", label = "medium"),
+            ConfigOption(value = "large-v3", label = "large-v3（最强）"),
+        ),
+    ),
+    ConfigFieldSpec(
+        path = "asr.device",
+        section = "总结能力",
+        title = "ASR 设备",
+        description = "无 GPU 建议用 cpu；有 CUDA 环境可选 cuda。",
+        control = ConfigControlKind.DROPDOWN,
+        options = listOf(
+            ConfigOption(value = "cpu", label = "CPU"),
+            ConfigOption(value = "cuda", label = "CUDA"),
+        ),
+    ),
+    ConfigFieldSpec(
+        path = "asr.language",
+        section = "总结能力",
+        title = "转写语言",
+        description = "Whisper 语言代码，中文填 zh，英文可填 en。",
+        control = ConfigControlKind.TEXT,
+    ),
+    ConfigFieldSpec(
+        path = "xiaohongshu.mode",
+        section = "小红书同步",
+        title = "同步模式",
+        description = "web_readonly 为真实同步，mock 为本地示例数据。",
+        control = ConfigControlKind.DROPDOWN,
+        options = listOf(
+            ConfigOption(value = "web_readonly", label = "真实同步（web_readonly）"),
+            ConfigOption(value = "mock", label = "示例数据（mock）"),
+        ),
+    ),
+    ConfigFieldSpec(
+        path = "xiaohongshu.collection_id",
+        section = "小红书同步",
+        title = "收藏夹 ID",
+        description = "真实同步时使用的小红书收藏夹 ID。",
+        control = ConfigControlKind.TEXT,
+    ),
+    ConfigFieldSpec(
+        path = "xiaohongshu.default_limit",
+        section = "小红书同步",
+        title = "默认同步条数",
+        description = "未指定 limit 时使用这个值。",
+        control = ConfigControlKind.TEXT,
+    ),
+    ConfigFieldSpec(
+        path = "xiaohongshu.max_limit",
+        section = "小红书同步",
+        title = "单次最大同步条数",
+        description = "客户端可请求的上限，防止单次任务过大。",
+        control = ConfigControlKind.TEXT,
+    ),
+    ConfigFieldSpec(
+        path = "runtime.log_level",
+        section = "运行与调试",
+        title = "日志级别",
+        description = "排查问题建议临时切到 DEBUG，平时建议 INFO。",
+        control = ConfigControlKind.DROPDOWN,
+        options = listOf(
+            ConfigOption(value = "DEBUG", label = "DEBUG"),
+            ConfigOption(value = "INFO", label = "INFO"),
+            ConfigOption(value = "WARNING", label = "WARNING"),
+            ConfigOption(value = "ERROR", label = "ERROR"),
+        ),
+    ),
+    ConfigFieldSpec(
+        path = "bilibili.max_video_minutes",
+        section = "运行与调试",
+        title = "B 站视频时长上限（分钟）",
+        description = "超过该时长的视频将被拒绝处理。",
+        control = ConfigControlKind.TEXT,
+    ),
+)
 
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
@@ -181,11 +324,7 @@ private fun SettingsPanel(
         }
 
         HorizontalDivider()
-        Text("运行配置（可编辑子集）", style = MaterialTheme.typography.titleSmall)
-        Text(
-            text = "敏感字段（如 api_key/cookie）不会出现在此处。",
-            style = MaterialTheme.typography.bodySmall,
-        )
+        Text("运行配置", style = MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(onClick = onLoadConfig, enabled = !state.isConfigLoading) {
                 Text(if (state.isConfigLoading) "加载中..." else "加载配置")
@@ -217,56 +356,139 @@ private fun EditableConfigFieldsPanel(
     onTextChange: (String, String) -> Unit,
     onBooleanChange: (String, Boolean) -> Unit,
 ) {
-    if (fields.isEmpty()) {
+    val fieldByPath = fields.associateBy { it.path }
+    val visibleFields = configFieldSpecs.mapNotNull { spec ->
+        fieldByPath[spec.path]?.let { field -> spec to field }
+    }
+
+    if (visibleFields.isEmpty()) {
         Text(
-            text = "点击“加载配置”后可逐项编辑；布尔值使用开关，其他类型使用输入框。",
+            text = "当前没有可展示的配置项，请先点击“加载配置”。",
             style = MaterialTheme.typography.bodySmall,
         )
         return
     }
 
-    val groups = fields.groupBy { field -> field.path.substringBefore(".") }
-    groups.forEach { (groupName, groupFields) ->
-        Text(groupName, style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.SemiBold)
-        groupFields.forEach { field ->
-            when (field.type) {
-                ConfigFieldType.BOOLEAN -> {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(field.path)
-                            Text(
-                                text = "布尔开关",
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                        }
-                        Switch(
-                            checked = field.boolValue,
-                            onCheckedChange = { checked ->
-                                onBooleanChange(field.path, checked)
-                            },
-                        )
-                    }
-                }
+    val groups = visibleFields.groupBy { (spec, _) -> spec.section }
+    groups.forEach { (sectionName, sectionFields) ->
+        Text(
+            text = sectionName,
+            style = MaterialTheme.typography.titleSmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        sectionFields.forEach { (spec, field) ->
+            ConfigFieldEditor(
+                spec = spec,
+                field = field,
+                onTextChange = onTextChange,
+                onBooleanChange = onBooleanChange,
+            )
+        }
+        HorizontalDivider()
+    }
+}
 
-                else -> {
-                    val isList = field.type == ConfigFieldType.LIST_JSON
-                    OutlinedTextField(
-                        value = field.textValue,
-                        onValueChange = { value ->
-                            onTextChange(field.path, value)
+@Composable
+private fun ConfigFieldEditor(
+    spec: ConfigFieldSpec,
+    field: EditableConfigField,
+    onTextChange: (String, String) -> Unit,
+    onBooleanChange: (String, Boolean) -> Unit,
+) {
+    when (spec.control) {
+        ConfigControlKind.SWITCH -> {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(text = spec.title, fontWeight = FontWeight.SemiBold)
+                    Text(
+                        text = spec.description,
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(
+                    checked = field.boolValue,
+                    onCheckedChange = { checked ->
+                        onBooleanChange(spec.path, checked)
+                    },
+                )
+            }
+        }
+
+        ConfigControlKind.DROPDOWN -> {
+            ConfigDropdownField(
+                spec = spec,
+                currentValue = field.textValue,
+                onSelect = { selected ->
+                    onTextChange(spec.path, selected)
+                },
+            )
+        }
+
+        ConfigControlKind.TEXT -> {
+            val isList = field.type == ConfigFieldType.LIST_JSON
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text(text = spec.title, fontWeight = FontWeight.SemiBold)
+                Text(
+                    text = spec.description,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                OutlinedTextField(
+                    value = field.textValue,
+                    onValueChange = { value ->
+                        onTextChange(spec.path, value)
+                    },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = !isList,
+                    minLines = if (isList) 2 else 1,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ConfigDropdownField(
+    spec: ConfigFieldSpec,
+    currentValue: String,
+    onSelect: (String) -> Unit,
+) {
+    var expanded by remember(spec.path) { mutableStateOf(false) }
+    val selectedLabel = spec.options.firstOrNull { option -> option.value == currentValue }?.label
+        ?: currentValue.ifBlank { "请选择" }
+
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(text = spec.title, fontWeight = FontWeight.SemiBold)
+        Text(
+            text = spec.description,
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Box(modifier = Modifier.fillMaxWidth()) {
+            OutlinedTextField(
+                value = selectedLabel,
+                onValueChange = {},
+                readOnly = true,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { expanded = true },
+            )
+            DropdownMenu(
+                expanded = expanded,
+                onDismissRequest = { expanded = false },
+            ) {
+                spec.options.forEach { option ->
+                    DropdownMenuItem(
+                        text = { Text(option.label) },
+                        onClick = {
+                            onSelect(option.value)
+                            expanded = false
                         },
-                        label = { Text(field.path) },
-                        modifier = Modifier.fillMaxWidth(),
-                        singleLine = !isList,
-                        minLines = if (isList) 2 else 1,
                     )
                 }
             }
         }
-        HorizontalDivider()
     }
 }
 
