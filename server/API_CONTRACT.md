@@ -45,9 +45,12 @@ Request:
 
 ```json
 {
-  "video_url": "https://www.bilibili.com/video/BV..."
+  "video_url": "BV1xx411c7mD"
 }
 ```
+
+说明：
+- `video_url` 支持完整链接（`https://www.bilibili.com/video/BV...`）或直接传 `BV` 号。
 
 Success `data`:
 

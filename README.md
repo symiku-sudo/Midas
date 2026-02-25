@@ -6,7 +6,7 @@
 
 - 服务端（FastAPI）：已完成
   - `GET /health`
-  - `POST /api/bilibili/summarize`
+  - `POST /api/bilibili/summarize`（`video_url` 支持完整链接或直接传 `BV` 号）
   - `POST /api/xiaohongshu/sync`
   - `POST /api/xiaohongshu/sync/jobs`
   - `GET /api/xiaohongshu/sync/jobs/{job_id}`

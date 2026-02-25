@@ -122,8 +122,10 @@ curl http://127.0.0.1:8000/health
 ```bash
 curl -X POST http://127.0.0.1:8000/api/bilibili/summarize \
   -H 'Content-Type: application/json' \
-  -d '{"video_url":"https://www.bilibili.com/video/BV1xx411c7mD"}'
+  -d '{"video_url":"BV1xx411c7mD"}'
 ```
+
+- `video_url` 支持完整链接，也支持直接传 `BV` 号（服务端会自动补全前缀）。
 
 ```bash
 # 手动保存一次 B 站总结

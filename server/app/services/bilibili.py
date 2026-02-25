@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import shutil
 import time
 import uuid
@@ -18,6 +19,14 @@ from app.services.llm import LLMService
 logger = logging.getLogger(__name__)
 
 _VALID_HOSTS = {"www.bilibili.com", "bilibili.com", "b23.tv", "www.b23.tv"}
+_BVID_PATTERN = re.compile(r"(?i)^bv[0-9a-z]{10}$")
+
+
+def _normalize_bilibili_video_url(video_url: str) -> str:
+    candidate = video_url.strip()
+    if _BVID_PATTERN.fullmatch(candidate):
+        return f"https://www.bilibili.com/video/BV{candidate[2:]}"
+    return candidate
 
 
 class BilibiliSummarizer:
@@ -28,7 +37,8 @@ class BilibiliSummarizer:
         self._llm = LLMService(settings)
 
     async def summarize(self, video_url: str) -> BilibiliSummaryData:
-        self._validate_url(video_url)
+        normalized_video_url = _normalize_bilibili_video_url(video_url)
+        self._validate_url(normalized_video_url)
 
         start = time.perf_counter()
         base_temp = Path(self._settings.runtime.temp_dir)
@@ -39,12 +49,12 @@ class BilibiliSummarizer:
             # Offload blocking download/ASR work to a worker thread, so /health
             # and other requests remain responsive during long Bilibili jobs.
             audio_path = await asyncio.to_thread(
-                self._fetcher.fetch_audio, video_url, job_dir
+                self._fetcher.fetch_audio, normalized_video_url, job_dir
             )
             transcript = await asyncio.to_thread(self._asr.transcribe, audio_path)
             try:
                 summary_md = await self._llm.summarize(
-                    transcript=transcript, video_url=video_url
+                    transcript=transcript, video_url=normalized_video_url
                 )
             except AppError as exc:
                 if exc.code not in {ErrorCode.UPSTREAM_ERROR, ErrorCode.RATE_LIMITED}:
@@ -55,7 +65,7 @@ class BilibiliSummarizer:
                     exc.message,
                 )
                 summary_md = self._build_local_fallback_summary(
-                    video_url=video_url,
+                    video_url=normalized_video_url,
                     transcript=transcript,
                     reason=exc.message,
                 )
@@ -65,7 +75,7 @@ class BilibiliSummarizer:
         elapsed_ms = int((time.perf_counter() - start) * 1000)
         logger.info("Bilibili summarize done, elapsed_ms=%d", elapsed_ms)
         return BilibiliSummaryData(
-            video_url=video_url,
+            video_url=normalized_video_url,
             summary_markdown=summary_md,
             elapsed_ms=elapsed_ms,
             transcript_chars=len(transcript),
