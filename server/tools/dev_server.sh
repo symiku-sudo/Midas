@@ -6,13 +6,15 @@ SERVER_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TMP_DIR="$SERVER_DIR/.tmp"
 PID_FILE="$TMP_DIR/local_server.pid"
 LOG_FILE="$TMP_DIR/local_server.log"
+DETACHED_START_DEFAULT="${MIDAS_DEV_SERVER_DETACHED_START:-1}"
+DETACHED_WAIT_SECONDS="${MIDAS_DEV_SERVER_DETACHED_WAIT_SECONDS:-45}"
 
 usage() {
   cat <<'EOF'
 Usage:
-  tools/dev_server.sh start [web_guard|mock] [--mobile|--host <host>] [--port <port>] [--no-ts-proxy]
+  tools/dev_server.sh start [web_guard|mock] [--mobile|--host <host>] [--port <port>] [--no-ts-proxy] [--detached|--inline]
   tools/dev_server.sh stop
-  tools/dev_server.sh restart [web_guard|mock] [--mobile|--host <host>] [--port <port>] [--no-ts-proxy]
+  tools/dev_server.sh restart [web_guard|mock] [--mobile|--host <host>] [--port <port>] [--no-ts-proxy] [--detached|--inline]
   tools/dev_server.sh status
   tools/dev_server.sh logs [lines]
 
@@ -22,8 +24,13 @@ Examples:
   tools/dev_server.sh start web_guard --mobile
   tools/dev_server.sh start --host 0.0.0.0 --port 8000
   tools/dev_server.sh start web_guard --mobile --no-ts-proxy
+  tools/dev_server.sh start --inline
   tools/dev_server.sh restart web_guard
   tools/dev_server.sh logs 120
+
+Default behavior:
+  - In WSL, start/restart defaults to detached mode (persistent process).
+  - Override with --inline or env MIDAS_DEV_SERVER_DETACHED_START=0.
 EOF
 }
 
@@ -182,11 +189,49 @@ show_bind_status() {
   esac
 }
 
+can_detached_start() {
+  [[ "$START_DETACHED_START" == "1" ]] || return 1
+  [[ -n "${WSL_DISTRO_NAME:-}" ]] || return 1
+  command -v powershell.exe >/dev/null 2>&1 || return 1
+  command -v wsl.exe >/dev/null 2>&1 || return 1
+  return 0
+}
+
+start_server_detached() {
+  local distro run_cmd wait_seconds
+  distro="${WSL_DISTRO_NAME:-}"
+  if [[ -z "$distro" ]]; then
+    return 1
+  fi
+
+  printf -v run_cmd 'cd %q && %q --profile %q --host %q --port %q' \
+    "$SERVER_DIR" "$SCRIPT_DIR/run_local_stack.sh" "$START_PROFILE" "$START_HOST" "$START_PORT"
+
+  if ! powershell.exe -NoProfile -Command "\$arg='-d ${distro} -e bash -lc \"${run_cmd}\"'; [System.Diagnostics.Process]::Start('wsl.exe', \$arg) | Out-Null" >/dev/null 2>&1; then
+    return 1
+  fi
+
+  wait_seconds="$DETACHED_WAIT_SECONDS"
+  for ((i = 1; i <= wait_seconds; i++)); do
+    if is_running; then
+      echo "[dev_server] started in detached mode."
+      return 0
+    fi
+    sleep 1
+  done
+  echo "[dev_server] detached start timeout (${wait_seconds}s)."
+  if [[ -f "$LOG_FILE" ]]; then
+    tail -n 40 "$LOG_FILE" || true
+  fi
+  return 1
+}
+
 parse_start_args() {
   local profile="web_guard"
   local host="127.0.0.1"
   local port="8000"
   local auto_ts_proxy="1"
+  local detached_start="$DETACHED_START_DEFAULT"
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
@@ -200,6 +245,14 @@ parse_start_args() {
         ;;
       --no-ts-proxy)
         auto_ts_proxy="0"
+        shift
+        ;;
+      --detached)
+        detached_start="1"
+        shift
+        ;;
+      --inline|--foreground)
+        detached_start="0"
         shift
         ;;
       --host)
@@ -238,6 +291,7 @@ parse_start_args() {
   START_HOST="$host"
   START_PORT="$port"
   START_AUTO_TS_PROXY="$auto_ts_proxy"
+  START_DETACHED_START="$detached_start"
 }
 
 show_mobile_tip() {
@@ -272,10 +326,20 @@ start_server() {
     echo "[dev_server] running bind=$current_host:$current_port, switch to $START_HOST:$START_PORT ..."
     stop_server
   fi
-  "$SCRIPT_DIR/run_local_stack.sh" \
-    --profile "$START_PROFILE" \
-    --host "$START_HOST" \
-    --port "$START_PORT"
+  if can_detached_start; then
+    if ! start_server_detached; then
+      echo "[dev_server] detached start failed, fallback to inline mode."
+      "$SCRIPT_DIR/run_local_stack.sh" \
+        --profile "$START_PROFILE" \
+        --host "$START_HOST" \
+        --port "$START_PORT"
+    fi
+  else
+    "$SCRIPT_DIR/run_local_stack.sh" \
+      --profile "$START_PROFILE" \
+      --host "$START_HOST" \
+      --port "$START_PORT"
+  fi
   show_mobile_tip "$START_HOST" "$START_PORT"
   if [[ "$START_HOST" == "0.0.0.0" && "$START_AUTO_TS_PROXY" == "1" ]]; then
     configure_tailscale_proxy "$START_PORT"
@@ -287,9 +351,8 @@ stop_server() {
 }
 
 restart_server() {
-  parse_start_args "$@"
   stop_server
-  start_server "$START_PROFILE" --host "$START_HOST" --port "$START_PORT"
+  start_server "$@"
 }
 
 show_logs() {
