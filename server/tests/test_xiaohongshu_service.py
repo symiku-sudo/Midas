@@ -86,6 +86,39 @@ class IterWebSource:
             yield note
 
 
+class SingleUrlWebSource:
+    def __init__(self, note: XiaohongshuNote) -> None:
+        self._note = note
+        self.last_url = ""
+
+    async def fetch_note_by_url(self, note_url: str) -> XiaohongshuNote:
+        self.last_url = note_url
+        return self._note
+
+
+class PendingCountWebSource:
+    def __init__(self, batches: list[XiaohongshuPageBatch]) -> None:
+        self._batches = batches
+        self.calls: list[dict[str, object]] = []
+
+    async def iter_pages(
+        self,
+        *,
+        start_cursor: str | None = None,
+        force_head: bool = False,
+        max_pages: int | None = None,
+    ):
+        self.calls.append(
+            {
+                "start_cursor": start_cursor,
+                "force_head": force_head,
+                "max_pages": max_pages,
+            }
+        )
+        for batch in self._batches:
+            yield batch
+
+
 class HybridCursorWebSource:
     def __init__(
         self,
@@ -521,6 +554,114 @@ async def test_web_readonly_success_sets_last_sync_state(tmp_path) -> None:
     assert result.new_count == 1
     assert result.fetched_count == 1
     assert repo.get_state("last_live_sync_ts") is not None
+
+
+@pytest.mark.asyncio
+async def test_web_readonly_summarize_url_marks_synced(tmp_path) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=str(tmp_path / "midas.db"),
+            min_live_sync_interval_seconds=0,
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://www.xiaohongshu.com/api/some/path"
+            ),
+        )
+    )
+    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
+    note = XiaohongshuNote(
+        note_id="u1",
+        title="url-note",
+        content="来自单篇 URL 的正文",
+        source_url="https://www.xiaohongshu.com/explore/u1",
+    )
+    source = SingleUrlWebSource(note)
+    service = XiaohongshuSyncService(
+        settings=settings,
+        repository=repo,
+        web_source=source,
+        llm_service=SimpleLLM(),
+    )
+
+    result = await service.summarize_url("https://www.xiaohongshu.com/explore/u1")
+
+    assert result.note_id == "u1"
+    assert result.source_url == "https://www.xiaohongshu.com/explore/u1"
+    assert source.last_url == "https://www.xiaohongshu.com/explore/u1"
+    assert repo.is_synced("u1") is True
+    assert "原文链接" in result.summary_markdown
+
+
+@pytest.mark.asyncio
+async def test_web_readonly_pending_count_only_counts_unsynced_note_ids(tmp_path) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=str(tmp_path / "midas.db"),
+            min_live_sync_interval_seconds=0,
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://www.xiaohongshu.com/api/some/path"
+            ),
+        )
+    )
+    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
+    repo.mark_synced("w2", "web-title-2", "https://www.xiaohongshu.com/explore/w2")
+    source = PendingCountWebSource(
+        batches=[
+            XiaohongshuPageBatch(
+                notes=[
+                    XiaohongshuNote(
+                        note_id="w1",
+                        title="web-title-1",
+                        content="web-content-1",
+                        source_url="https://www.xiaohongshu.com/explore/w1",
+                    ),
+                    XiaohongshuNote(
+                        note_id="w2",
+                        title="web-title-2",
+                        content="web-content-2",
+                        source_url="https://www.xiaohongshu.com/explore/w2",
+                    ),
+                ],
+                request_cursor="",
+                next_cursor="cursor-2",
+                exhausted=False,
+            ),
+            XiaohongshuPageBatch(
+                notes=[
+                    XiaohongshuNote(
+                        note_id="w2",
+                        title="web-title-2",
+                        content="web-content-2",
+                        source_url="https://www.xiaohongshu.com/explore/w2",
+                    ),
+                    XiaohongshuNote(
+                        note_id="w3",
+                        title="web-title-3",
+                        content="web-content-3",
+                        source_url="https://www.xiaohongshu.com/explore/w3",
+                    ),
+                ],
+                request_cursor="cursor-2",
+                next_cursor="",
+                exhausted=True,
+            ),
+        ]
+    )
+    service = XiaohongshuSyncService(
+        settings=settings,
+        repository=repo,
+        web_source=source,
+        llm_service=SimpleLLM(),
+    )
+
+    result = await service.get_pending_unsynced_count()
+
+    assert result["mode"] == "web_readonly"
+    assert result["scanned_count"] == 3
+    assert result["pending_count"] == 2
+    assert len(source.calls) == 1
+    assert source.calls[0]["force_head"] is True
 
 
 @pytest.mark.asyncio

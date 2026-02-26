@@ -13,8 +13,10 @@ import com.midas.client.data.model.NotesDeleteData
 import com.midas.client.data.model.NotesSaveBatchData
 import com.midas.client.data.model.XiaohongshuCaptureRefreshData
 import com.midas.client.data.model.XiaohongshuNotesSaveRequest
+import com.midas.client.data.model.XiaohongshuPendingCountData
 import com.midas.client.data.model.XiaohongshuSavedNotesData
 import com.midas.client.data.model.XiaohongshuSyncedNotesPruneData
+import com.midas.client.data.model.XiaohongshuSummarizeUrlRequest
 import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.data.model.XiaohongshuSyncData
 import com.midas.client.data.model.XiaohongshuSyncCooldownData
@@ -112,6 +114,18 @@ class MidasRepository {
         }
     }
 
+    suspend fun summarizeXiaohongshuUrl(
+        baseUrl: String,
+        url: String,
+    ): AppResult<XiaohongshuSummaryItem> {
+        return runCatching {
+            val api = MidasApiFactory.create(baseUrl)
+            unwrap(api.summarizeXiaohongshuUrl(XiaohongshuSummarizeUrlRequest(url = url)))
+        }.getOrElse { throwable ->
+            AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
+        }
+    }
+
     suspend fun saveXiaohongshuNotes(
         baseUrl: String,
         notes: List<XiaohongshuSummaryItem>,
@@ -175,6 +189,15 @@ class MidasRepository {
         return runCatching {
             val api = MidasApiFactory.create(baseUrl)
             unwrap(api.getXiaohongshuSyncCooldown())
+        }.getOrElse { throwable ->
+            AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
+        }
+    }
+
+    suspend fun getXiaohongshuPendingCount(baseUrl: String): AppResult<XiaohongshuPendingCountData> {
+        return runCatching {
+            val api = MidasApiFactory.create(baseUrl)
+            unwrap(api.getXiaohongshuPendingCount())
         }.getOrElse { throwable ->
             AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
         }

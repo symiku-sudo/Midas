@@ -8,7 +8,9 @@
 - `GET /api/notes/bilibili`
 - `DELETE /api/notes/bilibili/{note_id}` / `DELETE /api/notes/bilibili`
 - `POST /api/xiaohongshu/sync`
+- `POST /api/xiaohongshu/summarize-url`
 - `GET /api/xiaohongshu/sync/cooldown`
+- `GET /api/xiaohongshu/sync/pending-count`
 - `POST /api/notes/xiaohongshu/save-batch`
 - `GET /api/notes/xiaohongshu`
 - `DELETE /api/notes/xiaohongshu/{note_id}` / `DELETE /api/notes/xiaohongshu`
@@ -175,8 +177,16 @@ curl -X POST http://127.0.0.1:8000/api/xiaohongshu/sync \
   -H 'Content-Type: application/json' \
   -d '{"limit":5}'
 
+# 按 URL 总结单篇小红书笔记
+curl -X POST http://127.0.0.1:8000/api/xiaohongshu/summarize-url \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://www.xiaohongshu.com/explore/xxxxxx"}'
+
 # 查询真实同步冷却状态（remaining_seconds>0 时建议倒计时后再发起）
 curl http://127.0.0.1:8000/api/xiaohongshu/sync/cooldown
+
+# 统计收藏中未登记到去重表的笔记数量
+curl http://127.0.0.1:8000/api/xiaohongshu/sync/pending-count
 ```
 
 ```bash

@@ -151,6 +151,29 @@ Request:
 }
 ```
 
+## `POST /api/xiaohongshu/summarize-url`
+
+用途：按指定小红书笔记 URL 总结单篇内容（支持图文与视频笔记）。
+
+Request:
+
+```json
+{
+  "url": "https://www.xiaohongshu.com/explore/xxxxxx"
+}
+```
+
+Success `data`:
+
+```json
+{
+  "note_id": "xxxxxx",
+  "title": "笔记标题",
+  "source_url": "https://www.xiaohongshu.com/explore/xxxxxx",
+  "summary_markdown": "# 总结..."
+}
+```
+
 ## `GET /api/xiaohongshu/sync/cooldown`
 
 用途：查询“小红书真实同步”冷却状态（用于客户端倒计时与按钮禁用）。
@@ -198,6 +221,20 @@ Success `data`:
       "summary_markdown": "..."
     }
   ]
+}
+```
+
+## `GET /api/xiaohongshu/sync/pending-count`
+
+用途：统计收藏中“尚未写入去重表”的笔记数量（仅返回数量与扫描总数）。
+
+Success `data`:
+
+```json
+{
+  "mode": "web_readonly",
+  "pending_count": 12,
+  "scanned_count": 87
 }
 ```
 

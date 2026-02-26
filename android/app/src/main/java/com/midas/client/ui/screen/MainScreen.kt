@@ -35,6 +35,7 @@ import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -46,7 +47,10 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSummaryData
 import com.midas.client.data.model.XiaohongshuSavedNote
@@ -58,8 +62,8 @@ import kotlin.math.abs
 import kotlinx.coroutines.launch
 
 private enum class MainTab(val title: String) {
-    BILIBILI("B站总结"),
-    XHS("小红书同步"),
+    BILIBILI("B站"),
+    XHS("小红书"),
     NOTES("笔记库"),
     SETTINGS("设置"),
 }
@@ -271,6 +275,7 @@ fun MainScreen(viewModel: MainViewModel) {
     val bilibili by viewModel.bilibiliState.collectAsStateWithLifecycle()
     val xiaohongshu by viewModel.xiaohongshuState.collectAsStateWithLifecycle()
     val notes by viewModel.notesState.collectAsStateWithLifecycle()
+    val lifecycleOwner = LocalLifecycleOwner.current
     val tabs = MainTab.entries
     val tabCount = tabs.size
     val pagerState = rememberPagerState(
@@ -279,6 +284,18 @@ fun MainScreen(viewModel: MainViewModel) {
     )
     val scope = rememberCoroutineScope()
     val selectedTabIndex = pagerState.currentPage % tabCount
+
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) {
+                viewModel.onAppForeground()
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
 
     Scaffold(
         topBar = {
@@ -346,7 +363,10 @@ fun MainScreen(viewModel: MainViewModel) {
                     XiaohongshuPanel(
                         state = xiaohongshu,
                         onLimitChange = viewModel::onXiaohongshuLimitInputChange,
+                        onUrlChange = viewModel::onXiaohongshuUrlInputChange,
                         onStartSync = viewModel::startXiaohongshuSync,
+                        onSummarizeUrl = viewModel::summarizeXiaohongshuByUrl,
+                        onRefreshPendingCount = viewModel::refreshXiaohongshuPendingCount,
                         onSaveNotes = viewModel::saveCurrentXiaohongshuSummaries,
                         onPruneSyncedNoteIds = viewModel::pruneUnsavedXiaohongshuSyncedNotes,
                         onRefreshAuthConfig = viewModel::refreshXiaohongshuAuthConfig,
@@ -392,6 +412,7 @@ private fun nearestCyclicTabPage(
 private fun SingleLineActionText(text: String) {
     Text(
         text = text,
+        style = MaterialTheme.typography.labelSmall,
         maxLines = 1,
         softWrap = false,
         overflow = TextOverflow.Ellipsis,
@@ -429,7 +450,7 @@ private fun SettingsPanel(
         OutlinedTextField(
             value = state.baseUrlInput,
             onValueChange = onBaseUrlChange,
-            label = { Text("服务端地址（如 http://192.168.1.5:8000/）") },
+            label = { Text("服务端地址（如 http://100.98.44.5:8000/）") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
@@ -765,7 +786,7 @@ private fun BilibiliPanel(
                 onClick = onSaveNote,
                 enabled = !state.isSavingNote && state.result != null,
             ) {
-                SingleLineActionText(if (state.isSavingNote) "保存中..." else "保存这次总结")
+                SingleLineActionText(if (state.isSavingNote) "保存中..." else "保存总结")
             }
         }
         if (state.isLoading) {
@@ -806,7 +827,10 @@ private fun BilibiliResult(result: BilibiliSummaryData) {
 private fun XiaohongshuPanel(
     state: XiaohongshuUiState,
     onLimitChange: (String) -> Unit,
+    onUrlChange: (String) -> Unit,
     onStartSync: () -> Unit,
+    onSummarizeUrl: () -> Unit,
+    onRefreshPendingCount: () -> Unit,
     onSaveNotes: () -> Unit,
     onPruneSyncedNoteIds: () -> Unit,
     onRefreshAuthConfig: () -> Unit,
@@ -816,10 +840,10 @@ private fun XiaohongshuPanel(
     val cooldownSeconds = state.syncCooldownRemainingSeconds.coerceAtLeast(0)
     val canStartSync = !state.isSyncing && !state.isLoadingSyncCooldown && cooldownSeconds <= 0
     val startSyncLabel = when {
-        state.isSyncing -> "同步中..."
-        state.isLoadingSyncCooldown -> "同步最近收藏（检查中...）"
-        cooldownSeconds > 0 -> "同步最近收藏（${formatCooldownText(cooldownSeconds)}）"
-        else -> "同步最近收藏"
+        state.isSyncing -> "同步中"
+        state.isLoadingSyncCooldown -> "同步收藏(检查中)"
+        cooldownSeconds > 0 -> "同步收藏(${formatCooldownText(cooldownSeconds)})"
+        else -> "同步收藏"
     }
 
     Column(
@@ -834,6 +858,13 @@ private fun XiaohongshuPanel(
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
+        OutlinedTextField(
+            value = state.urlInput,
+            onValueChange = onUrlChange,
+            label = { Text("单篇笔记 URL") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(onClick = onStartSync, enabled = canStartSync) {
                 SingleLineActionText(startSyncLabel)
@@ -842,7 +873,21 @@ private fun XiaohongshuPanel(
                 onClick = onSaveNotes,
                 enabled = !state.isSavingNotes && state.summaries.isNotEmpty(),
             ) {
-                SingleLineActionText(if (state.isSavingNotes) "保存中..." else "批量保存本次结果")
+                SingleLineActionText(if (state.isSavingNotes) "保存中..." else "批量保存")
+            }
+        }
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(
+                onClick = onSummarizeUrl,
+                enabled = !state.isSummarizingUrl,
+            ) {
+                SingleLineActionText(if (state.isSummarizingUrl) "总结中..." else "总结单篇")
+            }
+            Button(
+                onClick = onRefreshPendingCount,
+                enabled = !state.isLoadingPendingCount && !state.isSyncing,
+            ) {
+                SingleLineActionText(if (state.isLoadingPendingCount) "统计中..." else "统计未登记")
             }
         }
         Button(
@@ -855,7 +900,7 @@ private fun XiaohongshuPanel(
             onClick = onRefreshAuthConfig,
             enabled = !state.isRefreshingCaptureConfig && !state.isSyncing,
         ) {
-            SingleLineActionText(if (state.isRefreshingCaptureConfig) "更新中..." else "更新auth配置")
+            SingleLineActionText(if (state.isRefreshingCaptureConfig) "更新中..." else "更新Auth")
         }
         Text(
             text = "清理已被标记为“已同步”但你并未保存的笔记，下次同步时会重新尝试生成。",
@@ -893,6 +938,12 @@ private fun XiaohongshuPanel(
         }
         if (state.captureRefreshStatus.isNotBlank()) {
             Text(text = state.captureRefreshStatus, color = Color(0xFF2E7D32))
+        }
+        if (state.summarizeUrlStatus.isNotBlank()) {
+            Text(text = state.summarizeUrlStatus, color = Color(0xFF2E7D32))
+        }
+        if (state.pendingCountText.isNotBlank()) {
+            Text(text = state.pendingCountText, fontWeight = FontWeight.SemiBold)
         }
         if (state.statsText.isNotBlank()) {
             Text(text = state.statsText, fontWeight = FontWeight.SemiBold)

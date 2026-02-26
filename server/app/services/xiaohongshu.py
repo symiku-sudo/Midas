@@ -216,10 +216,118 @@ class XiaohongshuWebReadonlySource:
                 break
         return notes
 
+    async def fetch_note_by_url(self, note_url: str) -> XiaohongshuNote:
+        cfg = self._settings.xiaohongshu.web_readonly
+        normalized_url = self.normalize_note_url(note_url)
+        note_id = self.extract_note_id_from_url(normalized_url)
+        headers = self._build_headers(cfg.request_headers)
+
+        detail_fetch_mode = cfg.detail_fetch_mode.strip().lower() or "auto"
+        if detail_fetch_mode not in {"auto", "always", "never"}:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    "detail_fetch_mode 仅支持 auto/always/never，"
+                    f"当前为 {cfg.detail_fetch_mode}"
+                ),
+                status_code=400,
+            )
+        detail_url_template = cfg.detail_request_url_template.strip()
+        if detail_fetch_mode == "always" and not detail_url_template:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message="detail_fetch_mode=always 时必须配置 detail_request_url_template。",
+                status_code=400,
+            )
+        detail_method = self._normalize_method(
+            cfg.detail_request_method, field_name="detail_request_method"
+        )
+        detail_headers = self._build_headers(
+            cfg.detail_request_headers, fallback_headers=headers
+        )
+        detail_body = cfg.detail_request_body.strip() if detail_method == "POST" else None
+        max_images = max(int(cfg.max_images_per_note), 0)
+        timeout = self._settings.xiaohongshu.request_timeout_seconds
+
+        record = {
+            cfg.note_id_field: note_id,
+            "note_id": note_id,
+            cfg.source_url_field: normalized_url,
+            "source_url": normalized_url,
+            "url": normalized_url,
+        }
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            note = await self._extract_note_from_record(
+                client=client,
+                record=record,
+                cfg=cfg,
+                headers=headers,
+                detail_fetch_mode=detail_fetch_mode,
+                detail_url_template=detail_url_template,
+                detail_method=detail_method,
+                detail_headers=detail_headers,
+                detail_body=detail_body,
+                max_images=max_images,
+            )
+        if note is None:
+            raise AppError(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message="无法从该 URL 解析出可总结的小红书笔记内容。",
+                status_code=502,
+            )
+        return note
+
     async def iter_recent(self) -> AsyncIterator[XiaohongshuNote]:
         async for batch in self.iter_pages():
             for note in batch.notes:
                 yield note
+
+    def normalize_note_url(self, note_url: str) -> str:
+        raw = note_url.strip()
+        if not raw:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message="笔记 URL 不能为空。",
+                status_code=400,
+            )
+        if raw.startswith("//"):
+            raw = f"https:{raw}"
+        if "://" not in raw:
+            raw = f"https://{raw.lstrip('/')}"
+
+        parsed = urlparse(raw)
+        if parsed.scheme == "http":
+            parsed = parsed._replace(scheme="https")
+        if parsed.scheme != "https":
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message="笔记 URL 仅支持 HTTPS。",
+                status_code=400,
+            )
+        normalized = urlunparse(parsed._replace(fragment=""))
+        cfg = self._settings.xiaohongshu.web_readonly
+        self._assert_https_and_host(normalized, cfg.host_allowlist)
+        return normalized
+
+    def extract_note_id_from_url(self, note_url: str) -> str:
+        parsed = urlparse(note_url.strip())
+        segments = [segment for segment in parsed.path.split("/") if segment]
+        note_id = ""
+        if len(segments) >= 2 and segments[0] == "explore":
+            note_id = segments[1]
+        elif (
+            len(segments) >= 3
+            and segments[0] == "discovery"
+            and segments[1] == "item"
+        ):
+            note_id = segments[2]
+        if not note_id:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message="仅支持 /explore/<note_id> 或 /discovery/item/<note_id> 格式的小红书链接。",
+                status_code=400,
+            )
+        return note_id.strip()
 
     async def iter_pages(
         self,
@@ -1928,6 +2036,141 @@ class XiaohongshuSyncService:
             self._repository.set_state("last_live_sync_ts", str(int(time.time())))
 
         return result
+
+    async def summarize_url(self, note_url: str) -> XiaohongshuSummaryItem:
+        mode = self._settings.xiaohongshu.mode.strip().lower()
+        if mode not in {"mock", "web_readonly"}:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message="当前仅支持 xiaohongshu.mode=mock 或 web_readonly。",
+                status_code=400,
+            )
+
+        note = await self._resolve_note_by_url(mode=mode, note_url=note_url)
+        if note.is_video:
+            summary = await self._summarize_video_note(note)
+        else:
+            summary = await self._llm_service.summarize_xiaohongshu_note(
+                note_id=note.note_id,
+                title=note.title,
+                content=note.content,
+                source_url=note.source_url,
+                image_urls=note.image_urls,
+            )
+        summary = self._ensure_source_link(summary, note.source_url)
+        result = XiaohongshuSummaryItem(
+            note_id=note.note_id,
+            title=note.title,
+            source_url=note.source_url,
+            summary_markdown=summary,
+        )
+        self._repository.mark_synced(
+            note_id=note.note_id,
+            title=note.title,
+            source_url=note.source_url,
+        )
+        return result
+
+    async def get_pending_unsynced_count(self) -> dict[str, int | str]:
+        mode = self._settings.xiaohongshu.mode.strip().lower()
+        if mode not in {"mock", "web_readonly"}:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message="当前仅支持 xiaohongshu.mode=mock 或 web_readonly。",
+                status_code=400,
+            )
+
+        scanned_count = 0
+        pending_count = 0
+        seen_note_ids: set[str] = set()
+        async for note in self._iter_notes_for_pending_count(mode=mode):
+            if note.note_id in seen_note_ids:
+                continue
+            seen_note_ids.add(note.note_id)
+            scanned_count += 1
+            if not self._repository.is_synced(note.note_id):
+                pending_count += 1
+
+        return {
+            "mode": mode,
+            "pending_count": pending_count,
+            "scanned_count": scanned_count,
+        }
+
+    async def _resolve_note_by_url(self, *, mode: str, note_url: str) -> XiaohongshuNote:
+        if mode == "web_readonly":
+            return await self._web_source.fetch_note_by_url(note_url)
+
+        normalized_url = self._web_source.normalize_note_url(note_url)
+        target_note_id = self._web_source.extract_note_id_from_url(normalized_url)
+
+        iter_recent = getattr(self._source, "iter_recent", None)
+        if callable(iter_recent):
+            for note in iter_recent():
+                if note.note_id == target_note_id:
+                    if note.source_url == normalized_url:
+                        return note
+                    return XiaohongshuNote(
+                        note_id=note.note_id,
+                        title=note.title,
+                        content=note.content,
+                        source_url=normalized_url,
+                        image_urls=note.image_urls,
+                        is_video=note.is_video,
+                    )
+        else:
+            for note in self._source.fetch_recent(limit=10000):
+                if note.note_id == target_note_id:
+                    if note.source_url == normalized_url:
+                        return note
+                    return XiaohongshuNote(
+                        note_id=note.note_id,
+                        title=note.title,
+                        content=note.content,
+                        source_url=normalized_url,
+                        image_urls=note.image_urls,
+                        is_video=note.is_video,
+                    )
+
+        raise AppError(
+            code=ErrorCode.INVALID_INPUT,
+            message=f"未找到该小红书笔记：{target_note_id}",
+            status_code=404,
+        )
+
+    async def _iter_notes_for_pending_count(
+        self,
+        *,
+        mode: str,
+    ) -> AsyncIterator[XiaohongshuNote]:
+        if mode == "mock":
+            iter_recent = getattr(self._source, "iter_recent", None)
+            if callable(iter_recent):
+                for note in iter_recent():
+                    yield note
+                return
+            for note in self._source.fetch_recent(limit=10000):
+                yield note
+            return
+
+        iter_pages = getattr(self._web_source, "iter_pages", None)
+        if callable(iter_pages):
+            async for batch in iter_pages(force_head=True):
+                for note in batch.notes:
+                    yield note
+            return
+
+        iter_recent = getattr(self._web_source, "iter_recent", None)
+        if callable(iter_recent):
+            async for note in iter_recent():
+                yield note
+            return
+
+        notes = await self._web_source.fetch_recent(
+            limit=max(self._settings.xiaohongshu.max_limit, 1)
+        )
+        for note in notes:
+            yield note
 
     async def _iter_candidate_notes(
         self, *, mode: str, requested_limit: int

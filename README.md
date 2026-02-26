@@ -8,6 +8,8 @@
   - `GET /health`
   - `POST /api/bilibili/summarize`（`video_url` 支持完整链接或直接传 `BV` 号）
   - `POST /api/xiaohongshu/sync`
+  - `POST /api/xiaohongshu/summarize-url`
+  - `GET /api/xiaohongshu/sync/pending-count`
   - `POST /api/xiaohongshu/sync/jobs`
   - `GET /api/xiaohongshu/sync/jobs/{job_id}`
 - Android 客户端（Compose）：已完成最小可用版本

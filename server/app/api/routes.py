@@ -20,7 +20,9 @@ from app.models.schemas import (
     NotesDeleteData,
     NotesSaveBatchData,
     XiaohongshuCaptureRefreshData,
+    XiaohongshuPendingCountData,
     XiaohongshuNotesSaveRequest,
+    XiaohongshuUrlSummaryRequest,
     XiaohongshuSyncCooldownData,
     XiaohongshuSyncedNotesPruneData,
     XiaohongshuSyncJobCreateData,
@@ -133,11 +135,29 @@ async def xiaohongshu_sync(payload: XiaohongshuSyncRequest, request: Request) ->
     return success_response(data=result.model_dump(), request_id=request.state.request_id)
 
 
+@router.post("/api/xiaohongshu/summarize-url")
+async def xiaohongshu_summarize_url(
+    payload: XiaohongshuUrlSummaryRequest, request: Request
+) -> dict:
+    logger.info("Receive xiaohongshu summarize-url request")
+    service = _get_xiaohongshu_sync_service()
+    result = await service.summarize_url(payload.url)
+    return success_response(data=result.model_dump(), request_id=request.state.request_id)
+
+
 @router.get("/api/xiaohongshu/sync/cooldown")
 async def xiaohongshu_sync_cooldown(request: Request) -> dict:
     service = _get_xiaohongshu_sync_service()
     cooldown = service.get_live_sync_cooldown()
     data = XiaohongshuSyncCooldownData(**cooldown)
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/xiaohongshu/sync/pending-count")
+async def xiaohongshu_sync_pending_count(request: Request) -> dict:
+    service = _get_xiaohongshu_sync_service()
+    result = await service.get_pending_unsynced_count()
+    data = XiaohongshuPendingCountData(**result)
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 

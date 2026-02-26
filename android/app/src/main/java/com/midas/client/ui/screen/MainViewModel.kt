@@ -47,10 +47,13 @@ data class BilibiliUiState(
 
 data class XiaohongshuUiState(
     val limitInput: String = "5",
+    val urlInput: String = "",
     val isSyncing: Boolean = false,
+    val isSummarizingUrl: Boolean = false,
     val isSavingNotes: Boolean = false,
     val isPruningSyncedNoteIds: Boolean = false,
     val isRefreshingCaptureConfig: Boolean = false,
+    val isLoadingPendingCount: Boolean = false,
     val isLoadingSyncCooldown: Boolean = false,
     val syncCooldownRemainingSeconds: Int = 0,
     val savingSingleNoteIds: Set<String> = emptySet(),
@@ -62,6 +65,8 @@ data class XiaohongshuUiState(
     val saveStatus: String = "",
     val pruneStatus: String = "",
     val captureRefreshStatus: String = "",
+    val summarizeUrlStatus: String = "",
+    val pendingCountText: String = "",
     val summaries: List<XiaohongshuSummaryItem> = emptyList(),
     val statsText: String = "",
 )
@@ -96,9 +101,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var syncPollingJob: Job? = null
     private var syncCooldownTickerJob: Job? = null
     private var autoSaveConfigJob: Job? = null
+    private var syncCooldownTargetEpochSeconds: Int = 0
 
     init {
         loadEditableConfig()
+        loadSavedNotes()
+        refreshXiaohongshuSyncCooldown()
+    }
+
+    fun onAppForeground() {
+        loadSavedNotes()
         refreshXiaohongshuSyncCooldown()
     }
 
@@ -446,6 +458,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 saveStatus = "",
                 pruneStatus = "",
                 captureRefreshStatus = "",
+                summarizeUrlStatus = "",
+            )
+        }
+    }
+
+    fun onXiaohongshuUrlInputChange(newValue: String) {
+        _xiaohongshuState.update {
+            it.copy(
+                urlInput = newValue,
+                errorMessage = "",
+                summarizeUrlStatus = "",
+                saveStatus = "",
+                pruneStatus = "",
+                captureRefreshStatus = "",
             )
         }
     }
@@ -457,17 +483,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             when (val result = apiRepository.getXiaohongshuSyncCooldown(baseUrl)) {
                 is AppResult.Success -> {
                     val remaining = result.data.remainingSeconds.coerceAtLeast(0)
+                    syncCooldownTargetEpochSeconds = result.data.nextAllowedAtEpoch.coerceAtLeast(0)
                     _xiaohongshuState.update {
                         it.copy(
                             isLoadingSyncCooldown = false,
                             syncCooldownRemainingSeconds = remaining,
                         )
                     }
-                    startSyncCooldownTicker(remaining)
+                    startSyncCooldownTicker(syncCooldownTargetEpochSeconds)
                 }
 
                 is AppResult.Error -> {
                     syncCooldownTickerJob?.cancel()
+                    syncCooldownTargetEpochSeconds = 0
                     _xiaohongshuState.update {
                         it.copy(
                             isLoadingSyncCooldown = false,
@@ -479,19 +507,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private fun startSyncCooldownTicker(initialRemainingSeconds: Int) {
+    private fun startSyncCooldownTicker(nextAllowedAtEpoch: Int) {
         syncCooldownTickerJob?.cancel()
-        if (initialRemainingSeconds <= 0) {
+        if (nextAllowedAtEpoch <= 0) {
             return
         }
         syncCooldownTickerJob = viewModelScope.launch {
-            var remaining = initialRemainingSeconds
-            while (remaining > 0) {
-                delay(1000)
-                remaining -= 1
+            while (true) {
+                val nowEpoch = (System.currentTimeMillis() / 1000L).toInt()
+                val remaining = (nextAllowedAtEpoch - nowEpoch).coerceAtLeast(0)
                 _xiaohongshuState.update {
-                    it.copy(syncCooldownRemainingSeconds = remaining.coerceAtLeast(0))
+                    it.copy(syncCooldownRemainingSeconds = remaining)
                 }
+                if (remaining <= 0) {
+                    break
+                }
+                delay(1000)
             }
             refreshXiaohongshuSyncCooldown()
         }
@@ -527,6 +558,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     saveStatus = "",
                     pruneStatus = "",
                     captureRefreshStatus = "",
+                    summarizeUrlStatus = "",
                     summaries = emptyList(),
                     statsText = "",
                 )
@@ -556,6 +588,97 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 is AppResult.Success -> {
                     val jobId = create.data.jobId
                     pollSyncJob(baseUrl, jobId)
+                }
+            }
+        }
+    }
+
+    fun summarizeXiaohongshuByUrl() {
+        val baseUrl = normalizeCurrentBaseUrl()
+        val url = _xiaohongshuState.value.urlInput.trim()
+        if (url.isEmpty()) {
+            _xiaohongshuState.update { it.copy(errorMessage = "请输入小红书笔记链接。") }
+            return
+        }
+
+        viewModelScope.launch {
+            _xiaohongshuState.update {
+                it.copy(
+                    isSummarizingUrl = true,
+                    errorMessage = "",
+                    summarizeUrlStatus = "",
+                    saveStatus = "",
+                    pruneStatus = "",
+                    captureRefreshStatus = "",
+                )
+            }
+            when (val result = apiRepository.summarizeXiaohongshuUrl(baseUrl, url)) {
+                is AppResult.Success -> {
+                    _xiaohongshuState.update {
+                        val currentList = it.summaries.filter { summary ->
+                            summary.noteId != result.data.noteId
+                        }
+                        it.copy(
+                            isSummarizingUrl = false,
+                            summaries = listOf(result.data) + currentList,
+                            summarizeUrlStatus = "单篇笔记总结完成，可直接保存。",
+                            statsText = "",
+                        )
+                    }
+                }
+
+                is AppResult.Error -> {
+                    _xiaohongshuState.update {
+                        it.copy(
+                            isSummarizingUrl = false,
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun refreshXiaohongshuPendingCount() {
+        val baseUrl = normalizeCurrentBaseUrl()
+        if (_xiaohongshuState.value.isLoadingPendingCount) {
+            return
+        }
+
+        viewModelScope.launch {
+            _xiaohongshuState.update {
+                it.copy(
+                    isLoadingPendingCount = true,
+                    pendingCountText = "正在统计未登记数量...",
+                    errorMessage = "",
+                )
+            }
+            when (val result = apiRepository.getXiaohongshuPendingCount(baseUrl)) {
+                is AppResult.Success -> {
+                    _xiaohongshuState.update {
+                        it.copy(
+                            isLoadingPendingCount = false,
+                            pendingCountText = "未登记笔记：${result.data.pendingCount}（共扫描 ${result.data.scannedCount} 条）",
+                        )
+                    }
+                }
+
+                is AppResult.Error -> {
+                    _xiaohongshuState.update {
+                        it.copy(
+                            isLoadingPendingCount = false,
+                            pendingCountText = "",
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                            ),
+                        )
+                    }
                 }
             }
         }

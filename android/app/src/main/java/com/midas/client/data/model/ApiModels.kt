@@ -61,6 +61,10 @@ data class XiaohongshuSyncRequest(
     @Json(name = "confirm_live") val confirmLive: Boolean = false
 )
 
+data class XiaohongshuSummarizeUrlRequest(
+    val url: String
+)
+
 data class XiaohongshuSummaryItem(
     @Json(name = "note_id") val noteId: String,
     val title: String,
@@ -124,6 +128,12 @@ data class XiaohongshuSyncCooldownData(
     @Json(name = "next_allowed_at_epoch") val nextAllowedAtEpoch: Int,
     @Json(name = "last_sync_at_epoch") val lastSyncAtEpoch: Int,
     @Json(name = "min_interval_seconds") val minIntervalSeconds: Int
+)
+
+data class XiaohongshuPendingCountData(
+    val mode: String,
+    @Json(name = "pending_count") val pendingCount: Int,
+    @Json(name = "scanned_count") val scannedCount: Int
 )
 
 data class EditableConfigData(

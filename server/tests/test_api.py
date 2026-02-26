@@ -149,6 +149,37 @@ def test_xiaohongshu_sync_cooldown_status() -> None:
         assert data["remaining_seconds"] == 0
 
 
+def test_xiaohongshu_summarize_single_url() -> None:
+    _reset_xiaohongshu_state()
+
+    resp = client.post(
+        "/api/xiaohongshu/summarize-url",
+        json={"url": "https://www.xiaohongshu.com/explore/mock-note-001"},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["data"]["note_id"] == "mock-note-001"
+    assert body["data"]["source_url"] == "https://www.xiaohongshu.com/explore/mock-note-001"
+    assert body["data"]["summary_markdown"]
+
+
+def test_xiaohongshu_pending_count() -> None:
+    _reset_xiaohongshu_state()
+
+    sync_resp = client.post("/api/xiaohongshu/sync", json={"limit": 1})
+    assert sync_resp.status_code == 200
+    assert sync_resp.json()["data"]["new_count"] == 1
+
+    count_resp = client.get("/api/xiaohongshu/sync/pending-count")
+    assert count_resp.status_code == 200
+    body = count_resp.json()
+    assert body["ok"] is True
+    assert body["data"]["mode"] == "mock"
+    assert body["data"]["scanned_count"] == 5
+    assert body["data"]["pending_count"] == 4
+
+
 def test_bilibili_saved_notes_crud() -> None:
     _reset_xiaohongshu_state()
 

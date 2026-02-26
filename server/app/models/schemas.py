@@ -48,6 +48,10 @@ class XiaohongshuSyncRequest(BaseModel):
     confirm_live: bool = False
 
 
+class XiaohongshuUrlSummaryRequest(BaseModel):
+    url: str = Field(min_length=8, max_length=2000)
+
+
 class XiaohongshuSummaryItem(BaseModel):
     note_id: str
     title: str
@@ -111,6 +115,12 @@ class XiaohongshuSyncCooldownData(BaseModel):
     next_allowed_at_epoch: int
     last_sync_at_epoch: int
     min_interval_seconds: int
+
+
+class XiaohongshuPendingCountData(BaseModel):
+    mode: str
+    pending_count: int
+    scanned_count: int
 
 
 class EditableConfigData(BaseModel):
