@@ -17,6 +17,7 @@ import com.midas.client.data.model.XiaohongshuSavedNotesData
 import com.midas.client.data.model.XiaohongshuSyncedNotesPruneData
 import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.data.model.XiaohongshuSyncData
+import com.midas.client.data.model.XiaohongshuSyncCooldownData
 import com.midas.client.data.model.XiaohongshuSyncJobCreateData
 import com.midas.client.data.model.XiaohongshuSyncJobStatusData
 import com.midas.client.data.model.XiaohongshuSyncRequest
@@ -165,6 +166,15 @@ class MidasRepository {
         return runCatching {
             val api = MidasApiFactory.create(baseUrl)
             unwrap(api.refreshXiaohongshuCapture())
+        }.getOrElse { throwable ->
+            AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
+        }
+    }
+
+    suspend fun getXiaohongshuSyncCooldown(baseUrl: String): AppResult<XiaohongshuSyncCooldownData> {
+        return runCatching {
+            val api = MidasApiFactory.create(baseUrl)
+            unwrap(api.getXiaohongshuSyncCooldown())
         }.getOrElse { throwable ->
             AppResult.Error(code = "NETWORK_ERROR", message = throwable.message ?: "网络请求失败")
         }

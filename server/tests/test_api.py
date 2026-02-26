@@ -126,6 +126,29 @@ def test_xiaohongshu_sync_job_not_found() -> None:
     assert body["code"] == "INVALID_INPUT"
 
 
+def test_xiaohongshu_sync_cooldown_status() -> None:
+    _reset_xiaohongshu_state()
+    service = _get_xiaohongshu_sync_service()
+    now = int(time.time())
+    service._repository.set_state("last_live_sync_ts", str(now - 11))
+
+    resp = client.get("/api/xiaohongshu/sync/cooldown")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    data = body["data"]
+    assert data["mode"] in {"mock", "web_readonly"}
+    assert data["min_interval_seconds"] >= 0
+    if data["mode"] == "web_readonly":
+        assert data["last_sync_at_epoch"] == now - 11
+        assert data["allowed"] is False
+        assert data["remaining_seconds"] > 0
+    else:
+        assert data["last_sync_at_epoch"] == 0
+        assert data["allowed"] is True
+        assert data["remaining_seconds"] == 0
+
+
 def test_bilibili_saved_notes_crud() -> None:
     _reset_xiaohongshu_state()
 

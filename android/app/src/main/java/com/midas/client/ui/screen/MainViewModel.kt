@@ -51,6 +51,8 @@ data class XiaohongshuUiState(
     val isSavingNotes: Boolean = false,
     val isPruningSyncedNoteIds: Boolean = false,
     val isRefreshingCaptureConfig: Boolean = false,
+    val isLoadingSyncCooldown: Boolean = false,
+    val syncCooldownRemainingSeconds: Int = 0,
     val savingSingleNoteIds: Set<String> = emptySet(),
     val savedNoteIds: Set<String> = emptySet(),
     val progressCurrent: Int = 0,
@@ -92,10 +94,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val notesState: StateFlow<NotesUiState> = _notesState.asStateFlow()
 
     private var syncPollingJob: Job? = null
+    private var syncCooldownTickerJob: Job? = null
     private var autoSaveConfigJob: Job? = null
 
     init {
         loadEditableConfig()
+        refreshXiaohongshuSyncCooldown()
     }
 
     fun onBaseUrlInputChange(newValue: String) {
@@ -118,6 +122,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         loadEditableConfig()
+        refreshXiaohongshuSyncCooldown()
     }
 
     fun testConnection() {
@@ -445,11 +450,65 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun refreshXiaohongshuSyncCooldown() {
+        val baseUrl = normalizeCurrentBaseUrl()
+        viewModelScope.launch {
+            _xiaohongshuState.update { it.copy(isLoadingSyncCooldown = true) }
+            when (val result = apiRepository.getXiaohongshuSyncCooldown(baseUrl)) {
+                is AppResult.Success -> {
+                    val remaining = result.data.remainingSeconds.coerceAtLeast(0)
+                    _xiaohongshuState.update {
+                        it.copy(
+                            isLoadingSyncCooldown = false,
+                            syncCooldownRemainingSeconds = remaining,
+                        )
+                    }
+                    startSyncCooldownTicker(remaining)
+                }
+
+                is AppResult.Error -> {
+                    syncCooldownTickerJob?.cancel()
+                    _xiaohongshuState.update {
+                        it.copy(
+                            isLoadingSyncCooldown = false,
+                            syncCooldownRemainingSeconds = 0,
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    private fun startSyncCooldownTicker(initialRemainingSeconds: Int) {
+        syncCooldownTickerJob?.cancel()
+        if (initialRemainingSeconds <= 0) {
+            return
+        }
+        syncCooldownTickerJob = viewModelScope.launch {
+            var remaining = initialRemainingSeconds
+            while (remaining > 0) {
+                delay(1000)
+                remaining -= 1
+                _xiaohongshuState.update {
+                    it.copy(syncCooldownRemainingSeconds = remaining.coerceAtLeast(0))
+                }
+            }
+            refreshXiaohongshuSyncCooldown()
+        }
+    }
+
     fun startXiaohongshuSync() {
         val baseUrl = normalizeCurrentBaseUrl()
         val limit = _xiaohongshuState.value.limitInput.toIntOrNull()
         if (limit == null || limit <= 0) {
             _xiaohongshuState.update { it.copy(errorMessage = "同步数量必须为正整数。") }
+            return
+        }
+        val cooldownRemaining = _xiaohongshuState.value.syncCooldownRemainingSeconds
+        if (cooldownRemaining > 0) {
+            _xiaohongshuState.update {
+                it.copy(errorMessage = "请等待 ${cooldownRemaining} 秒后再发起真实同步。")
+            }
             return
         }
 
@@ -491,6 +550,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             ),
                         )
                     }
+                    refreshXiaohongshuSyncCooldown()
                 }
 
                 is AppResult.Success -> {
@@ -895,6 +955,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                     progressMessage = "同步任务完成。",
                                 )
                             }
+                            refreshXiaohongshuSyncCooldown()
                             return
                         }
 
@@ -912,6 +973,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             _xiaohongshuState.update {
                                 it.copy(isSyncing = false, errorMessage = message)
                             }
+                            refreshXiaohongshuSyncCooldown()
                             return
                         }
 
@@ -929,6 +991,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _xiaohongshuState.update {
             it.copy(isSyncing = false, errorMessage = "同步超时，请稍后重试。")
         }
+        refreshXiaohongshuSyncCooldown()
+    }
+
+    override fun onCleared() {
+        syncPollingJob?.cancel()
+        syncCooldownTickerJob?.cancel()
+        autoSaveConfigJob?.cancel()
+        super.onCleared()
     }
 
     private fun normalizeCurrentBaseUrl(): String {

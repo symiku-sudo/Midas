@@ -151,6 +151,23 @@ Request:
 }
 ```
 
+## `GET /api/xiaohongshu/sync/cooldown`
+
+用途：查询“小红书真实同步”冷却状态（用于客户端倒计时与按钮禁用）。
+
+Success `data`:
+
+```json
+{
+  "mode": "web_readonly",
+  "allowed": false,
+  "remaining_seconds": 1260,
+  "next_allowed_at_epoch": 1772100000,
+  "last_sync_at_epoch": 1772098740,
+  "min_interval_seconds": 1800
+}
+```
+
 说明：
 - `confirm_live` 仅在 `xiaohongshu.mode=web_readonly` 时需要设为 `true`。
 - 默认 `false`，用于防止误触发真实账号请求。

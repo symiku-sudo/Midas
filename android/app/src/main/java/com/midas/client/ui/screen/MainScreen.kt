@@ -1,6 +1,7 @@
 package com.midas.client.ui.screen
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -9,6 +10,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.BorderStroke
@@ -32,10 +35,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.midas.client.data.model.BilibiliSavedNote
@@ -45,6 +50,8 @@ import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.ui.components.MarkdownText
 import com.midas.client.util.ConfigFieldType
 import com.midas.client.util.EditableConfigField
+import kotlin.math.abs
+import kotlinx.coroutines.launch
 
 private enum class MainTab(val title: String) {
     BILIBILI("B站总结"),
@@ -253,14 +260,21 @@ private val configFieldSpecs = listOf(
     ),
 )
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
     val settings by viewModel.settingsState.collectAsStateWithLifecycle()
     val bilibili by viewModel.bilibiliState.collectAsStateWithLifecycle()
     val xiaohongshu by viewModel.xiaohongshuState.collectAsStateWithLifecycle()
     val notes by viewModel.notesState.collectAsStateWithLifecycle()
-
-    var selectedTab by remember { mutableStateOf(MainTab.BILIBILI) }
+    val tabs = MainTab.entries
+    val tabCount = tabs.size
+    val pagerState = rememberPagerState(
+        initialPage = tabCount * 1000,
+        pageCount = { Int.MAX_VALUE },
+    )
+    val scope = rememberCoroutineScope()
+    val selectedTabIndex = pagerState.currentPage % tabCount
 
     Scaffold(
         topBar = {
@@ -270,80 +284,125 @@ fun MainScreen(viewModel: MainViewModel) {
                     style = MaterialTheme.typography.titleLarge,
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
                 )
-                TabRow(selectedTabIndex = selectedTab.ordinal) {
-                    MainTab.entries.forEach { tab ->
+                TabRow(selectedTabIndex = selectedTabIndex) {
+                    tabs.forEachIndexed { index, tab ->
                         Tab(
-                            selected = selectedTab == tab,
-                            onClick = { selectedTab = tab },
-                            text = { Text(tab.title) },
+                            selected = selectedTabIndex == index,
+                            onClick = {
+                                val targetPage = nearestCyclicTabPage(
+                                    currentPage = pagerState.currentPage,
+                                    currentTabIndex = selectedTabIndex,
+                                    targetTabIndex = index,
+                                    tabCount = tabCount,
+                                )
+                                scope.launch { pagerState.animateScrollToPage(targetPage) }
+                            },
+                            text = { SingleLineActionText(tab.title) },
                         )
                     }
                 }
             }
         },
     ) { innerPadding ->
-        when (selectedTab) {
-            MainTab.SETTINGS -> {
-                SettingsPanel(
-                    state = settings,
-                    onBaseUrlChange = viewModel::onBaseUrlInputChange,
-                    onSave = viewModel::saveBaseUrl,
-                    onTestConnection = viewModel::testConnection,
-                    onConfigTextChange = viewModel::onEditableConfigFieldTextChange,
-                    onConfigBooleanChange = viewModel::onEditableConfigFieldBooleanChange,
-                    onResetConfig = viewModel::resetEditableConfig,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding)
-                        .padding(16.dp),
-                )
-            }
+        HorizontalPager(
+            state = pagerState,
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding),
+        ) { page ->
+            when (tabs[page % tabCount]) {
+                MainTab.SETTINGS -> {
+                    SettingsPanel(
+                        state = settings,
+                        onBaseUrlChange = viewModel::onBaseUrlInputChange,
+                        onSave = viewModel::saveBaseUrl,
+                        onTestConnection = viewModel::testConnection,
+                        onConfigTextChange = viewModel::onEditableConfigFieldTextChange,
+                        onConfigBooleanChange = viewModel::onEditableConfigFieldBooleanChange,
+                        onResetConfig = viewModel::resetEditableConfig,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp),
+                    )
+                }
 
-            MainTab.BILIBILI -> {
-                BilibiliPanel(
-                    state = bilibili,
-                    onVideoUrlChange = viewModel::onBilibiliUrlInputChange,
-                    onSubmit = viewModel::submitBilibiliSummary,
-                    onSaveNote = viewModel::saveCurrentBilibiliResult,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding)
-                        .padding(16.dp),
-                )
-            }
+                MainTab.BILIBILI -> {
+                    BilibiliPanel(
+                        state = bilibili,
+                        onVideoUrlChange = viewModel::onBilibiliUrlInputChange,
+                        onSubmit = viewModel::submitBilibiliSummary,
+                        onSaveNote = viewModel::saveCurrentBilibiliResult,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp),
+                    )
+                }
 
-            MainTab.XHS -> {
-                XiaohongshuPanel(
-                    state = xiaohongshu,
-                    onLimitChange = viewModel::onXiaohongshuLimitInputChange,
-                    onStartSync = viewModel::startXiaohongshuSync,
-                    onSaveNotes = viewModel::saveCurrentXiaohongshuSummaries,
-                    onPruneSyncedNoteIds = viewModel::pruneUnsavedXiaohongshuSyncedNotes,
-                    onRefreshAuthConfig = viewModel::refreshXiaohongshuAuthConfig,
-                    onSaveSingleNote = viewModel::saveSingleXiaohongshuSummary,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding)
-                        .padding(16.dp),
-                )
-            }
+                MainTab.XHS -> {
+                    XiaohongshuPanel(
+                        state = xiaohongshu,
+                        onLimitChange = viewModel::onXiaohongshuLimitInputChange,
+                        onStartSync = viewModel::startXiaohongshuSync,
+                        onSaveNotes = viewModel::saveCurrentXiaohongshuSummaries,
+                        onPruneSyncedNoteIds = viewModel::pruneUnsavedXiaohongshuSyncedNotes,
+                        onRefreshAuthConfig = viewModel::refreshXiaohongshuAuthConfig,
+                        onSaveSingleNote = viewModel::saveSingleXiaohongshuSummary,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp),
+                    )
+                }
 
-            MainTab.NOTES -> {
-                NotesPanel(
-                    state = notes,
-                    onKeywordChange = viewModel::onNotesKeywordInputChange,
-                    onRefresh = viewModel::loadSavedNotes,
-                    onDeleteBilibili = viewModel::deleteBilibiliSavedNote,
-                    onClearBilibili = viewModel::clearBilibiliSavedNotes,
-                    onDeleteXiaohongshu = viewModel::deleteXiaohongshuSavedNote,
-                    onClearXiaohongshu = viewModel::clearXiaohongshuSavedNotes,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(innerPadding)
-                        .padding(16.dp),
-                )
+                MainTab.NOTES -> {
+                    NotesPanel(
+                        state = notes,
+                        onKeywordChange = viewModel::onNotesKeywordInputChange,
+                        onRefresh = viewModel::loadSavedNotes,
+                        onDeleteBilibili = viewModel::deleteBilibiliSavedNote,
+                        onClearBilibili = viewModel::clearBilibiliSavedNotes,
+                        onDeleteXiaohongshu = viewModel::deleteXiaohongshuSavedNote,
+                        onClearXiaohongshu = viewModel::clearXiaohongshuSavedNotes,
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(16.dp),
+                    )
+                }
             }
         }
+    }
+}
+
+private fun nearestCyclicTabPage(
+    currentPage: Int,
+    currentTabIndex: Int,
+    targetTabIndex: Int,
+    tabCount: Int,
+): Int {
+    val forward = (targetTabIndex - currentTabIndex + tabCount) % tabCount
+    val backward = forward - tabCount
+    val delta = if (abs(forward) <= abs(backward)) forward else backward
+    return currentPage + delta
+}
+
+@Composable
+private fun SingleLineActionText(text: String) {
+    Text(
+        text = text,
+        maxLines = 1,
+        softWrap = false,
+        overflow = TextOverflow.Ellipsis,
+    )
+}
+
+private fun formatCooldownText(seconds: Int): String {
+    val safe = seconds.coerceAtLeast(0)
+    val hours = safe / 3600
+    val minutes = (safe % 3600) / 60
+    val secs = safe % 60
+    return if (hours > 0) {
+        "%d:%02d:%02d".format(hours, minutes, secs)
+    } else {
+        "%02d:%02d".format(minutes, secs)
     }
 }
 
@@ -372,10 +431,10 @@ private fun SettingsPanel(
         )
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(onClick = onSave) {
-                Text("保存")
+                SingleLineActionText("保存")
             }
             Button(onClick = onTestConnection, enabled = !state.isTesting) {
-                Text(if (state.isTesting) "测试中..." else "连接测试")
+                SingleLineActionText(if (state.isTesting) "测试中..." else "连接测试")
             }
         }
         if (state.saveStatus.isNotBlank()) {
@@ -389,7 +448,7 @@ private fun SettingsPanel(
         Text("运行配置", style = MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(onClick = onResetConfig, enabled = !state.isConfigResetting) {
-                Text(if (state.isConfigResetting) "恢复中..." else "恢复默认")
+                SingleLineActionText(if (state.isConfigResetting) "恢复中..." else "恢复默认")
             }
             if (state.isConfigSaving) {
                 Text("自动保存中...", style = MaterialTheme.typography.bodySmall)
@@ -696,13 +755,13 @@ private fun BilibiliPanel(
         )
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(onClick = onSubmit, enabled = !state.isLoading) {
-                Text(if (state.isLoading) "处理中..." else "开始总结")
+                SingleLineActionText(if (state.isLoading) "处理中..." else "开始总结")
             }
             Button(
                 onClick = onSaveNote,
                 enabled = !state.isSavingNote && state.result != null,
             ) {
-                Text(if (state.isSavingNote) "保存中..." else "保存这次总结")
+                SingleLineActionText(if (state.isSavingNote) "保存中..." else "保存这次总结")
             }
         }
         if (state.isLoading) {
@@ -750,6 +809,15 @@ private fun XiaohongshuPanel(
     onSaveSingleNote: (XiaohongshuSummaryItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val cooldownSeconds = state.syncCooldownRemainingSeconds.coerceAtLeast(0)
+    val canStartSync = !state.isSyncing && !state.isLoadingSyncCooldown && cooldownSeconds <= 0
+    val startSyncLabel = when {
+        state.isSyncing -> "同步中..."
+        state.isLoadingSyncCooldown -> "同步最近收藏（检查中...）"
+        cooldownSeconds > 0 -> "同步最近收藏（${formatCooldownText(cooldownSeconds)}）"
+        else -> "同步最近收藏"
+    }
+
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -763,27 +831,27 @@ private fun XiaohongshuPanel(
             singleLine = true,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onStartSync, enabled = !state.isSyncing) {
-                Text(if (state.isSyncing) "同步中..." else "同步最近收藏")
+            Button(onClick = onStartSync, enabled = canStartSync) {
+                SingleLineActionText(startSyncLabel)
             }
             Button(
                 onClick = onSaveNotes,
                 enabled = !state.isSavingNotes && state.summaries.isNotEmpty(),
             ) {
-                Text(if (state.isSavingNotes) "保存中..." else "批量保存本次结果")
+                SingleLineActionText(if (state.isSavingNotes) "保存中..." else "批量保存本次结果")
             }
         }
         Button(
             onClick = onPruneSyncedNoteIds,
             enabled = !state.isPruningSyncedNoteIds && !state.isSyncing,
         ) {
-            Text(if (state.isPruningSyncedNoteIds) "清理中..." else "清理无效ID")
+            SingleLineActionText(if (state.isPruningSyncedNoteIds) "清理中..." else "清理无效ID")
         }
         Button(
             onClick = onRefreshAuthConfig,
             enabled = !state.isRefreshingCaptureConfig && !state.isSyncing,
         ) {
-            Text(if (state.isRefreshingCaptureConfig) "更新中..." else "更新auth配置")
+            SingleLineActionText(if (state.isRefreshingCaptureConfig) "更新中..." else "更新auth配置")
         }
         Text(
             text = "清理已被标记为“已同步”但你并未保存的笔记，下次同步时会重新尝试生成。",
@@ -861,7 +929,7 @@ private fun XiaohongshuSummaryCard(
                     onClick = onSave,
                     enabled = !batchSaving && !isSaving && !isSaved,
                 ) {
-                    Text(
+                    SingleLineActionText(
                         when {
                             isSaved -> "已保存"
                             isSaving -> "保存中..."
@@ -920,13 +988,13 @@ private fun NotesPanel(
         )
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(onClick = onRefresh, enabled = !state.isLoading) {
-                Text(if (state.isLoading) "刷新中..." else "刷新笔记库")
+                SingleLineActionText(if (state.isLoading) "刷新中..." else "刷新笔记库")
             }
             Button(onClick = onClearBilibili, enabled = state.bilibiliNotes.isNotEmpty()) {
-                Text("清空B站")
+                SingleLineActionText("清空B站")
             }
             Button(onClick = onClearXiaohongshu, enabled = state.xiaohongshuNotes.isNotEmpty()) {
-                Text("清空小红书")
+                SingleLineActionText("清空小红书")
             }
         }
 
@@ -1034,7 +1102,7 @@ private fun NoteDetailPanel(
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
         Button(onClick = onBack) {
-            Text("返回标题列表")
+            SingleLineActionText("返回标题列表")
         }
 
         Card(modifier = Modifier.fillMaxWidth()) {

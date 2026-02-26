@@ -14,6 +14,7 @@ import com.midas.client.data.model.NotesSaveBatchData
 import com.midas.client.data.model.XiaohongshuCaptureRefreshData
 import com.midas.client.data.model.XiaohongshuSyncedNotesPruneData
 import com.midas.client.data.model.XiaohongshuSyncData
+import com.midas.client.data.model.XiaohongshuSyncCooldownData
 import com.midas.client.data.model.XiaohongshuSyncJobCreateData
 import com.midas.client.data.model.XiaohongshuSyncJobStatusData
 import com.midas.client.data.model.XiaohongshuNotesSaveRequest
@@ -80,6 +81,10 @@ interface MidasApiService {
     @POST("api/xiaohongshu/capture/refresh")
     suspend fun refreshXiaohongshuCapture():
         Response<ApiEnvelope<XiaohongshuCaptureRefreshData>>
+
+    @GET("api/xiaohongshu/sync/cooldown")
+    suspend fun getXiaohongshuSyncCooldown():
+        Response<ApiEnvelope<XiaohongshuSyncCooldownData>>
 
     @GET("api/config/editable")
     suspend fun getEditableConfig(): Response<ApiEnvelope<EditableConfigData>>

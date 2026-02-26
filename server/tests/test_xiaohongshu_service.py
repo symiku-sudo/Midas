@@ -1302,3 +1302,59 @@ async def test_web_readonly_fallback_items_path_and_note_card_shape(monkeypatch)
     assert notes[0].title == "回退路径标题"
     assert notes[0].content == "回退路径正文"
     assert notes[0].image_urls == ["https://sns-webpic-qc.xhscdn.com/fallback-1"]
+
+
+def test_live_sync_cooldown_allowed_when_no_history(tmp_path) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=str(tmp_path / "midas.db"),
+            min_live_sync_interval_seconds=1800,
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://www.xiaohongshu.com/api/some/path"
+            ),
+        )
+    )
+    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
+    service = XiaohongshuSyncService(
+        settings=settings,
+        repository=repo,
+        llm_service=SimpleLLM(),
+    )
+
+    cooldown = service.get_live_sync_cooldown()
+    assert cooldown["mode"] == "web_readonly"
+    assert cooldown["allowed"] is True
+    assert cooldown["remaining_seconds"] == 0
+    assert cooldown["next_allowed_at_epoch"] == 0
+    assert cooldown["last_sync_at_epoch"] == 0
+    assert cooldown["min_interval_seconds"] == 1800
+
+
+def test_live_sync_cooldown_reports_remaining_seconds(tmp_path) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=str(tmp_path / "midas.db"),
+            min_live_sync_interval_seconds=60,
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://www.xiaohongshu.com/api/some/path"
+            ),
+        )
+    )
+    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
+    service = XiaohongshuSyncService(
+        settings=settings,
+        repository=repo,
+        llm_service=SimpleLLM(),
+    )
+    now = int(time.time())
+    repo.set_state("last_live_sync_ts", str(now - 7))
+
+    cooldown = service.get_live_sync_cooldown()
+    assert cooldown["mode"] == "web_readonly"
+    assert cooldown["allowed"] is False
+    # allow tiny timing drift in CI
+    assert 52 <= int(cooldown["remaining_seconds"]) <= 53
+    assert int(cooldown["last_sync_at_epoch"]) == now - 7
+    assert now + 52 <= int(cooldown["next_allowed_at_epoch"]) <= now + 53

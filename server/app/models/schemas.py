@@ -104,6 +104,15 @@ class XiaohongshuCaptureRefreshData(BaseModel):
     empty_keys: list[str]
 
 
+class XiaohongshuSyncCooldownData(BaseModel):
+    mode: str
+    allowed: bool
+    remaining_seconds: int
+    next_allowed_at_epoch: int
+    last_sync_at_epoch: int
+    min_interval_seconds: int
+
+
 class EditableConfigData(BaseModel):
     settings: dict[str, Any]
 

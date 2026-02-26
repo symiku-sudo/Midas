@@ -21,6 +21,7 @@ from app.models.schemas import (
     NotesSaveBatchData,
     XiaohongshuCaptureRefreshData,
     XiaohongshuNotesSaveRequest,
+    XiaohongshuSyncCooldownData,
     XiaohongshuSyncedNotesPruneData,
     XiaohongshuSyncJobCreateData,
     XiaohongshuSyncJobError,
@@ -130,6 +131,14 @@ async def xiaohongshu_sync(payload: XiaohongshuSyncRequest, request: Request) ->
     service = _get_xiaohongshu_sync_service()
     result = await service.sync(limit=payload.limit, confirm_live=payload.confirm_live)
     return success_response(data=result.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/xiaohongshu/sync/cooldown")
+async def xiaohongshu_sync_cooldown(request: Request) -> dict:
+    service = _get_xiaohongshu_sync_service()
+    cooldown = service.get_live_sync_cooldown()
+    data = XiaohongshuSyncCooldownData(**cooldown)
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 
 @router.post("/api/notes/xiaohongshu/save-batch")

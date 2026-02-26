@@ -3,6 +3,7 @@ package com.midas.client.util
 import com.squareup.moshi.Moshi
 import com.squareup.moshi.Types
 import kotlin.math.floor
+import java.util.Locale
 
 enum class ConfigFieldType {
     BOOLEAN,
@@ -21,6 +22,10 @@ data class EditableConfigField(
 )
 
 object EditableConfigFormMapper {
+    private val forcedDecimalPaths = setOf(
+        "xiaohongshu.random_delay_min_seconds",
+        "xiaohongshu.random_delay_max_seconds",
+    )
     private val listAnyType = Types.newParameterizedType(List::class.java, Any::class.java)
     private val listAdapter = Moshi.Builder().build().adapter<List<Any?>>(listAnyType)
 
@@ -102,7 +107,15 @@ object EditableConfigFormMapper {
             }
 
             is Number -> {
-                if (isIntegralNumber(value)) {
+                if (prefix in forcedDecimalPaths) {
+                    output.add(
+                        EditableConfigField(
+                            path = prefix,
+                            type = ConfigFieldType.DECIMAL,
+                            textValue = toDecimalString(value),
+                        )
+                    )
+                } else if (isIntegralNumber(value)) {
                     output.add(
                         EditableConfigField(
                             path = prefix,
@@ -215,6 +228,18 @@ object EditableConfigFormMapper {
             is Float -> value.toLong().toString()
             is Double -> value.toLong().toString()
             else -> value.toLong().toString()
+        }
+    }
+
+    private fun toDecimalString(value: Number): String {
+        val decimal = value.toDouble()
+        if (!decimal.isFinite()) {
+            return value.toString()
+        }
+        return if (floor(decimal) == decimal) {
+            String.format(Locale.US, "%.1f", decimal)
+        } else {
+            decimal.toString()
         }
     }
 

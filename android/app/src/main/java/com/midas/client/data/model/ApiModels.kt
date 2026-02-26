@@ -117,6 +117,15 @@ data class XiaohongshuCaptureRefreshData(
     @Json(name = "empty_keys") val emptyKeys: List<String>
 )
 
+data class XiaohongshuSyncCooldownData(
+    val mode: String,
+    val allowed: Boolean,
+    @Json(name = "remaining_seconds") val remainingSeconds: Int,
+    @Json(name = "next_allowed_at_epoch") val nextAllowedAtEpoch: Int,
+    @Json(name = "last_sync_at_epoch") val lastSyncAtEpoch: Int,
+    @Json(name = "min_interval_seconds") val minIntervalSeconds: Int
+)
+
 data class EditableConfigData(
     val settings: Map<String, Any?>
 )

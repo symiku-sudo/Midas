@@ -107,4 +107,24 @@ class EditableConfigFormMapperTest {
         val error = EditableConfigFormMapper.validateField(field)
         assertNull(error)
     }
+
+    @Test
+    fun flatten_shouldForceDecimalFieldsForXhsRandomDelay() {
+        val settings = linkedMapOf<String, Any?>(
+            "xiaohongshu" to linkedMapOf(
+                "random_delay_min_seconds" to 3,
+                "random_delay_max_seconds" to 10,
+            ),
+        )
+
+        val flattened = EditableConfigFormMapper.flatten(settings)
+        val minDelay = flattened.first { it.path == "xiaohongshu.random_delay_min_seconds" }
+        val maxDelay = flattened.first { it.path == "xiaohongshu.random_delay_max_seconds" }
+
+        assertEquals(ConfigFieldType.DECIMAL, minDelay.type)
+        assertEquals("3.0", minDelay.textValue)
+        assertEquals(ConfigFieldType.DECIMAL, maxDelay.type)
+        assertEquals("10.0", maxDelay.textValue)
+        assertNull(EditableConfigFormMapper.validateField(minDelay.copy(textValue = "3.0")))
+    }
 }

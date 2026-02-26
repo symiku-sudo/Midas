@@ -8,6 +8,7 @@
 - `GET /api/notes/bilibili`
 - `DELETE /api/notes/bilibili/{note_id}` / `DELETE /api/notes/bilibili`
 - `POST /api/xiaohongshu/sync`
+- `GET /api/xiaohongshu/sync/cooldown`
 - `POST /api/notes/xiaohongshu/save-batch`
 - `GET /api/notes/xiaohongshu`
 - `DELETE /api/notes/xiaohongshu/{note_id}` / `DELETE /api/notes/xiaohongshu`
@@ -165,6 +166,9 @@ curl http://127.0.0.1:8000/api/notes/bilibili
 curl -X POST http://127.0.0.1:8000/api/xiaohongshu/sync \
   -H 'Content-Type: application/json' \
   -d '{"limit":5}'
+
+# 查询真实同步冷却状态（remaining_seconds>0 时建议倒计时后再发起）
+curl http://127.0.0.1:8000/api/xiaohongshu/sync/cooldown
 ```
 
 ```bash

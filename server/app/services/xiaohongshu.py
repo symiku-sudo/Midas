@@ -1718,25 +1718,54 @@ class XiaohongshuSyncService:
         await callback(current, total, message)
 
     def _enforce_live_sync_interval(self) -> None:
-        last_sync_raw = self._repository.get_state("last_live_sync_ts")
-        if not last_sync_raw:
-            return
-        try:
-            last_sync = int(last_sync_raw)
-        except ValueError:
-            return
-
-        min_interval = self._settings.xiaohongshu.min_live_sync_interval_seconds
-        now = int(time.time())
-        delta = now - last_sync
-        if delta < min_interval:
-            wait_seconds = max(min_interval - delta, 0)
+        cooldown = self.get_live_sync_cooldown()
+        wait_seconds = cooldown["remaining_seconds"]
+        if wait_seconds > 0:
             raise AppError(
                 code=ErrorCode.RATE_LIMITED,
                 message=f"为降低风控，距离上次真实同步过短，请 {wait_seconds} 秒后重试。",
                 status_code=429,
                 details={"wait_seconds": wait_seconds},
             )
+
+    def get_live_sync_cooldown(self) -> dict[str, int | bool | str]:
+        mode = self._settings.xiaohongshu.mode.strip().lower()
+        now = int(time.time())
+        min_interval = max(int(self._settings.xiaohongshu.min_live_sync_interval_seconds), 0)
+
+        if mode != "web_readonly":
+            return {
+                "mode": mode,
+                "allowed": True,
+                "remaining_seconds": 0,
+                "next_allowed_at_epoch": 0,
+                "last_sync_at_epoch": 0,
+                "min_interval_seconds": min_interval,
+            }
+
+        last_sync_raw = self._repository.get_state("last_live_sync_ts")
+        last_sync_at_epoch = 0
+        if last_sync_raw:
+            try:
+                last_sync_at_epoch = int(last_sync_raw)
+            except ValueError:
+                last_sync_at_epoch = 0
+
+        next_allowed_at_epoch = (
+            last_sync_at_epoch + min_interval if last_sync_at_epoch > 0 else 0
+        )
+        remaining_seconds = (
+            max(next_allowed_at_epoch - now, 0) if next_allowed_at_epoch > 0 else 0
+        )
+
+        return {
+            "mode": mode,
+            "allowed": remaining_seconds <= 0,
+            "remaining_seconds": remaining_seconds,
+            "next_allowed_at_epoch": next_allowed_at_epoch,
+            "last_sync_at_epoch": last_sync_at_epoch,
+            "min_interval_seconds": min_interval,
+        }
 
     async def _delay_between_requests(self, *, mode: str) -> None:
         if mode == "mock":
