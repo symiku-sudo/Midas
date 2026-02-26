@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import importlib.util
+import os
 import shutil
 import sys
 from dataclasses import dataclass
@@ -22,6 +23,17 @@ class CheckResult:
     name: str
     status: str  # pass | warn | fail
     message: str
+
+
+def _ensure_venv_bin_on_path() -> None:
+    venv_bin = SERVER_ROOT / ".venv" / "bin"
+    if not venv_bin.is_dir():
+        return
+    current_path = os.environ.get("PATH", "")
+    venv_bin_str = str(venv_bin)
+    if venv_bin_str in current_path.split(":"):
+        return
+    os.environ["PATH"] = f"{venv_bin_str}:{current_path}" if current_path else venv_bin_str
 
 
 def run_selfcheck(settings: Settings) -> list[CheckResult]:
@@ -294,6 +306,50 @@ def check_xiaohongshu(settings: Settings) -> list[CheckResult]:
             )
         )
 
+    page_fetch_driver = cfg.web_readonly.page_fetch_driver.strip().lower() or "auto"
+    if page_fetch_driver not in {"auto", "http", "playwright"}:
+        results.append(
+            CheckResult(
+                name="xiaohongshu.web_readonly.page_fetch_driver",
+                status="fail",
+                message=(
+                    "page_fetch_driver 仅支持 auto/http/playwright，"
+                    f"当前为 {cfg.web_readonly.page_fetch_driver}"
+                ),
+            )
+        )
+    else:
+        results.append(
+            CheckResult(
+                name="xiaohongshu.web_readonly.page_fetch_driver",
+                status="pass",
+                message=f"page_fetch_driver={page_fetch_driver}",
+            )
+        )
+
+    if page_fetch_driver in {"auto", "playwright"}:
+        has_playwright = importlib.util.find_spec("playwright") is not None
+        if has_playwright:
+            results.append(
+                CheckResult(
+                    name="xiaohongshu.web_readonly.playwright",
+                    status="pass",
+                    message="Playwright 依赖可用。",
+                )
+            )
+        else:
+            status = "warn" if page_fetch_driver == "auto" else "fail"
+            results.append(
+                CheckResult(
+                    name="xiaohongshu.web_readonly.playwright",
+                    status=status,
+                    message=(
+                        "缺少 Playwright 依赖。请执行 "
+                        "`pip install playwright && python -m playwright install chromium`。"
+                    ),
+                )
+            )
+
     if "Cookie" not in cfg.web_readonly.request_headers and not cfg.cookie.strip():
         results.append(
             CheckResult(
@@ -350,6 +406,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Midas 服务端环境与配置自检")
     parser.parse_args()
 
+    _ensure_venv_bin_on_path()
     settings = load_settings()
     results = run_selfcheck(settings)
 

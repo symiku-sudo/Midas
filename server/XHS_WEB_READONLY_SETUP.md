@@ -42,6 +42,7 @@ xiaohongshu:
   mode: web_readonly
   min_live_sync_interval_seconds: 1800
   web_readonly:
+    page_fetch_driver: auto  # auto/http/playwright
     request_url: "https://www.xiaohongshu.com/api/..."
     request_method: GET
     request_headers:
@@ -57,6 +58,17 @@ xiaohongshu:
     content_field_candidates: [desc, content, note_text]
     source_url_field: url
     host_allowlist: [www.xiaohongshu.com, edith.xiaohongshu.com]
+```
+
+`page_fetch_driver` 建议使用 `auto`：
+- 先走静态 HAR/cURL 请求头回放；
+- 若翻页遇到 `HTTP 406`，自动回退到 Playwright 实时抓取。
+
+如需使用 `auto/playwright`，先安装依赖：
+
+```bash
+pip install playwright
+python -m playwright install chromium
 ```
 
 ### 可选：自动写入 `.env`（推荐）

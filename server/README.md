@@ -120,6 +120,14 @@ Then fill:
 - 强制 HTTPS + 域名白名单
 - 需要显式 `confirm_live=true`
 - 带最小同步间隔保护（默认 1800 秒）
+- `page_fetch_driver=auto` 时会在静态签名翻页遇到 `406` 后自动切换 Playwright 实时抓取
+
+若使用 `auto/playwright`，需安装 Playwright 依赖与浏览器：
+
+```bash
+pip install playwright
+python -m playwright install chromium
+```
 
 建议流程：
 1. 在浏览器 DevTools 里抓“小红书收藏列表”请求。

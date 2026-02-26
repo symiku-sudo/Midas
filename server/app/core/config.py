@@ -36,12 +36,23 @@ class BilibiliConfig(BaseModel):
 
 
 class XiaohongshuWebReadonlyConfig(BaseModel):
+    page_fetch_driver: str = "auto"  # auto / http / playwright
     request_url: str = ""
     request_method: str = "GET"
     request_headers: dict[str, str] = Field(default_factory=dict)
     request_body: str = ""
     har_capture_path: str = ".tmp/xhs_detail.har"
     curl_capture_path: str = ".tmp/xhs.curl"
+    playwright_user_data_dir: str = ""
+    playwright_channel: str = ""
+    playwright_headless: bool = True
+    playwright_collect_page_url_template: str = (
+        "https://www.xiaohongshu.com/user/profile/{user_id}?tab=collect"
+    )
+    playwright_navigation_timeout_seconds: int = 30
+    playwright_response_timeout_seconds: int = 12
+    playwright_scroll_wait_seconds: float = 1.0
+    playwright_max_idle_rounds: int = 6
     detail_fetch_mode: str = "auto"  # auto / always / never
     detail_request_url_template: str = ""
     detail_request_method: str = "GET"

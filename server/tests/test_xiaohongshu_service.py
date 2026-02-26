@@ -841,6 +841,186 @@ async def test_web_readonly_rejects_title_only_content(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_web_readonly_auto_fallback_to_playwright_on_http_406(monkeypatch) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=".tmp/test-midas.db",
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                page_fetch_driver="auto",
+                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
+                request_method="GET",
+                request_headers={"Cookie": "a=b"},
+                items_path="data.notes",
+                note_id_field="note_id",
+                title_field="title",
+                content_field_candidates=["desc"],
+                detail_fetch_mode="never",
+            ),
+        )
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+    calls: dict[str, int] = {"http": 0, "playwright": 0}
+
+    async def _fake_iter_pages_http(self, **_kwargs):
+        calls["http"] += 1
+        raise AppError(
+            code=ErrorCode.UPSTREAM_ERROR,
+            message="小红书请求失败（HTTP 406）。",
+            status_code=502,
+            details={"status_code": 406},
+        )
+        yield XiaohongshuPageBatch(notes=[])
+
+    async def _fake_iter_pages_playwright(self, **_kwargs):
+        calls["playwright"] += 1
+        yield XiaohongshuPageBatch(
+            notes=[
+                XiaohongshuNote(
+                    note_id="p1",
+                    title="playwright-1",
+                    content="正文1",
+                    source_url="https://www.xiaohongshu.com/explore/p1",
+                )
+            ],
+            request_cursor="cursor-1",
+            next_cursor="",
+            exhausted=True,
+        )
+
+    monkeypatch.setattr(
+        XiaohongshuWebReadonlySource,
+        "_iter_pages_http",
+        _fake_iter_pages_http,
+    )
+    monkeypatch.setattr(
+        XiaohongshuWebReadonlySource,
+        "_iter_pages_playwright",
+        _fake_iter_pages_playwright,
+    )
+
+    notes = await source.fetch_recent(limit=1)
+    assert len(notes) == 1
+    assert notes[0].note_id == "p1"
+    assert calls["http"] == 1
+    assert calls["playwright"] == 1
+
+
+@pytest.mark.asyncio
+async def test_web_readonly_http_driver_does_not_fallback_to_playwright(monkeypatch) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=".tmp/test-midas.db",
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                page_fetch_driver="http",
+                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
+                request_method="GET",
+                request_headers={"Cookie": "a=b"},
+                items_path="data.notes",
+                note_id_field="note_id",
+                title_field="title",
+                content_field_candidates=["desc"],
+                detail_fetch_mode="never",
+            ),
+        )
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+    calls: dict[str, int] = {"http": 0, "playwright": 0}
+
+    async def _fake_iter_pages_http(self, **_kwargs):
+        calls["http"] += 1
+        raise AppError(
+            code=ErrorCode.UPSTREAM_ERROR,
+            message="小红书请求失败（HTTP 406）。",
+            status_code=502,
+            details={"status_code": 406},
+        )
+        yield XiaohongshuPageBatch(notes=[])
+
+    async def _fake_iter_pages_playwright(self, **_kwargs):
+        calls["playwright"] += 1
+        yield XiaohongshuPageBatch(notes=[], exhausted=True)
+
+    monkeypatch.setattr(
+        XiaohongshuWebReadonlySource,
+        "_iter_pages_http",
+        _fake_iter_pages_http,
+    )
+    monkeypatch.setattr(
+        XiaohongshuWebReadonlySource,
+        "_iter_pages_playwright",
+        _fake_iter_pages_playwright,
+    )
+
+    with pytest.raises(AppError) as exc_info:
+        await source.fetch_recent(limit=1)
+    assert exc_info.value.code == ErrorCode.UPSTREAM_ERROR
+    assert calls["http"] == 1
+    assert calls["playwright"] == 0
+
+
+@pytest.mark.asyncio
+async def test_web_readonly_playwright_driver_skips_http_path(monkeypatch) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=".tmp/test-midas.db",
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                page_fetch_driver="playwright",
+                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
+                request_method="GET",
+                request_headers={"Cookie": "a=b"},
+                items_path="data.notes",
+                note_id_field="note_id",
+                title_field="title",
+                content_field_candidates=["desc"],
+                detail_fetch_mode="never",
+            ),
+        )
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+    calls: dict[str, int] = {"http": 0, "playwright": 0}
+
+    async def _fake_iter_pages_http(self, **_kwargs):
+        calls["http"] += 1
+        yield XiaohongshuPageBatch(notes=[], exhausted=True)
+
+    async def _fake_iter_pages_playwright(self, **_kwargs):
+        calls["playwright"] += 1
+        yield XiaohongshuPageBatch(
+            notes=[
+                XiaohongshuNote(
+                    note_id="p2",
+                    title="playwright-2",
+                    content="正文2",
+                    source_url="https://www.xiaohongshu.com/explore/p2",
+                )
+            ],
+            request_cursor="cursor-2",
+            next_cursor="",
+            exhausted=True,
+        )
+
+    monkeypatch.setattr(
+        XiaohongshuWebReadonlySource,
+        "_iter_pages_http",
+        _fake_iter_pages_http,
+    )
+    monkeypatch.setattr(
+        XiaohongshuWebReadonlySource,
+        "_iter_pages_playwright",
+        _fake_iter_pages_playwright,
+    )
+
+    notes = await source.fetch_recent(limit=1)
+    assert len(notes) == 1
+    assert notes[0].note_id == "p2"
+    assert calls["playwright"] == 1
+    assert calls["http"] == 0
+
+
+@pytest.mark.asyncio
 async def test_web_readonly_business_auth_expired_maps_to_auth_error(monkeypatch) -> None:
     settings = Settings(
         xiaohongshu=XiaohongshuConfig(

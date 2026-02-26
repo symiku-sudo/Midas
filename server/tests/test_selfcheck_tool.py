@@ -66,6 +66,54 @@ def test_check_xiaohongshu_web_readonly_valid_config_passes() -> None:
     assert status_by_name["xiaohongshu.cookie"] == "pass"
 
 
+def test_check_xiaohongshu_playwright_driver_missing_dependency_warns_in_auto(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("tools.selfcheck.importlib.util.find_spec", lambda _name: None)
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            min_live_sync_interval_seconds=1800,
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                page_fetch_driver="auto",
+                request_url="https://edith.xiaohongshu.com/api/sns/web/v1/collect/list",
+                request_method="GET",
+                request_headers={"Cookie": "a=b"},
+                host_allowlist=["edith.xiaohongshu.com"],
+            ),
+        )
+    )
+
+    results = check_xiaohongshu(settings)
+    status_by_name = {item.name: item.status for item in results}
+    assert status_by_name["xiaohongshu.web_readonly.page_fetch_driver"] == "pass"
+    assert status_by_name["xiaohongshu.web_readonly.playwright"] == "warn"
+
+
+def test_check_xiaohongshu_playwright_driver_missing_dependency_fails_when_forced(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("tools.selfcheck.importlib.util.find_spec", lambda _name: None)
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            min_live_sync_interval_seconds=1800,
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                page_fetch_driver="playwright",
+                request_url="https://edith.xiaohongshu.com/api/sns/web/v1/collect/list",
+                request_method="GET",
+                request_headers={"Cookie": "a=b"},
+                host_allowlist=["edith.xiaohongshu.com"],
+            ),
+        )
+    )
+
+    results = check_xiaohongshu(settings)
+    status_by_name = {item.name: item.status for item in results}
+    assert status_by_name["xiaohongshu.web_readonly.page_fetch_driver"] == "pass"
+    assert status_by_name["xiaohongshu.web_readonly.playwright"] == "fail"
+
+
 def test_check_bilibili_binary_uses_which(monkeypatch) -> None:
     settings = Settings.model_validate(
         {

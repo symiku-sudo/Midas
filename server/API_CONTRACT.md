@@ -177,6 +177,7 @@ Success `data`:
 - 服务端会自动翻页（cursor）继续拉取，直到：
   - `new_count >= limit`，或
   - 已遍历完当前收藏列表（即无更多可检查 `note_id`）。
+- 当 `xiaohongshu.web_readonly.page_fetch_driver=auto` 时，若静态签名翻页出现 `HTTP 406`，会自动回退到 Playwright 实时抓取继续同步。
 - `fetched_count` 表示本次实际检查过的笔记条数（含跳过与失败）。
 
 Success `data`:

@@ -9,8 +9,9 @@ import shutil
 import time
 import uuid
 from dataclasses import dataclass, field
+from http.cookies import SimpleCookie
 from pathlib import Path
-from typing import AsyncIterator, Awaitable, Callable, Iterator
+from typing import Any, AsyncIterator, Awaitable, Callable, Iterator
 from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
 
 import httpx
@@ -73,6 +74,13 @@ class XiaohongshuPageBatch:
     request_cursor: str = ""
     next_cursor: str = ""
     exhausted: bool = False
+
+
+@dataclass(frozen=True)
+class _PlaywrightCollectResponse:
+    request_url: str
+    status_code: int
+    payload: dict[str, Any] | None
 
 
 class MockXiaohongshuSource:
@@ -214,6 +222,62 @@ class XiaohongshuWebReadonlySource:
                 yield note
 
     async def iter_pages(
+        self,
+        *,
+        start_cursor: str | None = None,
+        force_head: bool = False,
+        max_pages: int | None = None,
+    ) -> AsyncIterator[XiaohongshuPageBatch]:
+        cfg = self._settings.xiaohongshu.web_readonly
+        driver = cfg.page_fetch_driver.strip().lower() or "auto"
+        if driver not in {"auto", "http", "playwright"}:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    "web_readonly.page_fetch_driver 仅支持 auto/http/playwright，"
+                    f"当前为 {cfg.page_fetch_driver}"
+                ),
+                status_code=400,
+            )
+
+        if driver == "http":
+            async for batch in self._iter_pages_http(
+                start_cursor=start_cursor,
+                force_head=force_head,
+                max_pages=max_pages,
+            ):
+                yield batch
+            return
+
+        if driver == "playwright":
+            async for batch in self._iter_pages_playwright(
+                start_cursor=start_cursor,
+                force_head=force_head,
+                max_pages=max_pages,
+            ):
+                yield batch
+            return
+
+        try:
+            async for batch in self._iter_pages_http(
+                start_cursor=start_cursor,
+                force_head=force_head,
+                max_pages=max_pages,
+            ):
+                yield batch
+            return
+        except AppError as exc:
+            if not self._is_http_406_error(exc):
+                raise
+
+        async for batch in self._iter_pages_playwright(
+            start_cursor=start_cursor,
+            force_head=force_head,
+            max_pages=max_pages,
+        ):
+            yield batch
+
+    async def _iter_pages_http(
         self,
         *,
         start_cursor: str | None = None,
@@ -365,6 +429,419 @@ class XiaohongshuWebReadonlySource:
                 ),
                 status_code=502,
             )
+
+    async def _iter_pages_playwright(
+        self,
+        *,
+        start_cursor: str | None = None,
+        force_head: bool = False,
+        max_pages: int | None = None,
+    ) -> AsyncIterator[XiaohongshuPageBatch]:
+        cfg = self._settings.xiaohongshu.web_readonly
+        request_url = cfg.request_url.strip()
+        if not request_url:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message="web_readonly 模式缺少 request_url 配置。",
+                status_code=400,
+            )
+        self._assert_https_and_host(request_url, cfg.host_allowlist)
+
+        method = self._normalize_method(cfg.request_method, field_name="request_method")
+        headers = self._build_headers(cfg.request_headers)
+
+        detail_fetch_mode = cfg.detail_fetch_mode.strip().lower() or "auto"
+        if detail_fetch_mode not in {"auto", "always", "never"}:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message=(
+                    "detail_fetch_mode 仅支持 auto/always/never，"
+                    f"当前为 {cfg.detail_fetch_mode}"
+                ),
+                status_code=400,
+            )
+        detail_url_template = cfg.detail_request_url_template.strip()
+        if detail_fetch_mode == "always" and not detail_url_template:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message="detail_fetch_mode=always 时必须配置 detail_request_url_template。",
+                status_code=400,
+            )
+        detail_method = self._normalize_method(
+            cfg.detail_request_method, field_name="detail_request_method"
+        )
+        detail_headers = self._build_headers(
+            cfg.detail_request_headers, fallback_headers=headers
+        )
+        detail_body = cfg.detail_request_body.strip() if detail_method == "POST" else None
+        max_images = max(int(cfg.max_images_per_note), 0)
+        timeout = self._settings.xiaohongshu.request_timeout_seconds
+
+        normalized_start_cursor = (start_cursor or "").strip()
+        wait_for_start_cursor = bool(normalized_start_cursor and not force_head)
+        page_count = 0
+        stopped_by_page_limit = False
+        emitted_any = False
+        seen_page_urls: set[str] = set()
+        max_idle_rounds = max(int(cfg.playwright_max_idle_rounds), 1)
+        idle_rounds = 0
+        response_timeout = max(float(cfg.playwright_response_timeout_seconds), 1.0)
+        scroll_wait = max(float(cfg.playwright_scroll_wait_seconds), 0.1)
+        nav_timeout_ms = max(int(cfg.playwright_navigation_timeout_seconds * 1000), 1000)
+        parsed_request_url = urlparse(request_url)
+        collect_host = parsed_request_url.netloc
+        collect_path = parsed_request_url.path
+        collect_page_url = self._build_playwright_collect_page_url(
+            request_url=request_url,
+            template=cfg.playwright_collect_page_url_template,
+        )
+        self._assert_https_and_host(collect_page_url, cfg.host_allowlist)
+
+        try:
+            from playwright.async_api import async_playwright
+        except ModuleNotFoundError as exc:
+            raise AppError(
+                code=ErrorCode.INTERNAL_ERROR,
+                message=(
+                    "未安装 Playwright 依赖。请先执行 "
+                    "`pip install playwright && python -m playwright install chromium`。"
+                ),
+                status_code=500,
+            ) from exc
+
+        response_queue: asyncio.Queue[_PlaywrightCollectResponse] = asyncio.Queue()
+
+        async def _handle_collect_response(response: Any) -> None:
+            request = getattr(response, "request", None)
+            if request is None:
+                return
+            request_method = str(getattr(request, "method", "")).upper()
+            if request_method != method:
+                return
+            response_url = str(getattr(response, "url", "") or "")
+            parsed = urlparse(response_url)
+            if parsed.netloc != collect_host or parsed.path != collect_path:
+                return
+
+            payload: dict[str, Any] | None = None
+            try:
+                payload_obj = await response.json()
+                if isinstance(payload_obj, dict):
+                    payload = payload_obj
+            except Exception:
+                payload = None
+
+            await response_queue.put(
+                _PlaywrightCollectResponse(
+                    request_url=response_url,
+                    status_code=int(getattr(response, "status", 0)),
+                    payload=payload,
+                )
+            )
+
+        def _on_response(response: Any) -> None:
+            asyncio.create_task(_handle_collect_response(response))
+
+        async with async_playwright() as playwright:
+            browser = None
+            context = None
+            try:
+                launch_kwargs: dict[str, Any] = {
+                    "headless": bool(cfg.playwright_headless),
+                }
+                if cfg.playwright_channel.strip():
+                    launch_kwargs["channel"] = cfg.playwright_channel.strip()
+
+                user_data_dir = cfg.playwright_user_data_dir.strip()
+                if user_data_dir:
+                    context = await playwright.chromium.launch_persistent_context(
+                        user_data_dir=user_data_dir,
+                        **launch_kwargs,
+                    )
+                else:
+                    browser = await playwright.chromium.launch(**launch_kwargs)
+                    context = await browser.new_context(
+                        user_agent=headers.get("User-Agent", self._DEFAULT_USER_AGENT),
+                    )
+
+                await self._seed_playwright_cookies(
+                    context=context,
+                    cookie_header=headers.get("Cookie", ""),
+                    request_url=request_url,
+                )
+                page = context.pages[0] if context.pages else await context.new_page()
+                page.on("response", _on_response)
+                await page.goto(
+                    "https://www.xiaohongshu.com/",
+                    wait_until="domcontentloaded",
+                    timeout=nav_timeout_ms,
+                )
+                await page.goto(
+                    collect_page_url,
+                    wait_until="domcontentloaded",
+                    timeout=nav_timeout_ms,
+                )
+                await asyncio.sleep(scroll_wait)
+                await self._playwright_scroll(page=page, delay_seconds=scroll_wait)
+
+                async with httpx.AsyncClient(timeout=timeout) as client:
+                    while True:
+                        if (
+                            max_pages is not None
+                            and max_pages > 0
+                            and page_count >= max_pages
+                        ):
+                            stopped_by_page_limit = True
+                            break
+
+                        try:
+                            collected = await asyncio.wait_for(
+                                response_queue.get(),
+                                timeout=response_timeout,
+                            )
+                        except asyncio.TimeoutError:
+                            if idle_rounds >= max_idle_rounds:
+                                if page_count == 0:
+                                    raise AppError(
+                                        code=ErrorCode.AUTH_EXPIRED,
+                                        message=(
+                                            "Playwright 未捕获到收藏列表请求。"
+                                            "请确认登录状态、Cookie 与账号权限有效。"
+                                        ),
+                                        status_code=401,
+                                    ) from None
+                                break
+                            idle_rounds += 1
+                            await self._playwright_scroll(
+                                page=page, delay_seconds=scroll_wait
+                            )
+                            continue
+
+                        idle_rounds = 0
+                        if collected.request_url in seen_page_urls:
+                            continue
+                        seen_page_urls.add(collected.request_url)
+
+                        status_code = collected.status_code
+                        if status_code in {401, 403}:
+                            raise AppError(
+                                code=ErrorCode.AUTH_EXPIRED,
+                                message="小红书鉴权失败，请检查 Cookie 或登录状态。",
+                                status_code=401,
+                            )
+                        if status_code == 429:
+                            raise AppError(
+                                code=ErrorCode.RATE_LIMITED,
+                                message="小红书请求触发限流，请稍后重试。",
+                                status_code=429,
+                            )
+                        if status_code >= 400:
+                            raise AppError(
+                                code=ErrorCode.UPSTREAM_ERROR,
+                                message=f"小红书请求失败（HTTP {status_code}）。",
+                                status_code=502,
+                                details={"status_code": status_code},
+                            )
+
+                        payload = collected.payload
+                        if not isinstance(payload, dict):
+                            raise AppError(
+                                code=ErrorCode.UPSTREAM_ERROR,
+                                message="小红书响应不是合法 JSON。",
+                                status_code=502,
+                            )
+                        self._raise_if_business_error(payload)
+
+                        request_cursor = self._extract_request_cursor_from_url(
+                            collected.request_url
+                        )
+                        if wait_for_start_cursor and request_cursor != normalized_start_cursor:
+                            await self._playwright_scroll(
+                                page=page, delay_seconds=scroll_wait
+                            )
+                            continue
+                        wait_for_start_cursor = False
+
+                        resolved = self._resolve_records_list(
+                            payload=payload,
+                            configured_items_path=cfg.items_path,
+                        )
+                        if resolved is None:
+                            raise AppError(
+                                code=ErrorCode.UPSTREAM_ERROR,
+                                message=f"响应中 items_path 无法解析为列表：{cfg.items_path}",
+                                status_code=502,
+                            )
+                        records, _resolved_path = resolved
+
+                        notes: list[XiaohongshuNote] = []
+                        for record in records:
+                            note = await self._extract_note_from_record(
+                                client=client,
+                                record=record,
+                                cfg=cfg,
+                                headers=headers,
+                                detail_fetch_mode=detail_fetch_mode,
+                                detail_url_template=detail_url_template,
+                                detail_method=detail_method,
+                                detail_headers=detail_headers,
+                                detail_body=detail_body,
+                                max_images=max_images,
+                            )
+                            if note is None:
+                                continue
+                            emitted_any = True
+                            notes.append(note)
+
+                        has_more = self._extract_has_more(payload)
+                        next_cursor = self._extract_next_cursor(payload)
+                        exhausted = (not has_more) and (not next_cursor)
+                        yield XiaohongshuPageBatch(
+                            notes=notes,
+                            request_cursor=request_cursor,
+                            next_cursor=next_cursor,
+                            exhausted=exhausted,
+                        )
+                        page_count += 1
+                        if exhausted:
+                            break
+                        await self._playwright_scroll(
+                            page=page, delay_seconds=scroll_wait
+                        )
+            finally:
+                if context is not None:
+                    await context.close()
+                if browser is not None:
+                    await browser.close()
+
+        if not emitted_any and not stopped_by_page_limit:
+            raise AppError(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message=(
+                    "小红书响应中未提取到可用正文。请检查列表字段映射、"
+                    "笔记页解析或详情接口配置。"
+                ),
+                status_code=502,
+            )
+
+    def _is_http_406_error(self, exc: AppError) -> bool:
+        if exc.code != ErrorCode.UPSTREAM_ERROR:
+            return False
+        if isinstance(exc.details, dict):
+            status = exc.details.get("status_code")
+            if isinstance(status, int) and status == 406:
+                return True
+            if isinstance(status, str) and status.strip() == "406":
+                return True
+        return "HTTP 406" in exc.message
+
+    def _extract_request_cursor_from_url(self, request_url: str) -> str:
+        parsed = urlparse(request_url)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+            if "cursor" in key.lower():
+                return value.strip()
+        return ""
+
+    def _build_playwright_collect_page_url(self, *, request_url: str, template: str) -> str:
+        parsed_request = urlparse(request_url)
+        user_id = ""
+        for key, value in parse_qsl(parsed_request.query, keep_blank_values=True):
+            if key.lower() == "user_id" and value.strip():
+                user_id = value.strip()
+                break
+
+        tpl = template.strip()
+        if tpl:
+            try:
+                rendered = tpl.format(user_id=user_id)
+            except KeyError as exc:
+                missing = str(exc).strip("'")
+                raise AppError(
+                    code=ErrorCode.INVALID_INPUT,
+                    message=(
+                        "playwright_collect_page_url_template 包含未知占位符："
+                        f"{missing}"
+                    ),
+                    status_code=400,
+                ) from exc
+            rendered = rendered.strip()
+            if rendered:
+                return rendered
+
+        if user_id:
+            return f"https://www.xiaohongshu.com/user/profile/{quote(user_id, safe='')}?tab=collect"
+        return "https://www.xiaohongshu.com/"
+
+    async def _seed_playwright_cookies(
+        self,
+        *,
+        context: Any,
+        cookie_header: str,
+        request_url: str,
+    ) -> None:
+        cookie_pairs = self._parse_cookie_pairs(cookie_header)
+        if not cookie_pairs:
+            return
+
+        request_host = (urlparse(request_url).hostname or "").strip().lower()
+        domains = {"www.xiaohongshu.com", "edith.xiaohongshu.com"}
+        if request_host:
+            domains.add(request_host)
+
+        cookies_payload: list[dict[str, Any]] = []
+        for domain in sorted(domains):
+            for name, value in cookie_pairs:
+                cookies_payload.append(
+                    {
+                        "name": name,
+                        "value": value,
+                        "domain": domain,
+                        "path": "/",
+                        "secure": True,
+                        "httpOnly": False,
+                    }
+                )
+        if cookies_payload:
+            await context.add_cookies(cookies_payload)
+
+    def _parse_cookie_pairs(self, raw_cookie: str) -> list[tuple[str, str]]:
+        cookie_text = raw_cookie.strip()
+        if not cookie_text:
+            return []
+
+        parsed_pairs: list[tuple[str, str]] = []
+        simple_cookie = SimpleCookie()
+        try:
+            simple_cookie.load(cookie_text)
+            for key, morsel in simple_cookie.items():
+                name = str(key).strip()
+                value = str(morsel.value).strip()
+                if name and value:
+                    parsed_pairs.append((name, value))
+        except Exception:
+            parsed_pairs = []
+
+        if parsed_pairs:
+            return parsed_pairs
+
+        fallback_pairs: list[tuple[str, str]] = []
+        for segment in cookie_text.split(";"):
+            token = segment.strip()
+            if not token or "=" not in token:
+                continue
+            name, value = token.split("=", 1)
+            name = name.strip()
+            value = value.strip()
+            if name and value:
+                fallback_pairs.append((name, value))
+        return fallback_pairs
+
+    async def _playwright_scroll(self, *, page: Any, delay_seconds: float) -> None:
+        try:
+            await page.mouse.wheel(0, 3200)
+        except Exception:
+            await page.evaluate("window.scrollBy(0, 3200)")
+        await asyncio.sleep(delay_seconds)
 
     async def _extract_note_from_record(
         self,
@@ -598,6 +1075,7 @@ class XiaohongshuWebReadonlySource:
                 code=ErrorCode.UPSTREAM_ERROR,
                 message=f"小红书请求失败（HTTP {response.status_code}）。",
                 status_code=502,
+                details={"status_code": int(response.status_code)},
             )
 
         try:

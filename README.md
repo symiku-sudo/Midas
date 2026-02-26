@@ -95,6 +95,6 @@ server/.venv/bin/python server/tools/prune_unsaved_synced_notes.py --show-ids
 
 ## 说明
 
-- 当前小红书同步默认 `web_readonly` 低风险只读模式（需显式 `confirm_live=true`，并受最小同步间隔保护）。
+- 当前小红书同步默认 `web_readonly` 低风险只读模式（需显式 `confirm_live=true`，并受最小同步间隔保护）。当静态签名翻页遇到 `406` 时，会自动回退到 Playwright 实时抓取（需安装 Playwright）。
 - 当前默认 `llm.enabled=true`、`asr.mode=faster_whisper`、`asr.model_size=base`。
 - 真实小红书网页端接口回放仍有平台风控风险，建议低频、小批量执行。

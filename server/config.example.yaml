@@ -39,6 +39,7 @@ xiaohongshu:
   api_base: ""
   mock_notes_path: ""
   web_readonly:
+    page_fetch_driver: auto
     request_url: "${XHS_REQUEST_URL}"
     request_method: GET
     request_headers:
@@ -53,6 +54,14 @@ xiaohongshu:
     request_body: ""
     har_capture_path: .tmp/xhs_detail.har
     curl_capture_path: .tmp/xhs.curl
+    playwright_user_data_dir: ""
+    playwright_channel: ""
+    playwright_headless: true
+    playwright_collect_page_url_template: "https://www.xiaohongshu.com/user/profile/{user_id}?tab=collect"
+    playwright_navigation_timeout_seconds: 30
+    playwright_response_timeout_seconds: 12
+    playwright_scroll_wait_seconds: 1.0
+    playwright_max_idle_rounds: 6
     detail_fetch_mode: auto
     detail_request_url_template: ""
     detail_request_method: GET
