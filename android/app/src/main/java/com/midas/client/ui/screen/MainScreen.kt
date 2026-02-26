@@ -1,5 +1,8 @@
 package com.midas.client.ui.screen
 
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
@@ -39,6 +42,7 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -958,6 +962,7 @@ private fun NotesPanel(
     modifier: Modifier = Modifier,
 ) {
     var selectedDetail by remember { mutableStateOf<NoteDetailViewState?>(null) }
+    val context = LocalContext.current
     val keyword = state.keywordInput.trim()
     val filteredBilibili = state.bilibiliNotes.filter { item ->
         keyword.isBlank() || item.title.contains(keyword, ignoreCase = true)
@@ -970,10 +975,17 @@ private fun NotesPanel(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
+        BackHandler(enabled = selectedDetail != null) {
+            selectedDetail = null
+        }
+
         if (selectedDetail != null) {
             NoteDetailPanel(
                 detail = selectedDetail!!,
-                onBack = { selectedDetail = null },
+                onOpenSourceUrl = { sourceUrl ->
+                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(sourceUrl))
+                    context.startActivity(intent)
+                },
             )
             return@Column
         }
@@ -1098,21 +1110,17 @@ private sealed interface NoteDetailViewState {
 @Composable
 private fun NoteDetailPanel(
     detail: NoteDetailViewState,
-    onBack: () -> Unit,
+    onOpenSourceUrl: (String) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Button(onClick = onBack) {
-            SingleLineActionText("返回标题列表")
-        }
-
         Card(modifier = Modifier.fillMaxWidth()) {
             when (detail) {
                 is NoteDetailViewState.Bilibili -> {
-                    BilibiliNoteDetail(note = detail.note)
+                    BilibiliNoteDetail(note = detail.note, onOpenSourceUrl = onOpenSourceUrl)
                 }
 
                 is NoteDetailViewState.Xiaohongshu -> {
-                    XiaohongshuNoteDetail(note = detail.note)
+                    XiaohongshuNoteDetail(note = detail.note, onOpenSourceUrl = onOpenSourceUrl)
                 }
             }
         }
@@ -1120,22 +1128,38 @@ private fun NoteDetailPanel(
 }
 
 @Composable
-private fun BilibiliNoteDetail(note: BilibiliSavedNote) {
+private fun BilibiliNoteDetail(
+    note: BilibiliSavedNote,
+    onOpenSourceUrl: (String) -> Unit,
+) {
     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(note.title, style = MaterialTheme.typography.titleSmall)
         Text("保存时间：${note.savedAt}", style = MaterialTheme.typography.bodySmall)
-        Text(note.videoUrl, style = MaterialTheme.typography.bodySmall)
+        Text(
+            note.videoUrl,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.clickable { onOpenSourceUrl(note.videoUrl) },
+        )
         HorizontalDivider()
         MarkdownText(markdown = note.summaryMarkdown, modifier = Modifier.fillMaxWidth())
     }
 }
 
 @Composable
-private fun XiaohongshuNoteDetail(note: XiaohongshuSavedNote) {
+private fun XiaohongshuNoteDetail(
+    note: XiaohongshuSavedNote,
+    onOpenSourceUrl: (String) -> Unit,
+) {
     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(note.title, style = MaterialTheme.typography.titleSmall)
         Text("保存时间：${note.savedAt}", style = MaterialTheme.typography.bodySmall)
-        Text(note.sourceUrl, style = MaterialTheme.typography.bodySmall)
+        Text(
+            note.sourceUrl,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.clickable { onOpenSourceUrl(note.sourceUrl) },
+        )
         HorizontalDivider()
         MarkdownText(markdown = note.summaryMarkdown, modifier = Modifier.fillMaxWidth())
     }
