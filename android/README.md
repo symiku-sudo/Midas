@@ -33,6 +33,22 @@ tools/wsl_android_build.sh
 tools/wsl_android_build.sh :app:assembleDebug :app:testDebugUnitTest
 ```
 
+导出 APK：
+
+```bash
+tools/export_apk.sh
+```
+
+常用参数：
+
+```bash
+# 导出 release（无签名配置时会导出 unsigned APK）
+tools/export_apk.sh --release
+
+# 指定导出目录和文件名
+tools/export_apk.sh --output /mnt/d/Exports --name midas-debug.apk
+```
+
 脚本默认把 WSL 构建缓存写入独立目录（`.gradle-wsl/`、`.build-wsl/`、`.kotlin-wsl/`），避免与 Windows/Android Studio 的缓存互相污染。
 
 如果你已经遇到过 `different roots` 这类路径混用报错，先在 `android/` 下执行一次清理再重编译：

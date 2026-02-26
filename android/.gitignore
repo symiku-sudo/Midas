@@ -3,6 +3,7 @@
 .gradle-user-home-wsl/
 .kotlin-wsl/
 .build-wsl/
+.tmp/
 .idea/
 local.properties
 **/build/
