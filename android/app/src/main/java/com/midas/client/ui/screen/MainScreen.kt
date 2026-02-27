@@ -3,6 +3,7 @@ package com.midas.client.ui.screen
 import android.net.Uri
 import android.content.Intent
 import android.graphics.Bitmap
+import android.view.MotionEvent
 import android.webkit.CookieManager
 import android.webkit.WebResourceError
 import android.webkit.WebResourceRequest
@@ -1104,7 +1105,7 @@ private fun XiaohongshuPanel(
                     AndroidView(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(420.dp)
+                            .height(560.dp)
                             .testTag("xhs_mobile_auth_webview"),
                         factory = { context ->
                             WebView(context).apply {
@@ -1115,7 +1116,24 @@ private fun XiaohongshuPanel(
                                 settings.domStorageEnabled = true
                                 settings.javaScriptCanOpenWindowsAutomatically = true
                                 settings.cacheMode = WebSettings.LOAD_DEFAULT
+                                settings.setSupportZoom(true)
+                                settings.builtInZoomControls = true
+                                settings.displayZoomControls = false
+                                settings.useWideViewPort = true
+                                settings.loadWithOverviewMode = true
                                 settings.userAgentString = XHS_AUTH_DESKTOP_UA
+                                setOnTouchListener { view, event ->
+                                    when (event.actionMasked) {
+                                        MotionEvent.ACTION_DOWN,
+                                        MotionEvent.ACTION_MOVE,
+                                        -> view.parent?.requestDisallowInterceptTouchEvent(true)
+
+                                        MotionEvent.ACTION_UP,
+                                        MotionEvent.ACTION_CANCEL,
+                                        -> view.parent?.requestDisallowInterceptTouchEvent(false)
+                                    }
+                                    false
+                                }
                                 webViewClient = object : WebViewClient() {
                                     override fun shouldOverrideUrlLoading(
                                         view: WebView?,
