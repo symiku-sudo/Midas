@@ -42,7 +42,7 @@ tools/export_apk.sh
 常用参数：
 
 ```bash
-# 导出 release（无签名配置时会导出 unsigned APK）
+# 导出 release（若未配置正式签名，会自动用本地 debug keystore 生成可安装包）
 tools/export_apk.sh --release
 
 # 指定导出目录和文件名
