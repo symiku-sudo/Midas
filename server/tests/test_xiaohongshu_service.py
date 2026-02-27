@@ -119,6 +119,18 @@ class PendingCountWebSource:
             yield batch
 
 
+class BrokenIterPagesWebSource:
+    async def iter_pages(
+        self,
+        *,
+        start_cursor: str | None = None,
+        force_head: bool = False,
+        max_pages: int | None = None,
+    ):
+        raise RuntimeError("playwright launch exploded")
+        yield XiaohongshuPageBatch(notes=[])
+
+
 class HybridCursorWebSource:
     def __init__(
         self,
@@ -662,6 +674,84 @@ async def test_web_readonly_pending_count_only_counts_unsynced_note_ids(tmp_path
     assert result["pending_count"] == 2
     assert len(source.calls) == 1
     assert source.calls[0]["force_head"] is True
+
+
+@pytest.mark.asyncio
+async def test_web_readonly_pending_count_wraps_unexpected_source_error(tmp_path) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=str(tmp_path / "midas.db"),
+            min_live_sync_interval_seconds=0,
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://www.xiaohongshu.com/api/some/path"
+            ),
+        )
+    )
+    service = XiaohongshuSyncService(
+        settings=settings,
+        repository=XiaohongshuSyncRepository(str(tmp_path / "midas.db")),
+        web_source=BrokenIterPagesWebSource(),
+        llm_service=SimpleLLM(),
+    )
+
+    with pytest.raises(AppError) as exc_info:
+        await service.get_pending_unsynced_count()
+    assert exc_info.value.code == ErrorCode.UPSTREAM_ERROR
+
+
+@pytest.mark.asyncio
+async def test_web_readonly_fetch_note_by_url_resolves_xhslink(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=str(tmp_path / "midas.db"),
+            min_live_sync_interval_seconds=0,
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://www.xiaohongshu.com/api/some/path"
+            ),
+        )
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+
+    class _FakeResponse:
+        url = "https://www.xiaohongshu.com/explore/abc123"
+        text = ""
+
+    class _FakeAsyncClient:
+        def __init__(self, *_, **__):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, *_args, **_kwargs):
+            return _FakeResponse()
+
+    async def _fake_extract_note_from_record(*_args, **_kwargs):
+        return XiaohongshuNote(
+            note_id="abc123",
+            title="短链解析测试",
+            content="正文",
+            source_url="https://www.xiaohongshu.com/explore/abc123",
+        )
+
+    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(
+        XiaohongshuWebReadonlySource,
+        "_extract_note_from_record",
+        _fake_extract_note_from_record,
+    )
+
+    note = await source.fetch_note_by_url("http://xhslink.com/o/eNmdwzRjEI")
+    assert note.note_id == "abc123"
+    assert note.source_url == "https://www.xiaohongshu.com/explore/abc123"
 
 
 @pytest.mark.asyncio
@@ -1679,3 +1769,95 @@ def test_live_sync_cooldown_reports_remaining_seconds(tmp_path) -> None:
     assert 52 <= int(cooldown["remaining_seconds"]) <= 53
     assert int(cooldown["last_sync_at_epoch"]) == now - 7
     assert now + 52 <= int(cooldown["next_allowed_at_epoch"]) <= now + 53
+
+
+def test_playwright_collect_candidate_rejects_telemetry_collect_endpoint() -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
+                request_method="GET",
+                host_allowlist=["www.xiaohongshu.com", "edith.xiaohongshu.com"],
+            ),
+        )
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+
+    ok = source._is_playwright_collect_response_candidate(
+        response_url="https://t2.xiaohongshu.com/api/v2/collect",
+        request_method="POST",
+        configured_method="GET",
+        configured_host="edith.xiaohongshu.com",
+        configured_path="/api/sns/web/v2/note/collect/page",
+        host_allowlist=["www.xiaohongshu.com", "edith.xiaohongshu.com"],
+    )
+
+    assert ok is False
+
+
+def test_playwright_collect_candidate_accepts_collect_page_variant() -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
+                request_method="GET",
+                host_allowlist=["www.xiaohongshu.com", "edith.xiaohongshu.com"],
+            ),
+        )
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+
+    ok = source._is_playwright_collect_response_candidate(
+        response_url="https://t2.xiaohongshu.com/api/sns/web/v2/note/collect/page",
+        request_method="POST",
+        configured_method="GET",
+        configured_host="edith.xiaohongshu.com",
+        configured_path="/api/sns/web/v2/note/collect/page",
+        host_allowlist=["www.xiaohongshu.com", "edith.xiaohongshu.com"],
+    )
+
+    assert ok is True
+
+
+def test_playwright_collect_candidate_rejects_non_api_page_url() -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
+                request_method="GET",
+                host_allowlist=["www.xiaohongshu.com", "edith.xiaohongshu.com"],
+            ),
+        )
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+
+    ok = source._is_playwright_collect_response_candidate(
+        response_url="https://www.xiaohongshu.com/user/profile/123?tab=collect",
+        request_method="GET",
+        configured_method="GET",
+        configured_host="edith.xiaohongshu.com",
+        configured_path="/api/sns/web/v2/note/collect/page",
+        host_allowlist=["www.xiaohongshu.com", "edith.xiaohongshu.com"],
+    )
+
+    assert ok is False
+
+
+def test_extract_request_cursor_from_request_supports_json_and_form_body() -> None:
+    settings = Settings()
+    source = XiaohongshuWebReadonlySource(settings)
+
+    cursor_from_json = source._extract_request_cursor_from_request(
+        request_url="https://t2.xiaohongshu.com/api/v2/collect",
+        request_body='{"cursor":"abc123","num":30}',
+    )
+    cursor_from_form = source._extract_request_cursor_from_request(
+        request_url="https://t2.xiaohongshu.com/api/v2/collect",
+        request_body="num=30&cursor=xyz789",
+    )
+
+    assert cursor_from_json == "abc123"
+    assert cursor_from_form == "xyz789"

@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Iterator
-from urllib.parse import parse_qsl, quote, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, quote, unquote, urlencode, urlparse, urlunparse
 
 import httpx
 
@@ -79,6 +79,8 @@ class XiaohongshuPageBatch:
 @dataclass(frozen=True)
 class _PlaywrightCollectResponse:
     request_url: str
+    request_method: str
+    request_cursor: str
     status_code: int
     payload: dict[str, Any] | None
 
@@ -204,6 +206,15 @@ class XiaohongshuWebReadonlySource:
         "data.note_list",
         "data.list",
     )
+    _SHORT_LINK_HOSTS = frozenset({"xhslink.com", "www.xhslink.com"})
+    _NOTE_URL_IN_TEXT_PATTERN = re.compile(
+        r"https?://www\.xiaohongshu\.com/(?:explore|discovery/item)/[A-Za-z0-9_-]+",
+        re.I,
+    )
+    _NOTE_URL_ENCODED_PATTERN = re.compile(
+        r"https%3A%2F%2Fwww\.xiaohongshu\.com%2F(?:explore|discovery%2Fitem)%2F[A-Za-z0-9_%\-]+",
+        re.I,
+    )
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -218,7 +229,13 @@ class XiaohongshuWebReadonlySource:
 
     async def fetch_note_by_url(self, note_url: str) -> XiaohongshuNote:
         cfg = self._settings.xiaohongshu.web_readonly
-        normalized_url = self.normalize_note_url(note_url)
+        normalized_input = self.normalize_note_url(
+            note_url,
+            allow_short_link_host=True,
+        )
+        normalized_url = await self._resolve_short_link_note_url_if_needed(
+            normalized_input
+        )
         note_id = self.extract_note_id_from_url(normalized_url)
         headers = self._build_headers(cfg.request_headers)
 
@@ -282,7 +299,12 @@ class XiaohongshuWebReadonlySource:
             for note in batch.notes:
                 yield note
 
-    def normalize_note_url(self, note_url: str) -> str:
+    def normalize_note_url(
+        self,
+        note_url: str,
+        *,
+        allow_short_link_host: bool = False,
+    ) -> str:
         raw = note_url.strip()
         if not raw:
             raise AppError(
@@ -305,9 +327,70 @@ class XiaohongshuWebReadonlySource:
                 status_code=400,
             )
         normalized = urlunparse(parsed._replace(fragment=""))
+        if allow_short_link_host and self._is_short_link_host(parsed.netloc):
+            return normalized
         cfg = self._settings.xiaohongshu.web_readonly
         self._assert_https_and_host(normalized, cfg.host_allowlist)
         return normalized
+
+    def _is_short_link_host(self, host: str) -> bool:
+        return host.strip().lower() in self._SHORT_LINK_HOSTS
+
+    async def _resolve_short_link_note_url_if_needed(self, note_url: str) -> str:
+        parsed = urlparse(note_url)
+        if not self._is_short_link_host(parsed.netloc):
+            return note_url
+
+        timeout = max(int(self._settings.xiaohongshu.request_timeout_seconds), 5)
+        try:
+            async with httpx.AsyncClient(
+                timeout=timeout,
+                follow_redirects=True,
+            ) as client:
+                response = await client.get(
+                    note_url,
+                    headers={"User-Agent": self._DEFAULT_USER_AGENT},
+                )
+        except httpx.HTTPError as exc:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message="短链接解析失败，请重试或粘贴完整小红书链接。",
+                status_code=400,
+            ) from exc
+
+        final_url = str(getattr(response, "url", "") or "").strip()
+        if final_url:
+            try:
+                return self.normalize_note_url(final_url)
+            except AppError:
+                pass
+
+        response_text = str(getattr(response, "text", "") or "")
+        extracted_url = self._extract_note_url_from_text(response_text)
+        if extracted_url:
+            return self.normalize_note_url(extracted_url)
+
+        raise AppError(
+            code=ErrorCode.INVALID_INPUT,
+            message="短链接未解析到小红书笔记，请粘贴 `xiaohongshu.com/explore/...` 原始链接。",
+            status_code=400,
+        )
+
+    def _extract_note_url_from_text(self, text: str) -> str:
+        if not text:
+            return ""
+
+        matched = self._NOTE_URL_IN_TEXT_PATTERN.search(text)
+        if matched is not None:
+            return matched.group(0).strip()
+
+        encoded = self._NOTE_URL_ENCODED_PATTERN.search(text)
+        if encoded is not None:
+            decoded = unquote(encoded.group(0))
+            matched_decoded = self._NOTE_URL_IN_TEXT_PATTERN.search(decoded)
+            if matched_decoded is not None:
+                return matched_decoded.group(0).strip()
+        return ""
 
     def extract_note_id_from_url(self, note_url: str) -> str:
         parsed = urlparse(note_url.strip())
@@ -590,9 +673,11 @@ class XiaohongshuWebReadonlySource:
         page_count = 0
         stopped_by_page_limit = False
         emitted_any = False
-        seen_page_urls: set[str] = set()
+        seen_page_tokens: set[tuple[str, str, str]] = set()
         max_idle_rounds = max(int(cfg.playwright_max_idle_rounds), 1)
+        max_non_progress_events = max_idle_rounds * 4
         idle_rounds = 0
+        non_progress_events = 0
         response_timeout = max(float(cfg.playwright_response_timeout_seconds), 1.0)
         scroll_wait = max(float(cfg.playwright_scroll_wait_seconds), 0.1)
         nav_timeout_ms = max(int(cfg.playwright_navigation_timeout_seconds * 1000), 1000)
@@ -609,7 +694,7 @@ class XiaohongshuWebReadonlySource:
             from playwright.async_api import async_playwright
         except ModuleNotFoundError as exc:
             raise AppError(
-                code=ErrorCode.INTERNAL_ERROR,
+                code=ErrorCode.DEPENDENCY_MISSING,
                 message=(
                     "未安装 Playwright 依赖。请先执行 "
                     "`pip install playwright && python -m playwright install chromium`。"
@@ -624,11 +709,16 @@ class XiaohongshuWebReadonlySource:
             if request is None:
                 return
             request_method = str(getattr(request, "method", "")).upper()
-            if request_method != method:
-                return
             response_url = str(getattr(response, "url", "") or "")
-            parsed = urlparse(response_url)
-            if parsed.netloc != collect_host or parsed.path != collect_path:
+            request_body = await self._extract_playwright_request_body(request)
+            if not self._is_playwright_collect_response_candidate(
+                response_url=response_url,
+                request_method=request_method,
+                configured_method=method,
+                configured_host=collect_host,
+                configured_path=collect_path,
+                host_allowlist=cfg.host_allowlist,
+            ):
                 return
 
             payload: dict[str, Any] | None = None
@@ -642,6 +732,11 @@ class XiaohongshuWebReadonlySource:
             await response_queue.put(
                 _PlaywrightCollectResponse(
                     request_url=response_url,
+                    request_method=request_method,
+                    request_cursor=self._extract_request_cursor_from_request(
+                        request_url=response_url,
+                        request_body=request_body,
+                    ),
                     status_code=int(getattr(response, "status", 0)),
                     payload=payload,
                 )
@@ -661,16 +756,19 @@ class XiaohongshuWebReadonlySource:
                     launch_kwargs["channel"] = cfg.playwright_channel.strip()
 
                 user_data_dir = cfg.playwright_user_data_dir.strip()
-                if user_data_dir:
-                    context = await playwright.chromium.launch_persistent_context(
-                        user_data_dir=user_data_dir,
-                        **launch_kwargs,
-                    )
-                else:
-                    browser = await playwright.chromium.launch(**launch_kwargs)
-                    context = await browser.new_context(
-                        user_agent=headers.get("User-Agent", self._DEFAULT_USER_AGENT),
-                    )
+                try:
+                    if user_data_dir:
+                        context = await playwright.chromium.launch_persistent_context(
+                            user_data_dir=user_data_dir,
+                            **launch_kwargs,
+                        )
+                    else:
+                        browser = await playwright.chromium.launch(**launch_kwargs)
+                        context = await browser.new_context(
+                            user_agent=headers.get("User-Agent", self._DEFAULT_USER_AGENT),
+                        )
+                except Exception as exc:
+                    raise self._convert_playwright_launch_error(exc) from exc
 
                 await self._seed_playwright_cookies(
                     context=context,
@@ -688,6 +786,10 @@ class XiaohongshuWebReadonlySource:
                     collect_page_url,
                     wait_until="domcontentloaded",
                     timeout=nav_timeout_ms,
+                )
+                await self._playwright_ensure_collect_tab(
+                    page=page,
+                    delay_seconds=scroll_wait,
                 )
                 await asyncio.sleep(scroll_wait)
                 await self._playwright_scroll(page=page, delay_seconds=scroll_wait)
@@ -710,6 +812,36 @@ class XiaohongshuWebReadonlySource:
                         except asyncio.TimeoutError:
                             if idle_rounds >= max_idle_rounds:
                                 if page_count == 0:
+                                    page_url = str(getattr(page, "url", "") or "")
+                                    if (
+                                        "website-login" in page_url
+                                        or "captcha" in page_url
+                                        or "verify" in page_url
+                                    ):
+                                        raise AppError(
+                                            code=ErrorCode.AUTH_EXPIRED,
+                                            message=(
+                                                "Playwright 已跳转到登录/验证码页面。"
+                                                "请重新登录小红书并更新 Cookie 或抓包配置。"
+                                            ),
+                                            status_code=401,
+                                            details={"page_url": page_url},
+                                        ) from None
+                                    active_tab = await self._playwright_get_active_tab_text(
+                                        page=page
+                                    )
+                                    if active_tab and not self._is_collect_tab_label(
+                                        active_tab
+                                    ):
+                                        raise AppError(
+                                            code=ErrorCode.AUTH_EXPIRED,
+                                            message=(
+                                                f"Playwright 当前停留在“{active_tab}”页，"
+                                                "未进入“收藏”页。请确认收藏页可访问后，"
+                                                "重新登录并更新 Cookie/HAR/cURL 配置。"
+                                            ),
+                                            status_code=401,
+                                        ) from None
                                     raise AppError(
                                         code=ErrorCode.AUTH_EXPIRED,
                                         message=(
@@ -726,10 +858,6 @@ class XiaohongshuWebReadonlySource:
                             continue
 
                         idle_rounds = 0
-                        if collected.request_url in seen_page_urls:
-                            continue
-                        seen_page_urls.add(collected.request_url)
-
                         status_code = collected.status_code
                         if status_code in {401, 403}:
                             raise AppError(
@@ -753,17 +881,48 @@ class XiaohongshuWebReadonlySource:
 
                         payload = collected.payload
                         if not isinstance(payload, dict):
-                            raise AppError(
-                                code=ErrorCode.UPSTREAM_ERROR,
-                                message="小红书响应不是合法 JSON。",
-                                status_code=502,
+                            non_progress_events += 1
+                            if non_progress_events >= max_non_progress_events:
+                                page_url = str(getattr(page, "url", "") or "")
+                                if (
+                                    "website-login" in page_url
+                                    or "captcha" in page_url
+                                    or "verify" in page_url
+                                ):
+                                    raise AppError(
+                                        code=ErrorCode.AUTH_EXPIRED,
+                                        message=(
+                                            "Playwright 已跳转到登录/验证码页面。"
+                                            "请重新登录小红书并更新 Cookie 或抓包配置。"
+                                        ),
+                                        status_code=401,
+                                        details={"page_url": page_url},
+                                    )
+                                raise AppError(
+                                    code=ErrorCode.UPSTREAM_ERROR,
+                                    message="Playwright 捕获到非 JSON 收藏响应，请更新抓包配置后重试。",
+                                    status_code=502,
+                                )
+                            await self._playwright_scroll(
+                                page=page, delay_seconds=scroll_wait
                             )
+                            continue
                         self._raise_if_business_error(payload)
 
                         request_cursor = self._extract_request_cursor_from_url(
                             collected.request_url
                         )
                         if wait_for_start_cursor and request_cursor != normalized_start_cursor:
+                            non_progress_events += 1
+                            if non_progress_events >= max_non_progress_events:
+                                raise AppError(
+                                    code=ErrorCode.AUTH_EXPIRED,
+                                    message=(
+                                        "Playwright 捕获到请求但未命中目标游标。"
+                                        "请重新登录并更新 Cookie 或抓包配置。"
+                                    ),
+                                    status_code=401,
+                                )
                             await self._playwright_scroll(
                                 page=page, delay_seconds=scroll_wait
                             )
@@ -775,12 +934,69 @@ class XiaohongshuWebReadonlySource:
                             configured_items_path=cfg.items_path,
                         )
                         if resolved is None:
-                            raise AppError(
-                                code=ErrorCode.UPSTREAM_ERROR,
-                                message=f"响应中 items_path 无法解析为列表：{cfg.items_path}",
-                                status_code=502,
+                            # Playwright 可能捕获到非收藏列表响应；继续等待下一条候选响应。
+                            non_progress_events += 1
+                            if non_progress_events >= max_non_progress_events:
+                                if page_count == 0:
+                                    active_tab = await self._playwright_get_active_tab_text(
+                                        page=page
+                                    )
+                                    if active_tab and not self._is_collect_tab_label(
+                                        active_tab
+                                    ):
+                                        raise AppError(
+                                            code=ErrorCode.AUTH_EXPIRED,
+                                            message=(
+                                                f"Playwright 当前停留在“{active_tab}”页，"
+                                                "未进入“收藏”页。请确认收藏页可访问后，"
+                                                "重新登录并更新 Cookie/HAR/cURL 配置。"
+                                            ),
+                                            status_code=401,
+                                        )
+                                    raise AppError(
+                                        code=ErrorCode.AUTH_EXPIRED,
+                                        message=(
+                                            "Playwright 已捕获请求，但未解析出收藏列表。"
+                                            "请重新登录并更新 Cookie/HAR/cURL 配置后重试。"
+                                        ),
+                                        status_code=401,
+                                    )
+                                break
+                            await self._playwright_scroll(
+                                page=page, delay_seconds=scroll_wait
                             )
+                            continue
                         records, _resolved_path = resolved
+
+                        request_cursor = collected.request_cursor
+                        if not request_cursor:
+                            request_cursor = self._extract_request_cursor_from_url(
+                                collected.request_url
+                            )
+                        next_cursor = self._extract_next_cursor(payload)
+                        page_token = (
+                            collected.request_url,
+                            request_cursor,
+                            next_cursor,
+                        )
+                        if page_token in seen_page_tokens:
+                            non_progress_events += 1
+                            if non_progress_events >= max_non_progress_events:
+                                if page_count == 0:
+                                    raise AppError(
+                                        code=ErrorCode.AUTH_EXPIRED,
+                                        message=(
+                                            "Playwright 重复捕获到相同收藏请求，"
+                                            "请重新登录并更新 Cookie/HAR/cURL 配置。"
+                                        ),
+                                        status_code=401,
+                                    )
+                                break
+                            await self._playwright_scroll(
+                                page=page, delay_seconds=scroll_wait
+                            )
+                            continue
+                        seen_page_tokens.add(page_token)
 
                         notes: list[XiaohongshuNote] = []
                         for record in records:
@@ -802,14 +1018,26 @@ class XiaohongshuWebReadonlySource:
                             notes.append(note)
 
                         has_more = self._extract_has_more(payload)
-                        next_cursor = self._extract_next_cursor(payload)
                         exhausted = (not has_more) and (not next_cursor)
+                        if not notes and not exhausted:
+                            non_progress_events += 1
+                            if non_progress_events >= max_non_progress_events:
+                                raise AppError(
+                                    code=ErrorCode.UPSTREAM_ERROR,
+                                    message=(
+                                        "Playwright 已捕获收藏列表响应，但未解析出有效笔记。"
+                                        "请更新 Cookie/HAR/cURL 配置或检查字段映射。"
+                                    ),
+                                    status_code=502,
+                                )
                         yield XiaohongshuPageBatch(
                             notes=notes,
                             request_cursor=request_cursor,
                             next_cursor=next_cursor,
                             exhausted=exhausted,
                         )
+                        if notes:
+                            non_progress_events = 0
                         page_count += 1
                         if exhausted:
                             break
@@ -821,6 +1049,30 @@ class XiaohongshuWebReadonlySource:
                     await context.close()
                 if browser is not None:
                     await browser.close()
+
+    def _convert_playwright_launch_error(self, exc: Exception) -> AppError:
+        raw = str(exc).strip()
+        normalized = raw.lower()
+        if (
+            "error while loading shared libraries" in normalized
+            or "failed to launch browser" in normalized
+            or "target page, context or browser has been closed" in normalized
+        ):
+            return AppError(
+                code=ErrorCode.DEPENDENCY_MISSING,
+                message=(
+                    "Playwright 浏览器依赖不完整，请安装依赖库后重试。"
+                    "可先执行 `python -m playwright install chromium`。"
+                ),
+                status_code=500,
+                details={"error": raw or exc.__class__.__name__},
+            )
+        return AppError(
+            code=ErrorCode.UPSTREAM_ERROR,
+            message="Playwright 启动失败，请检查浏览器与系统环境。",
+            status_code=502,
+            details={"error": raw or exc.__class__.__name__},
+        )
 
         if not emitted_any and not stopped_by_page_limit:
             raise AppError(
@@ -849,6 +1101,114 @@ class XiaohongshuWebReadonlySource:
             if "cursor" in key.lower():
                 return value.strip()
         return ""
+
+    def _extract_request_cursor_from_request(
+        self,
+        *,
+        request_url: str,
+        request_body: str | None,
+    ) -> str:
+        cursor = self._extract_request_cursor_from_url(request_url)
+        if cursor:
+            return cursor
+        return self._extract_request_cursor_from_body(request_body)
+
+    def _extract_request_cursor_from_body(self, request_body: str | None) -> str:
+        body = (request_body or "").strip()
+        if not body:
+            return ""
+
+        cursor = self._extract_cursor_from_mapping(self._safe_parse_json_dict(body))
+        if cursor:
+            return cursor
+
+        for key, value in parse_qsl(body, keep_blank_values=True):
+            if "cursor" in key.lower() and value.strip():
+                return value.strip()
+        return ""
+
+    def _extract_cursor_from_mapping(self, payload: dict[str, Any] | None) -> str:
+        if not isinstance(payload, dict):
+            return ""
+        for key in ("cursor", "next_cursor", "nextCursor"):
+            value = payload.get(key)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+            if isinstance(value, (int, float)):
+                return str(value)
+        for nested_key in ("data", "params", "pagination", "page"):
+            nested = payload.get(nested_key)
+            if isinstance(nested, dict):
+                nested_cursor = self._extract_cursor_from_mapping(nested)
+                if nested_cursor:
+                    return nested_cursor
+        return ""
+
+    def _safe_parse_json_dict(self, raw: str) -> dict[str, Any] | None:
+        try:
+            payload = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        if isinstance(payload, dict):
+            return payload
+        return None
+
+    async def _extract_playwright_request_body(self, request: Any) -> str | None:
+        raw: Any = None
+        try:
+            raw = getattr(request, "post_data", None)
+            if callable(raw):
+                maybe = raw()
+                if asyncio.iscoroutine(maybe):
+                    maybe = await maybe
+                raw = maybe
+        except Exception:
+            return None
+        if isinstance(raw, bytes):
+            return raw.decode("utf-8", errors="ignore")
+        if isinstance(raw, str):
+            return raw
+        return None
+
+    def _is_playwright_collect_response_candidate(
+        self,
+        *,
+        response_url: str,
+        request_method: str,
+        configured_method: str,
+        configured_host: str,
+        configured_path: str,
+        host_allowlist: list[str],
+    ) -> bool:
+        method = request_method.strip().upper()
+        if method not in {"GET", "POST"}:
+            return False
+
+        parsed = urlparse(response_url)
+        host = parsed.netloc.strip().lower()
+        path = parsed.path.strip().lower()
+        if not host or not path:
+            return False
+
+        if (
+            method == configured_method
+            and host == configured_host.strip().lower()
+            and path == configured_path.strip().lower()
+        ):
+            return True
+
+        allowlist = {item.strip().lower() for item in host_allowlist if item.strip()}
+        host_allowed = host in allowlist or host.endswith(".xiaohongshu.com")
+        if not host_allowed:
+            return False
+        if not path.startswith("/api/"):
+            return False
+        if "collect" not in path:
+            return False
+        # Exclude telemetry endpoints like /api/v2/collect that don't carry note lists.
+        if not any(token in path for token in ("note", "page", "list")):
+            return False
+        return True
 
     def _build_playwright_collect_page_url(self, *, request_url: str, template: str) -> str:
         parsed_request = urlparse(request_url)
@@ -950,6 +1310,56 @@ class XiaohongshuWebReadonlySource:
         except Exception:
             await page.evaluate("window.scrollBy(0, 3200)")
         await asyncio.sleep(delay_seconds)
+
+    async def _playwright_get_active_tab_text(self, *, page: Any) -> str:
+        try:
+            raw = await page.evaluate(
+                """
+                () => {
+                  const selectors = [
+                    '.reds-tab-item.active.sub-tab-list',
+                    '.reds-tab-item.active',
+                    '[role="tab"][aria-selected="true"]',
+                  ];
+                  for (const selector of selectors) {
+                    const node = document.querySelector(selector);
+                    if (!node) continue;
+                    const text = (node.textContent || '').trim();
+                    if (text) return text;
+                  }
+                  return '';
+                }
+                """
+            )
+        except Exception:
+            return ""
+        return str(raw or "").strip()
+
+    def _is_collect_tab_label(self, tab_text: str) -> bool:
+        normalized = tab_text.strip().lower()
+        if not normalized:
+            return False
+        return ("收藏" in tab_text) or ("collect" in normalized) or ("fav" in normalized)
+
+    async def _playwright_ensure_collect_tab(self, *, page: Any, delay_seconds: float) -> None:
+        selectors = (
+            "div.reds-tab-item.sub-tab-list",
+            "div.reds-tab-item",
+            '[role="tab"]',
+        )
+        for selector in selectors:
+            try:
+                tab = page.locator(selector, has_text="收藏").first
+                if await tab.count() <= 0:
+                    continue
+                class_name = (await tab.get_attribute("class") or "").lower()
+                if "active" in class_name:
+                    return
+                await tab.click(timeout=3000)
+                await asyncio.sleep(delay_seconds)
+                return
+            except Exception:
+                continue
 
     async def _extract_note_from_record(
         self,
@@ -2083,13 +2493,23 @@ class XiaohongshuSyncService:
         scanned_count = 0
         pending_count = 0
         seen_note_ids: set[str] = set()
-        async for note in self._iter_notes_for_pending_count(mode=mode):
-            if note.note_id in seen_note_ids:
-                continue
-            seen_note_ids.add(note.note_id)
-            scanned_count += 1
-            if not self._repository.is_synced(note.note_id):
-                pending_count += 1
+        try:
+            async for note in self._iter_notes_for_pending_count(mode=mode):
+                if note.note_id in seen_note_ids:
+                    continue
+                seen_note_ids.add(note.note_id)
+                scanned_count += 1
+                if not self._repository.is_synced(note.note_id):
+                    pending_count += 1
+        except AppError:
+            raise
+        except Exception as exc:
+            raise AppError(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message="统计未登记数量失败，请稍后重试。",
+                status_code=502,
+                details={"error": str(exc)},
+            ) from exc
 
         return {
             "mode": mode,
