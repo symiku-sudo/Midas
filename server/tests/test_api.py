@@ -112,8 +112,80 @@ def test_xiaohongshu_sync_job_progress_and_result() -> None:
 
     assert final_body is not None
     assert final_body["data"]["status"] == "succeeded"
+    assert len(final_body["data"]["summaries"]) == 2
     assert final_body["data"]["result"]["new_count"] == 2
     assert final_body["data"]["result"]["fetched_count"] == 2
+    assert len(final_body["data"]["result"]["summaries"]) == 2
+
+
+def test_xiaohongshu_sync_job_ack_marks_dedupe_only_for_acked_notes() -> None:
+    _reset_xiaohongshu_state()
+
+    create_resp = client.post("/api/xiaohongshu/sync/jobs", json={"limit": 2})
+    assert create_resp.status_code == 200
+    job_id = create_resp.json()["data"]["job_id"]
+
+    final_body: dict | None = None
+    for _ in range(30):
+        status_resp = client.get(f"/api/xiaohongshu/sync/jobs/{job_id}")
+        assert status_resp.status_code == 200
+        body = status_resp.json()
+        if body["data"]["status"] in {"succeeded", "failed"}:
+            final_body = body
+            break
+        time.sleep(0.05)
+
+    assert final_body is not None
+    assert final_body["data"]["status"] == "succeeded"
+    summaries = final_body["data"]["summaries"]
+    assert len(summaries) == 2
+
+    first_note_id = summaries[0]["note_id"]
+    second_note_id = summaries[1]["note_id"]
+    service = _get_xiaohongshu_sync_service()
+    assert service._repository.is_synced(first_note_id) is False
+    assert service._repository.is_synced(second_note_id) is False
+
+    ack_first = client.post(
+        f"/api/xiaohongshu/sync/jobs/{job_id}/ack",
+        json={"note_ids": [first_note_id]},
+    )
+    assert ack_first.status_code == 200
+    ack_first_body = ack_first.json()
+    assert ack_first_body["ok"] is True
+    assert ack_first_body["data"]["requested_count"] == 1
+    assert ack_first_body["data"]["acked_count"] == 1
+    assert ack_first_body["data"]["already_acked_count"] == 0
+    assert ack_first_body["data"]["acked_note_ids"] == [first_note_id]
+    assert ack_first_body["data"]["missing_note_ids"] == []
+    assert service._repository.is_synced(first_note_id) is True
+    assert service._repository.is_synced(second_note_id) is False
+
+    ack_idempotent = client.post(
+        f"/api/xiaohongshu/sync/jobs/{job_id}/ack",
+        json={"note_ids": [first_note_id, "missing-note"]},
+    )
+    assert ack_idempotent.status_code == 200
+    ack_idempotent_body = ack_idempotent.json()
+    assert ack_idempotent_body["ok"] is True
+    assert ack_idempotent_body["data"]["requested_count"] == 2
+    assert ack_idempotent_body["data"]["acked_count"] == 0
+    assert ack_idempotent_body["data"]["already_acked_count"] == 1
+    assert ack_idempotent_body["data"]["acked_note_ids"] == []
+    assert ack_idempotent_body["data"]["missing_note_ids"] == ["missing-note"]
+    assert service._repository.is_synced(first_note_id) is True
+    assert service._repository.is_synced(second_note_id) is False
+
+    ack_second = client.post(
+        f"/api/xiaohongshu/sync/jobs/{job_id}/ack",
+        json={"note_ids": [second_note_id]},
+    )
+    assert ack_second.status_code == 200
+    ack_second_body = ack_second.json()
+    assert ack_second_body["ok"] is True
+    assert ack_second_body["data"]["acked_count"] == 1
+    assert ack_second_body["data"]["acked_note_ids"] == [second_note_id]
+    assert service._repository.is_synced(second_note_id) is True
 
 
 def test_xiaohongshu_sync_job_not_found() -> None:
@@ -361,6 +433,63 @@ def test_xiaohongshu_capture_refresh_requires_cookie(monkeypatch) -> None:
     assert body["ok"] is False
     assert body["code"] == "INVALID_INPUT"
     assert "未包含 Cookie" in body["message"]
+
+
+def test_xiaohongshu_auth_update_from_client() -> None:
+    _reset_xiaohongshu_state()
+    previous_cookie = os.environ.get("XHS_HEADER_COOKIE")
+    previous_ua = os.environ.get("XHS_HEADER_USER_AGENT")
+    previous_origin = os.environ.get("XHS_HEADER_ORIGIN")
+    previous_referer = os.environ.get("XHS_HEADER_REFERER")
+
+    try:
+        resp = client.post(
+            "/api/xiaohongshu/auth/update",
+            json={
+                "cookie": "a=1; b=2; c=3",
+                "user_agent": "Mozilla/5.0 (Linux; Android 14)",
+                "origin": "https://www.xiaohongshu.com",
+                "referer": "https://www.xiaohongshu.com/",
+            },
+        )
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["ok"] is True
+        assert body["data"]["cookie_pairs"] == 3
+        assert body["data"]["non_empty_keys"] == 4
+        assert "XHS_HEADER_COOKIE" in body["data"]["updated_keys"]
+        assert os.environ.get("XHS_HEADER_COOKIE") == "a=1; b=2; c=3"
+        assert os.environ.get("XHS_HEADER_USER_AGENT") == "Mozilla/5.0 (Linux; Android 14)"
+    finally:
+        if previous_cookie is None:
+            os.environ.pop("XHS_HEADER_COOKIE", None)
+        else:
+            os.environ["XHS_HEADER_COOKIE"] = previous_cookie
+        if previous_ua is None:
+            os.environ.pop("XHS_HEADER_USER_AGENT", None)
+        else:
+            os.environ["XHS_HEADER_USER_AGENT"] = previous_ua
+        if previous_origin is None:
+            os.environ.pop("XHS_HEADER_ORIGIN", None)
+        else:
+            os.environ["XHS_HEADER_ORIGIN"] = previous_origin
+        if previous_referer is None:
+            os.environ.pop("XHS_HEADER_REFERER", None)
+        else:
+            os.environ["XHS_HEADER_REFERER"] = previous_referer
+
+
+def test_xiaohongshu_auth_update_rejects_empty_cookie() -> None:
+    _reset_xiaohongshu_state()
+    resp = client.post(
+        "/api/xiaohongshu/auth/update",
+        json={"cookie": "  "},
+    )
+    assert resp.status_code == 422 or resp.status_code == 400
+    if resp.status_code == 400:
+        body = resp.json()
+        assert body["ok"] is False
+        assert body["code"] == "INVALID_INPUT"
 
 
 def test_editable_config_update_and_reset(tmp_path) -> None:

@@ -97,7 +97,23 @@ ensure_venv_bin_on_path() {
   fi
 }
 
+ensure_playwright_runtime_libs() {
+  local pw_lib_dir="$SERVER_DIR/.venv/opt/pw-libs/usr/lib/x86_64-linux-gnu"
+  if [[ ! -d "$pw_lib_dir" ]]; then
+    return
+  fi
+  if [[ -n "${LD_LIBRARY_PATH:-}" ]]; then
+    case ":$LD_LIBRARY_PATH:" in
+      *":$pw_lib_dir:"*) ;;
+      *) export LD_LIBRARY_PATH="$pw_lib_dir:$LD_LIBRARY_PATH" ;;
+    esac
+  else
+    export LD_LIBRARY_PATH="$pw_lib_dir"
+  fi
+}
+
 ensure_venv_bin_on_path
+ensure_playwright_runtime_libs
 
 PYTHON_BIN="$(resolve_python)"
 UVICORN_BIN="$(resolve_uvicorn)"

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import os
+import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +58,8 @@ _EDITABLE_PATHS = {
     "xiaohongshu.web_readonly.host_allowlist",
 }
 
+_CONFIG_WRITE_LOCK = threading.RLock()
+
 
 class EditableConfigService:
     def __init__(
@@ -96,23 +101,25 @@ class EditableConfigService:
                     status_code=400,
                 )
 
-        raw = self._load_yaml(self._config_path)
-        for path, value in flattened.items():
-            self._set_by_path(raw, path, value)
+        with _CONFIG_WRITE_LOCK:
+            raw = self._load_yaml(self._config_path)
+            for path, value in flattened.items():
+                self._set_by_path(raw, path, value)
 
-        self._validate(raw)
-        self._write_yaml(self._config_path, raw)
+            self._validate(raw)
+            self._write_yaml(self._config_path, raw)
         clear_settings_cache()
         return self.get_editable_settings()
 
     def reset_to_defaults(self) -> dict[str, Any]:
-        raw = self._load_yaml(self._config_path)
-        default_raw = self._load_defaults()
-        for path in _EDITABLE_PATHS:
-            self._set_by_path(raw, path, self._get_by_path(default_raw, path))
+        with _CONFIG_WRITE_LOCK:
+            raw = self._load_yaml(self._config_path)
+            default_raw = self._load_defaults()
+            for path in _EDITABLE_PATHS:
+                self._set_by_path(raw, path, self._get_by_path(default_raw, path))
 
-        self._validate(raw)
-        self._write_yaml(self._config_path, raw)
+            self._validate(raw)
+            self._write_yaml(self._config_path, raw)
         clear_settings_cache()
         return self.get_editable_settings()
 
@@ -136,8 +143,22 @@ class EditableConfigService:
 
     def _write_yaml(self, path: Path, payload: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as fp:
-            yaml.safe_dump(payload, fp, allow_unicode=True, sort_keys=False)
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as fp:
+                yaml.safe_dump(payload, fp, allow_unicode=True, sort_keys=False)
+                temp_path = Path(fp.name)
+            os.replace(str(temp_path), str(path))
+        finally:
+            if temp_path is not None and temp_path.exists():
+                temp_path.unlink(missing_ok=True)
 
     def _validate(self, payload: dict[str, Any]) -> None:
         try:

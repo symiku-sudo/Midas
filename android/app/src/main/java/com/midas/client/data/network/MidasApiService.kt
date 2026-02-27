@@ -11,11 +11,15 @@ import com.midas.client.data.model.EditableConfigUpdateRequest
 import com.midas.client.data.model.HealthData
 import com.midas.client.data.model.NotesDeleteData
 import com.midas.client.data.model.NotesSaveBatchData
+import com.midas.client.data.model.XiaohongshuAuthUpdateData
+import com.midas.client.data.model.XiaohongshuAuthUpdateRequest
 import com.midas.client.data.model.XiaohongshuCaptureRefreshData
 import com.midas.client.data.model.XiaohongshuSyncedNotesPruneData
 import com.midas.client.data.model.XiaohongshuSyncData
 import com.midas.client.data.model.XiaohongshuSyncCooldownData
 import com.midas.client.data.model.XiaohongshuSyncJobCreateData
+import com.midas.client.data.model.XiaohongshuSyncJobAckData
+import com.midas.client.data.model.XiaohongshuSyncJobAckRequest
 import com.midas.client.data.model.XiaohongshuSyncJobStatusData
 import com.midas.client.data.model.XiaohongshuPendingCountData
 import com.midas.client.data.model.XiaohongshuNotesSaveRequest
@@ -90,6 +94,11 @@ interface MidasApiService {
     suspend fun refreshXiaohongshuCapture():
         Response<ApiEnvelope<XiaohongshuCaptureRefreshData>>
 
+    @POST("api/xiaohongshu/auth/update")
+    suspend fun updateXiaohongshuAuth(
+        @Body request: XiaohongshuAuthUpdateRequest
+    ): Response<ApiEnvelope<XiaohongshuAuthUpdateData>>
+
     @GET("api/xiaohongshu/sync/cooldown")
     suspend fun getXiaohongshuSyncCooldown():
         Response<ApiEnvelope<XiaohongshuSyncCooldownData>>
@@ -118,4 +127,10 @@ interface MidasApiService {
     suspend fun getXiaohongshuSyncJob(
         @Path("jobId") jobId: String
     ): Response<ApiEnvelope<XiaohongshuSyncJobStatusData>>
+
+    @POST("api/xiaohongshu/sync/jobs/{jobId}/ack")
+    suspend fun ackXiaohongshuSyncJob(
+        @Path("jobId") jobId: String,
+        @Body request: XiaohongshuSyncJobAckRequest,
+    ): Response<ApiEnvelope<XiaohongshuSyncJobAckData>>
 }

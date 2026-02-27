@@ -77,6 +77,14 @@ class XiaohongshuPageBatch:
 
 
 @dataclass(frozen=True)
+class XiaohongshuSyncProgress:
+    current: int
+    total: int
+    message: str
+    summaries: list[XiaohongshuSummaryItem] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class _PlaywrightCollectResponse:
     request_url: str
     request_method: str
@@ -2019,6 +2027,24 @@ class XiaohongshuWebReadonlySource:
 
         urls: list[str] = []
         seen: set[str] = set()
+
+        # Stage 1: prefer one canonical URL per image item and keep list order.
+        for field_name in candidates:
+            value = self._read_value(payload, field_name)
+            self._collect_ordered_image_urls(
+                value=value,
+                key_hint=field_name,
+                urls=urls,
+                seen=seen,
+                max_count=max_count,
+            )
+            if len(urls) >= max_count:
+                return urls
+
+        if urls:
+            return urls
+
+        # Stage 2: fallback to generic deep scan.
         for field_name in candidates:
             value = self._read_value(payload, field_name)
             self._collect_image_urls(
@@ -2040,6 +2066,125 @@ class XiaohongshuWebReadonlySource:
                 max_count=max_count,
             )
         return urls
+
+    def _collect_ordered_image_urls(
+        self,
+        *,
+        value: object,
+        key_hint: str,
+        urls: list[str],
+        seen: set[str],
+        max_count: int,
+    ) -> None:
+        if len(urls) >= max_count or value is None:
+            return
+
+        if isinstance(value, list):
+            for item in value:
+                if len(urls) >= max_count:
+                    break
+                if isinstance(item, dict):
+                    candidate = self._pick_preferred_image_url_from_node(item)
+                    if (
+                        candidate
+                        and self._looks_like_image_url(candidate, key_hint)
+                        and candidate not in seen
+                    ):
+                        seen.add(candidate)
+                        urls.append(candidate)
+                        continue
+                if isinstance(item, str):
+                    candidate = item.strip()
+                    if (
+                        self._looks_like_image_url(candidate, key_hint)
+                        and candidate not in seen
+                    ):
+                        seen.add(candidate)
+                        urls.append(candidate)
+                        continue
+                self._collect_ordered_image_urls(
+                    value=item,
+                    key_hint=key_hint,
+                    urls=urls,
+                    seen=seen,
+                    max_count=max_count,
+                )
+            return
+
+        if isinstance(value, dict):
+            candidate = self._pick_preferred_image_url_from_node(value)
+            if (
+                candidate
+                and self._looks_like_image_url(candidate, key_hint)
+                and candidate not in seen
+            ):
+                seen.add(candidate)
+                urls.append(candidate)
+                return
+
+            for key in (
+                "image_list",
+                "imageList",
+                "images",
+                "info_list",
+                "infoList",
+                "cover",
+                "note_card",
+                "note",
+                "media",
+                "url_list",
+                "urlList",
+            ):
+                nested = value.get(key)
+                if nested is None:
+                    continue
+                nested_hint = f"{key_hint}.{key}" if key_hint else key
+                self._collect_ordered_image_urls(
+                    value=nested,
+                    key_hint=nested_hint,
+                    urls=urls,
+                    seen=seen,
+                    max_count=max_count,
+                )
+                if len(urls) >= max_count:
+                    return
+            return
+
+        if isinstance(value, str):
+            candidate = value.strip()
+            if self._looks_like_image_url(candidate, key_hint) and candidate not in seen:
+                seen.add(candidate)
+                urls.append(candidate)
+
+    def _pick_preferred_image_url_from_node(self, node: dict[str, object]) -> str:
+        for key in (
+            "url_default",
+            "urlDefault",
+            "url_pre",
+            "urlPre",
+            "url_origin",
+            "urlOrigin",
+            "url",
+            "master_url",
+            "origin_url",
+            "original",
+        ):
+            value = node.get(key)
+            if isinstance(value, str) and value.strip().startswith(("http://", "https://")):
+                return value.strip()
+
+        for key in ("info_list", "infoList", "url_list", "urlList"):
+            nested = node.get(key)
+            if not isinstance(nested, list):
+                continue
+            for item in nested:
+                if isinstance(item, dict):
+                    candidate = self._pick_preferred_image_url_from_node(item)
+                    if candidate:
+                        return candidate
+                elif isinstance(item, str) and item.strip().startswith(("http://", "https://")):
+                    return item.strip()
+        return ""
 
     def _collect_image_urls(
         self,
@@ -2295,7 +2440,7 @@ class XiaohongshuSyncService:
         self,
         limit: int | None,
         confirm_live: bool = False,
-        progress_callback: Callable[[int, int, str], Awaitable[None]] | None = None,
+        progress_callback: Callable[[XiaohongshuSyncProgress], Awaitable[None]] | None = None,
     ) -> XiaohongshuSyncData:
         requested_limit = limit or self._settings.xiaohongshu.default_limit
         if requested_limit > self._settings.xiaohongshu.max_limit:
@@ -2325,13 +2470,6 @@ class XiaohongshuSyncService:
                 status_code=400,
             )
 
-        await self._emit_progress(
-            progress_callback,
-            current=0,
-            total=requested_limit,
-            message=f"开始同步，目标有效笔记 {requested_limit} 条。",
-        )
-
         fetched_count = 0
         processed_count = 0
         new_count = 0
@@ -2341,6 +2479,16 @@ class XiaohongshuSyncService:
         summaries: list[XiaohongshuSummaryItem] = []
         first_note = True
         seen_note_ids: set[str] = set()
+
+        await self._emit_progress(
+            progress_callback,
+            XiaohongshuSyncProgress(
+                current=0,
+                total=requested_limit,
+                message=f"开始同步，目标有效笔记 {requested_limit} 条。",
+                summaries=list(summaries),
+            ),
+        )
 
         async for note in self._iter_candidate_notes(mode=mode, requested_limit=requested_limit):
             if mode != "mock":
@@ -2353,14 +2501,17 @@ class XiaohongshuSyncService:
                 continue
             seen_note_ids.add(note.note_id)
             fetched_count += 1
-            if self._repository.is_synced(note.note_id):
+            if await asyncio.to_thread(self._repository.is_synced, note.note_id):
                 skipped_count += 1
                 processed_count += 1
                 await self._emit_progress(
                     progress_callback,
-                    current=new_count,
-                    total=requested_limit,
-                    message=f"已跳过重复笔记：{note.note_id}（有效 {new_count}/{requested_limit}）",
+                    XiaohongshuSyncProgress(
+                        current=new_count,
+                        total=requested_limit,
+                        message=f"已跳过重复笔记：{note.note_id}（有效 {new_count}/{requested_limit}）",
+                        summaries=list(summaries),
+                    ),
                 )
                 continue
 
@@ -2384,18 +2535,17 @@ class XiaohongshuSyncService:
                         summary_markdown=summary,
                     )
                 )
-                # Only mark dedupe id after summary payload is successfully built.
-                self._repository.mark_synced(
-                    note_id=note.note_id, title=note.title, source_url=note.source_url
-                )
                 new_count += 1
                 consecutive_failures = 0
                 processed_count += 1
                 await self._emit_progress(
                     progress_callback,
-                    current=new_count,
-                    total=requested_limit,
-                    message=f"已完成有效同步：{new_count}/{requested_limit}（{note.note_id}）",
+                    XiaohongshuSyncProgress(
+                        current=new_count,
+                        total=requested_limit,
+                        message=f"已完成有效同步：{new_count}/{requested_limit}（{note.note_id}）",
+                        summaries=list(summaries),
+                    ),
                 )
             except AppError as exc:
                 failed_count += 1
@@ -2403,9 +2553,12 @@ class XiaohongshuSyncService:
                 processed_count += 1
                 await self._emit_progress(
                     progress_callback,
-                    current=new_count,
-                    total=requested_limit,
-                    message=f"处理失败笔记：{note.note_id}（有效 {new_count}/{requested_limit}）",
+                    XiaohongshuSyncProgress(
+                        current=new_count,
+                        total=requested_limit,
+                        message=f"处理失败笔记：{note.note_id}（有效 {new_count}/{requested_limit}）",
+                        summaries=list(summaries),
+                    ),
                 )
                 if (
                     consecutive_failures
@@ -2443,7 +2596,11 @@ class XiaohongshuSyncService:
         )
 
         if mode == "web_readonly":
-            self._repository.set_state("last_live_sync_ts", str(int(time.time())))
+            await asyncio.to_thread(
+                self._repository.set_state,
+                "last_live_sync_ts",
+                str(int(time.time())),
+            )
 
         return result
 
@@ -2474,12 +2631,24 @@ class XiaohongshuSyncService:
             source_url=note.source_url,
             summary_markdown=summary,
         )
-        self._repository.mark_synced(
-            note_id=note.note_id,
-            title=note.title,
-            source_url=note.source_url,
+        await asyncio.to_thread(
+            self._repository.mark_synced,
+            note.note_id,
+            note.title,
+            note.source_url,
         )
         return result
+
+    def mark_synced_from_summaries(self, summaries: list[XiaohongshuSummaryItem]) -> int:
+        if not summaries:
+            return 0
+        for item in summaries:
+            self._repository.mark_synced(
+                note_id=item.note_id,
+                title=item.title,
+                source_url=item.source_url,
+            )
+        return len(summaries)
 
     async def get_pending_unsynced_count(self) -> dict[str, int | str]:
         mode = self._settings.xiaohongshu.mode.strip().lower()
@@ -2499,7 +2668,7 @@ class XiaohongshuSyncService:
                     continue
                 seen_note_ids.add(note.note_id)
                 scanned_count += 1
-                if not self._repository.is_synced(note.note_id):
+                if not await asyncio.to_thread(self._repository.is_synced, note.note_id):
                     pending_count += 1
         except AppError:
             raise
@@ -2630,7 +2799,10 @@ class XiaohongshuSyncService:
     ) -> AsyncIterator[XiaohongshuNote]:
         seen_note_ids: set[str] = set()
         cursor_fingerprint = self._build_live_cursor_fingerprint()
-        saved_cursor = self._load_live_cursor(fingerprint=cursor_fingerprint)
+        saved_cursor = await asyncio.to_thread(
+            self._load_live_cursor,
+            fingerprint=cursor_fingerprint,
+        )
 
         head_next_cursor = ""
         head_exhausted = False
@@ -2685,7 +2857,8 @@ class XiaohongshuSyncService:
                 async for batch in iter_pages(start_cursor=current_cursor):
                     page_cursor = batch.request_cursor.strip()
                     if page_cursor:
-                        self._save_live_cursor(
+                        await asyncio.to_thread(
+                            self._save_live_cursor,
                             cursor=page_cursor,
                             fingerprint=fingerprint,
                         )
@@ -2848,15 +3021,12 @@ class XiaohongshuSyncService:
 
     async def _emit_progress(
         self,
-        callback: Callable[[int, int, str], Awaitable[None]] | None,
-        *,
-        current: int,
-        total: int,
-        message: str,
+        callback: Callable[[XiaohongshuSyncProgress], Awaitable[None]] | None,
+        progress: XiaohongshuSyncProgress,
     ) -> None:
         if callback is None:
             return
-        await callback(current, total, message)
+        await callback(progress)
 
     def _enforce_live_sync_interval(self) -> None:
         cooldown = self.get_live_sync_cooldown()

@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlin.math.min
 
 data class SettingsUiState(
     val baseUrlInput: String = "",
@@ -58,6 +59,7 @@ data class XiaohongshuUiState(
     val syncCooldownRemainingSeconds: Int = 0,
     val savingSingleNoteIds: Set<String> = emptySet(),
     val savedNoteIds: Set<String> = emptySet(),
+    val ackedSyncedNoteIds: Set<String> = emptySet(),
     val progressCurrent: Int = 0,
     val progressTotal: Int = 0,
     val progressMessage: String = "",
@@ -81,6 +83,12 @@ data class NotesUiState(
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
+    companion object {
+        private const val ACK_MAX_RETRIES = 5
+        private const val ACK_INITIAL_BACKOFF_MS = 1000L
+        private const val ACK_MAX_BACKOFF_MS = 15000L
+    }
+
     private val settingsRepository = SettingsRepository(application)
     private val apiRepository = MidasRepository()
 
@@ -102,6 +110,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var syncCooldownTickerJob: Job? = null
     private var autoSaveConfigJob: Job? = null
     private var syncCooldownTargetEpochSeconds: Int = 0
+    private var ackRetryCount: Int = 0
+    private var ackNextRetryAtMillis: Long = 0
 
     init {
         loadEditableConfig()
@@ -237,7 +247,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadEditableConfig() {
-        val baseUrl = normalizeCurrentBaseUrl()
+        val baseUrl = requireBaseUrl {
+            _settingsState.update {
+                it.copy(
+                    isConfigLoading = false,
+                    configStatus = "请先填写服务端地址。",
+                )
+            }
+        } ?: return
         viewModelScope.launch {
             _settingsState.update {
                 it.copy(
@@ -276,7 +293,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun resetEditableConfig() {
-        val baseUrl = normalizeCurrentBaseUrl()
+        val baseUrl = requireBaseUrl {
+            _settingsState.update {
+                it.copy(
+                    isConfigResetting = false,
+                    configStatus = "请先填写服务端地址。",
+                )
+            }
+        } ?: return
         autoSaveConfigJob?.cancel()
         viewModelScope.launch {
             _settingsState.update {
@@ -318,7 +342,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         autoSaveConfigJob?.cancel()
         autoSaveConfigJob = viewModelScope.launch {
             delay(600)
-            val baseUrl = normalizeCurrentBaseUrl()
+            val baseUrl = requireBaseUrl {
+                _settingsState.update {
+                    it.copy(
+                        isConfigSaving = false,
+                        configStatus = "请先填写服务端地址。",
+                    )
+                }
+            } ?: return@launch
             val snapshot = _settingsState.value
             if (snapshot.editableConfigFields.isEmpty()) {
                 return@launch
@@ -379,7 +410,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun submitBilibiliSummary() {
-        val baseUrl = normalizeCurrentBaseUrl()
+        val baseUrl = requireBaseUrl {
+            _bilibiliState.update { it.copy(errorMessage = "请先填写服务端地址。") }
+        } ?: return
         val videoUrl = _bilibiliState.value.videoUrlInput.trim()
         if (videoUrl.isEmpty()) {
             _bilibiliState.update { it.copy(errorMessage = "请输入 B 站链接。") }
@@ -414,7 +447,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveCurrentBilibiliResult() {
-        val baseUrl = normalizeCurrentBaseUrl()
+        val baseUrl = requireBaseUrl {
+            _bilibiliState.update { it.copy(saveStatus = "请先填写服务端地址。") }
+        } ?: return
         val summary = _bilibiliState.value.result
         if (summary == null) {
             _bilibiliState.update { it.copy(saveStatus = "暂无可保存的总结结果。") }
@@ -477,7 +512,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshXiaohongshuSyncCooldown() {
-        val baseUrl = normalizeCurrentBaseUrl()
+        val baseUrl = requireBaseUrl {
+            syncCooldownTickerJob?.cancel()
+            syncCooldownTargetEpochSeconds = 0
+            _xiaohongshuState.update {
+                it.copy(
+                    isLoadingSyncCooldown = false,
+                    syncCooldownRemainingSeconds = 0,
+                )
+            }
+        } ?: return
         viewModelScope.launch {
             _xiaohongshuState.update { it.copy(isLoadingSyncCooldown = true) }
             when (val result = apiRepository.getXiaohongshuSyncCooldown(baseUrl)) {
@@ -490,7 +534,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             syncCooldownRemainingSeconds = remaining,
                         )
                     }
-                    startSyncCooldownTicker(syncCooldownTargetEpochSeconds)
+                    if (remaining > 0) {
+                        startSyncCooldownTicker(syncCooldownTargetEpochSeconds)
+                    } else {
+                        syncCooldownTickerJob?.cancel()
+                    }
                 }
 
                 is AppResult.Error -> {
@@ -529,7 +577,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun startXiaohongshuSync() {
-        val baseUrl = normalizeCurrentBaseUrl()
+        val baseUrl = requireBaseUrl {
+            _xiaohongshuState.update { it.copy(errorMessage = "请先填写服务端地址。") }
+        } ?: return
         val limit = _xiaohongshuState.value.limitInput.toIntOrNull()
         if (limit == null || limit <= 0) {
             _xiaohongshuState.update { it.copy(errorMessage = "同步数量必须为正整数。") }
@@ -544,6 +594,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         syncPollingJob?.cancel()
+        ackRetryCount = 0
+        ackNextRetryAtMillis = 0
         syncPollingJob = viewModelScope.launch {
             _xiaohongshuState.update {
                 it.copy(
@@ -551,6 +603,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     isSavingNotes = false,
                     savingSingleNoteIds = emptySet(),
                     savedNoteIds = emptySet(),
+                    ackedSyncedNoteIds = emptySet(),
                     progressCurrent = 0,
                     progressTotal = limit,
                     progressMessage = "正在创建同步任务...",
@@ -594,7 +647,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun summarizeXiaohongshuByUrl() {
-        val baseUrl = normalizeCurrentBaseUrl()
+        val baseUrl = requireBaseUrl {
+            _xiaohongshuState.update { it.copy(errorMessage = "请先填写服务端地址。") }
+        } ?: return
         val url = _xiaohongshuState.value.urlInput.trim()
         if (url.isEmpty()) {
             _xiaohongshuState.update { it.copy(errorMessage = "请输入小红书笔记链接。") }
@@ -644,7 +699,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun refreshXiaohongshuPendingCount() {
-        val baseUrl = normalizeCurrentBaseUrl()
+        val baseUrl = requireBaseUrl {
+            _xiaohongshuState.update {
+                it.copy(
+                    isLoadingPendingCount = false,
+                    pendingCountText = "",
+                    errorMessage = "请先填写服务端地址。",
+                )
+            }
+        } ?: return
         if (_xiaohongshuState.value.isLoadingPendingCount) {
             return
         }
@@ -685,7 +748,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveCurrentXiaohongshuSummaries() {
-        val baseUrl = normalizeCurrentBaseUrl()
+        val baseUrl = requireBaseUrl {
+            _xiaohongshuState.update { it.copy(saveStatus = "请先填写服务端地址。") }
+        } ?: return
         val summaries = _xiaohongshuState.value.summaries
         if (summaries.isEmpty()) {
             _xiaohongshuState.update { it.copy(saveStatus = "暂无可保存的小红书总结。") }
@@ -732,7 +797,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveSingleXiaohongshuSummary(item: XiaohongshuSummaryItem) {
-        val baseUrl = normalizeCurrentBaseUrl()
+        val baseUrl = requireBaseUrl {
+            _xiaohongshuState.update { it.copy(saveStatus = "请先填写服务端地址。") }
+        } ?: return
         val noteId = item.noteId
         val current = _xiaohongshuState.value
         if (noteId in current.savedNoteIds) {
@@ -781,7 +848,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun pruneUnsavedXiaohongshuSyncedNotes() {
-        val baseUrl = normalizeCurrentBaseUrl()
+        val baseUrl = requireBaseUrl {
+            _xiaohongshuState.update { it.copy(pruneStatus = "请先填写服务端地址。") }
+        } ?: return
         if (_xiaohongshuState.value.isPruningSyncedNoteIds) {
             return
         }
@@ -823,8 +892,71 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun submitXiaohongshuMobileAuth(cookie: String, userAgent: String) {
+        val baseUrl = requireBaseUrl {
+            _xiaohongshuState.update { it.copy(errorMessage = "请先填写服务端地址。") }
+        } ?: return
+        if (_xiaohongshuState.value.isRefreshingCaptureConfig) {
+            return
+        }
+        val normalizedCookie = cookie.trim()
+        if (normalizedCookie.isEmpty()) {
+            _xiaohongshuState.update {
+                it.copy(errorMessage = "未获取到 Cookie，请先在授权页完成登录后再上传。")
+            }
+            return
+        }
+
+        viewModelScope.launch {
+            _xiaohongshuState.update {
+                it.copy(
+                    isRefreshingCaptureConfig = true,
+                    captureRefreshStatus = "正在上传手机登录态...",
+                    pruneStatus = "",
+                    saveStatus = "",
+                    errorMessage = "",
+                )
+            }
+
+            when (
+                val result = apiRepository.updateXiaohongshuAuth(
+                    baseUrl = baseUrl,
+                    cookie = normalizedCookie,
+                    userAgent = userAgent.trim(),
+                    origin = "https://www.xiaohongshu.com",
+                    referer = "https://www.xiaohongshu.com/",
+                )
+            ) {
+                is AppResult.Success -> {
+                    _xiaohongshuState.update {
+                        it.copy(
+                            isRefreshingCaptureConfig = false,
+                            captureRefreshStatus = "已上传手机登录态：Cookie 条目 ${result.data.cookiePairs}。",
+                        )
+                    }
+                }
+
+                is AppResult.Error -> {
+                    _xiaohongshuState.update {
+                        it.copy(
+                            isRefreshingCaptureConfig = false,
+                            captureRefreshStatus = "",
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     fun refreshXiaohongshuAuthConfig() {
-        val baseUrl = normalizeCurrentBaseUrl()
+        val baseUrl = requireBaseUrl {
+            _xiaohongshuState.update { it.copy(errorMessage = "请先填写服务端地址。") }
+        } ?: return
         if (_xiaohongshuState.value.isRefreshingCaptureConfig) {
             return
         }
@@ -880,7 +1012,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun loadSavedNotes() {
-        val baseUrl = normalizeCurrentBaseUrl()
+        val baseUrl = requireBaseUrl {
+            _notesState.update {
+                it.copy(
+                    isLoading = false,
+                    errorMessage = "请先填写服务端地址。",
+                )
+            }
+        } ?: return
         viewModelScope.launch {
             _notesState.update { it.copy(isLoading = true, errorMessage = "", actionStatus = "") }
 
@@ -927,7 +1066,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteBilibiliSavedNote(noteId: String) {
-        val baseUrl = normalizeCurrentBaseUrl()
+        val baseUrl = requireBaseUrl {
+            _notesState.update { it.copy(errorMessage = "请先填写服务端地址。") }
+        } ?: return
         viewModelScope.launch {
             when (val result = apiRepository.deleteBilibiliNote(baseUrl, noteId)) {
                 is AppResult.Success -> {
@@ -953,7 +1094,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearBilibiliSavedNotes() {
-        val baseUrl = normalizeCurrentBaseUrl()
+        val baseUrl = requireBaseUrl {
+            _notesState.update { it.copy(errorMessage = "请先填写服务端地址。") }
+        } ?: return
         viewModelScope.launch {
             when (val result = apiRepository.clearBilibiliNotes(baseUrl)) {
                 is AppResult.Success -> {
@@ -979,7 +1122,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun deleteXiaohongshuSavedNote(noteId: String) {
-        val baseUrl = normalizeCurrentBaseUrl()
+        val baseUrl = requireBaseUrl {
+            _notesState.update { it.copy(errorMessage = "请先填写服务端地址。") }
+        } ?: return
         viewModelScope.launch {
             when (val result = apiRepository.deleteXiaohongshuNote(baseUrl, noteId)) {
                 is AppResult.Success -> {
@@ -1005,7 +1150,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun clearXiaohongshuSavedNotes() {
-        val baseUrl = normalizeCurrentBaseUrl()
+        val baseUrl = requireBaseUrl {
+            _notesState.update { it.copy(errorMessage = "请先填写服务端地址。") }
+        } ?: return
         viewModelScope.launch {
             when (val result = apiRepository.clearXiaohongshuNotes(baseUrl)) {
                 is AppResult.Success -> {
@@ -1051,12 +1198,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 is AppResult.Success -> {
                     val data = poll.data
                     _xiaohongshuState.update {
+                        val mergedSummaries = mergeSummaryItems(it.summaries, data.summaries)
                         it.copy(
                             progressCurrent = data.current,
                             progressTotal = data.total,
                             progressMessage = data.message,
+                            summaries = mergedSummaries,
                         )
                     }
+                    ackDisplayedSummaries(baseUrl = baseUrl, jobId = jobId)
 
                     when (data.status) {
                         "pending", "running" -> {
@@ -1071,9 +1221,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 "同步完成：请求 ${result.requestedLimit}，拉取 ${result.fetchedCount}，新增 ${result.newCount}，跳过 ${result.skippedCount}，失败 ${result.failedCount}"
                             }
                             _xiaohongshuState.update {
+                                val mergedSummaries = if (result == null) {
+                                    it.summaries
+                                } else {
+                                    mergeSummaryItems(it.summaries, result.summaries)
+                                }
                                 it.copy(
                                     isSyncing = false,
-                                    summaries = result?.summaries ?: emptyList(),
+                                    summaries = mergedSummaries,
                                     statsText = stats,
                                     progressMessage = "同步任务完成。",
                                 )
@@ -1117,6 +1272,68 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         refreshXiaohongshuSyncCooldown()
     }
 
+    private suspend fun ackDisplayedSummaries(baseUrl: String, jobId: String) {
+        val now = System.currentTimeMillis()
+        if (ackRetryCount >= ACK_MAX_RETRIES) {
+            return
+        }
+        if (now < ackNextRetryAtMillis) {
+            return
+        }
+        val snapshot = _xiaohongshuState.value
+        val pendingNoteIds = snapshot.summaries
+            .asSequence()
+            .map { item -> item.noteId.trim() }
+            .filter { id -> id.isNotEmpty() }
+            .distinct()
+            .filterNot { id -> id in snapshot.ackedSyncedNoteIds }
+            .toList()
+        if (pendingNoteIds.isEmpty()) {
+            return
+        }
+
+        when (
+            val ack = apiRepository.ackXiaohongshuSyncJob(
+                baseUrl = baseUrl,
+                jobId = jobId,
+                noteIds = pendingNoteIds,
+            )
+        ) {
+            is AppResult.Success -> {
+                ackRetryCount = 0
+                ackNextRetryAtMillis = 0
+                _xiaohongshuState.update {
+                    val clearAckError = it.errorMessage.startsWith("ACK 失败") ||
+                        it.errorMessage.startsWith("同步结果已展示，但 ACK")
+                    it.copy(
+                        ackedSyncedNoteIds = it.ackedSyncedNoteIds + pendingNoteIds.toSet(),
+                        errorMessage = if (clearAckError) "" else it.errorMessage,
+                    )
+                }
+            }
+
+            is AppResult.Error -> {
+                ackRetryCount += 1
+                if (ackRetryCount >= ACK_MAX_RETRIES) {
+                    _xiaohongshuState.update {
+                        it.copy(
+                            errorMessage = "同步结果已展示，但 ACK 连续失败，请稍后重试同步。\n[${ack.code}] ${ack.message}",
+                        )
+                    }
+                    return
+                }
+                val expFactor = 1L shl (ackRetryCount - 1)
+                val backoffMillis = min(ACK_INITIAL_BACKOFF_MS * expFactor, ACK_MAX_BACKOFF_MS)
+                ackNextRetryAtMillis = now + backoffMillis
+                _xiaohongshuState.update {
+                    it.copy(
+                        errorMessage = "ACK 失败，将在 ${backoffMillis / 1000} 秒后重试。\n[${ack.code}] ${ack.message}",
+                    )
+                }
+            }
+        }
+    }
+
     override fun onCleared() {
         syncPollingJob?.cancel()
         syncCooldownTickerJob?.cancel()
@@ -1124,9 +1341,31 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         super.onCleared()
     }
 
+    private fun requireBaseUrl(onMissing: () -> Unit): String? {
+        val baseUrl = normalizeCurrentBaseUrl()
+        if (baseUrl.isNotEmpty()) {
+            return baseUrl
+        }
+        onMissing()
+        return null
+    }
+
     private fun normalizeCurrentBaseUrl(): String {
         val normalized = UrlNormalizer.normalize(_settingsState.value.baseUrlInput)
         _settingsState.update { it.copy(baseUrlInput = normalized) }
         return normalized
+    }
+
+    private fun mergeSummaryItems(
+        existing: List<XiaohongshuSummaryItem>,
+        incoming: List<XiaohongshuSummaryItem>,
+    ): List<XiaohongshuSummaryItem> {
+        if (incoming.isEmpty()) {
+            return existing
+        }
+        val merged = LinkedHashMap<String, XiaohongshuSummaryItem>()
+        existing.forEach { item -> merged[item.noteId] = item }
+        incoming.forEach { item -> merged[item.noteId] = item }
+        return merged.values.toList()
     }
 }

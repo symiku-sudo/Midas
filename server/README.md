@@ -16,6 +16,7 @@
 - `DELETE /api/notes/xiaohongshu/{note_id}` / `DELETE /api/notes/xiaohongshu`
 - `POST /api/notes/xiaohongshu/synced/prune`
 - `POST /api/xiaohongshu/capture/refresh`
+- `POST /api/xiaohongshu/auth/update`
 - `GET /api/config/editable`
 - `PUT /api/config/editable`
 - `POST /api/config/editable/reset`
@@ -93,6 +94,14 @@ curl -X POST http://127.0.0.1:8000/api/xiaohongshu/capture/refresh
 - 若 HAR 不包含 `Cookie`（常见于脱敏导出），接口会返回 `400`。
 - 若 HAR 不可用，会自动尝试 `curl_capture_path` 指向的 cURL 文件。
 - 两者都不含 Cookie 时会失败，请重新导出“包含敏感数据”的 HAR/cURL。
+
+也支持由移动端直接上传登录态（Cookie/UA）：
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/xiaohongshu/auth/update \
+  -H 'Content-Type: application/json' \
+  -d '{"cookie":"a=1; b=2","user_agent":"Mozilla/5.0 (Linux; Android 14)","origin":"https://www.xiaohongshu.com","referer":"https://www.xiaohongshu.com/"}'
+```
 
 ## Real-run config (Bilibili path)
 
@@ -197,7 +206,16 @@ curl -X POST http://127.0.0.1:8000/api/xiaohongshu/sync/jobs \
 
 # 查询任务进度
 curl http://127.0.0.1:8000/api/xiaohongshu/sync/jobs/<job_id>
+
+# ACK 已展示的笔记（把 note_id 写入去重表）
+curl -X POST http://127.0.0.1:8000/api/xiaohongshu/sync/jobs/<job_id>/ack \
+  -H 'Content-Type: application/json' \
+  -d '{"note_ids":["mock-note-001","mock-note-002"]}'
 ```
+
+说明：
+- 异步任务状态接口会在运行中返回 `summaries` 增量结果，可用于“同步成功一篇就展示一篇”。
+- 异步任务不会自动写去重；客户端应在“展示成功”后调用 ACK 接口。
 
 ```bash
 # web_readonly 模式（真实请求）需显式确认
@@ -237,6 +255,7 @@ curl -X POST http://127.0.0.1:8000/api/config/editable/reset
 - Synced note IDs persist in `xiaohongshu.db_path` (default `.tmp/midas.db`).
 - 小红书同步中的 `limit` 是“有效新增（`new_count`）目标”；命中去重表的条目只计入 `skipped_count`，不会占用 `limit`。
 - 同步会自动按 cursor 翻页，直到凑满 `limit` 条有效笔记，或收藏列表已遍历完。
+- 同步接口 `POST /api/xiaohongshu/sync` 为向后兼容会自动写去重；异步 jobs 模式改为 ACK 驱动写去重。
 - 删除“已保存小红书笔记”不会删除去重表中的 `note_id`，后续同步仍会跳过已处理笔记。
 - `web_readonly` 模式仍属于非官方接口回放，务必低频、低并发、只读请求，优先保护账号安全。
 

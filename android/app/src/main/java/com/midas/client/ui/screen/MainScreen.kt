@@ -1,7 +1,14 @@
 package com.midas.client.ui.screen
 
-import android.content.Intent
 import android.net.Uri
+import android.content.Intent
+import android.graphics.Bitmap
+import android.webkit.CookieManager
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -44,6 +51,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -67,6 +76,11 @@ private enum class MainTab(val title: String) {
     NOTES("笔记库"),
     SETTINGS("设置"),
 }
+
+private const val XHS_AUTH_DESKTOP_UA =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
+private const val XHS_AUTH_ENTRY_URL = "https://www.xiaohongshu.com/explore"
 
 private enum class ConfigControlKind {
     TEXT,
@@ -275,20 +289,96 @@ fun MainScreen(viewModel: MainViewModel) {
     val bilibili by viewModel.bilibiliState.collectAsStateWithLifecycle()
     val xiaohongshu by viewModel.xiaohongshuState.collectAsStateWithLifecycle()
     val notes by viewModel.notesState.collectAsStateWithLifecycle()
+
+    MainScreenContent(
+        settings = settings,
+        bilibili = bilibili,
+        xiaohongshu = xiaohongshu,
+        notes = notes,
+        onAppForeground = viewModel::onAppForeground,
+        onBaseUrlChange = viewModel::onBaseUrlInputChange,
+        onSaveBaseUrl = viewModel::saveBaseUrl,
+        onTestConnection = viewModel::testConnection,
+        onConfigTextChange = viewModel::onEditableConfigFieldTextChange,
+        onConfigBooleanChange = viewModel::onEditableConfigFieldBooleanChange,
+        onResetConfig = viewModel::resetEditableConfig,
+        onBilibiliVideoUrlChange = viewModel::onBilibiliUrlInputChange,
+        onSubmitBilibiliSummary = viewModel::submitBilibiliSummary,
+        onSaveBilibiliNote = viewModel::saveCurrentBilibiliResult,
+        onXiaohongshuLimitChange = viewModel::onXiaohongshuLimitInputChange,
+        onXiaohongshuUrlChange = viewModel::onXiaohongshuUrlInputChange,
+        onStartXiaohongshuSync = viewModel::startXiaohongshuSync,
+        onSummarizeXiaohongshuUrl = viewModel::summarizeXiaohongshuByUrl,
+        onRefreshXiaohongshuPendingCount = viewModel::refreshXiaohongshuPendingCount,
+        onSaveXiaohongshuNotes = viewModel::saveCurrentXiaohongshuSummaries,
+        onPruneXiaohongshuSyncedNoteIds = viewModel::pruneUnsavedXiaohongshuSyncedNotes,
+        onRefreshXiaohongshuAuthConfig = viewModel::refreshXiaohongshuAuthConfig,
+        onSubmitXiaohongshuMobileAuth = viewModel::submitXiaohongshuMobileAuth,
+        onSaveSingleXiaohongshuNote = viewModel::saveSingleXiaohongshuSummary,
+        onNotesKeywordChange = viewModel::onNotesKeywordInputChange,
+        onRefreshNotes = viewModel::loadSavedNotes,
+        onDeleteBilibiliNote = viewModel::deleteBilibiliSavedNote,
+        onClearBilibiliNotes = viewModel::clearBilibiliSavedNotes,
+        onDeleteXiaohongshuNote = viewModel::deleteXiaohongshuSavedNote,
+        onClearXiaohongshuNotes = viewModel::clearXiaohongshuSavedNotes,
+    )
+}
+
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+fun MainScreenContent(
+    settings: SettingsUiState,
+    bilibili: BilibiliUiState,
+    xiaohongshu: XiaohongshuUiState,
+    notes: NotesUiState,
+    onAppForeground: () -> Unit,
+    onBaseUrlChange: (String) -> Unit,
+    onSaveBaseUrl: () -> Unit,
+    onTestConnection: () -> Unit,
+    onConfigTextChange: (String, String) -> Unit,
+    onConfigBooleanChange: (String, Boolean) -> Unit,
+    onResetConfig: () -> Unit,
+    onBilibiliVideoUrlChange: (String) -> Unit,
+    onSubmitBilibiliSummary: () -> Unit,
+    onSaveBilibiliNote: () -> Unit,
+    onXiaohongshuLimitChange: (String) -> Unit,
+    onXiaohongshuUrlChange: (String) -> Unit,
+    onStartXiaohongshuSync: () -> Unit,
+    onSummarizeXiaohongshuUrl: () -> Unit,
+    onRefreshXiaohongshuPendingCount: () -> Unit,
+    onSaveXiaohongshuNotes: () -> Unit,
+    onPruneXiaohongshuSyncedNoteIds: () -> Unit,
+    onRefreshXiaohongshuAuthConfig: () -> Unit,
+    onSubmitXiaohongshuMobileAuth: (String, String) -> Unit = { _, _ -> },
+    onSaveSingleXiaohongshuNote: (XiaohongshuSummaryItem) -> Unit,
+    onNotesKeywordChange: (String) -> Unit,
+    onRefreshNotes: () -> Unit,
+    onDeleteBilibiliNote: (String) -> Unit,
+    onClearBilibiliNotes: () -> Unit,
+    onDeleteXiaohongshuNote: (String) -> Unit,
+    onClearXiaohongshuNotes: () -> Unit,
+    enableLifecycleAutoRefresh: Boolean = true,
+    enableCyclicTabs: Boolean = true,
+    animateTabSwitch: Boolean = true,
+) {
     val lifecycleOwner = LocalLifecycleOwner.current
     val tabs = MainTab.entries
     val tabCount = tabs.size
     val pagerState = rememberPagerState(
-        initialPage = tabCount * 1000,
-        pageCount = { Int.MAX_VALUE },
+        initialPage = if (enableCyclicTabs) tabCount * 1000 else 0,
+        pageCount = { if (enableCyclicTabs) Int.MAX_VALUE else tabCount },
     )
     val scope = rememberCoroutineScope()
-    val selectedTabIndex = pagerState.currentPage % tabCount
+    val selectedTabIndex = if (enableCyclicTabs) {
+        pagerState.currentPage % tabCount
+    } else {
+        pagerState.currentPage.coerceIn(0, tabCount - 1)
+    }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
-            if (event == Lifecycle.Event.ON_RESUME) {
-                viewModel.onAppForeground()
+            if (enableLifecycleAutoRefresh && event == Lifecycle.Event.ON_RESUME) {
+                onAppForeground()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -310,13 +400,23 @@ fun MainScreen(viewModel: MainViewModel) {
                         Tab(
                             selected = selectedTabIndex == index,
                             onClick = {
-                                val targetPage = nearestCyclicTabPage(
-                                    currentPage = pagerState.currentPage,
-                                    currentTabIndex = selectedTabIndex,
-                                    targetTabIndex = index,
-                                    tabCount = tabCount,
-                                )
-                                scope.launch { pagerState.animateScrollToPage(targetPage) }
+                                val targetPage = if (enableCyclicTabs) {
+                                    nearestCyclicTabPage(
+                                        currentPage = pagerState.currentPage,
+                                        currentTabIndex = selectedTabIndex,
+                                        targetTabIndex = index,
+                                        tabCount = tabCount,
+                                    )
+                                } else {
+                                    index
+                                }
+                                scope.launch {
+                                    if (animateTabSwitch) {
+                                        pagerState.animateScrollToPage(targetPage)
+                                    } else {
+                                        pagerState.scrollToPage(targetPage)
+                                    }
+                                }
                             },
                             text = { SingleLineActionText(tab.title) },
                         )
@@ -331,16 +431,16 @@ fun MainScreen(viewModel: MainViewModel) {
                 .fillMaxSize()
                 .padding(innerPadding),
         ) { page ->
-            when (tabs[page % tabCount]) {
+            when (tabs[if (enableCyclicTabs) page % tabCount else page]) {
                 MainTab.SETTINGS -> {
                     SettingsPanel(
                         state = settings,
-                        onBaseUrlChange = viewModel::onBaseUrlInputChange,
-                        onSave = viewModel::saveBaseUrl,
-                        onTestConnection = viewModel::testConnection,
-                        onConfigTextChange = viewModel::onEditableConfigFieldTextChange,
-                        onConfigBooleanChange = viewModel::onEditableConfigFieldBooleanChange,
-                        onResetConfig = viewModel::resetEditableConfig,
+                        onBaseUrlChange = onBaseUrlChange,
+                        onSave = onSaveBaseUrl,
+                        onTestConnection = onTestConnection,
+                        onConfigTextChange = onConfigTextChange,
+                        onConfigBooleanChange = onConfigBooleanChange,
+                        onResetConfig = onResetConfig,
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(16.dp),
@@ -350,9 +450,9 @@ fun MainScreen(viewModel: MainViewModel) {
                 MainTab.BILIBILI -> {
                     BilibiliPanel(
                         state = bilibili,
-                        onVideoUrlChange = viewModel::onBilibiliUrlInputChange,
-                        onSubmit = viewModel::submitBilibiliSummary,
-                        onSaveNote = viewModel::saveCurrentBilibiliResult,
+                        onVideoUrlChange = onBilibiliVideoUrlChange,
+                        onSubmit = onSubmitBilibiliSummary,
+                        onSaveNote = onSaveBilibiliNote,
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(16.dp),
@@ -362,15 +462,16 @@ fun MainScreen(viewModel: MainViewModel) {
                 MainTab.XHS -> {
                     XiaohongshuPanel(
                         state = xiaohongshu,
-                        onLimitChange = viewModel::onXiaohongshuLimitInputChange,
-                        onUrlChange = viewModel::onXiaohongshuUrlInputChange,
-                        onStartSync = viewModel::startXiaohongshuSync,
-                        onSummarizeUrl = viewModel::summarizeXiaohongshuByUrl,
-                        onRefreshPendingCount = viewModel::refreshXiaohongshuPendingCount,
-                        onSaveNotes = viewModel::saveCurrentXiaohongshuSummaries,
-                        onPruneSyncedNoteIds = viewModel::pruneUnsavedXiaohongshuSyncedNotes,
-                        onRefreshAuthConfig = viewModel::refreshXiaohongshuAuthConfig,
-                        onSaveSingleNote = viewModel::saveSingleXiaohongshuSummary,
+                        onLimitChange = onXiaohongshuLimitChange,
+                        onUrlChange = onXiaohongshuUrlChange,
+                        onStartSync = onStartXiaohongshuSync,
+                        onSummarizeUrl = onSummarizeXiaohongshuUrl,
+                        onRefreshPendingCount = onRefreshXiaohongshuPendingCount,
+                        onSaveNotes = onSaveXiaohongshuNotes,
+                        onPruneSyncedNoteIds = onPruneXiaohongshuSyncedNoteIds,
+                        onRefreshAuthConfig = onRefreshXiaohongshuAuthConfig,
+                        onSubmitMobileAuth = onSubmitXiaohongshuMobileAuth,
+                        onSaveSingleNote = onSaveSingleXiaohongshuNote,
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(16.dp),
@@ -380,12 +481,12 @@ fun MainScreen(viewModel: MainViewModel) {
                 MainTab.NOTES -> {
                     NotesPanel(
                         state = notes,
-                        onKeywordChange = viewModel::onNotesKeywordInputChange,
-                        onRefresh = viewModel::loadSavedNotes,
-                        onDeleteBilibili = viewModel::deleteBilibiliSavedNote,
-                        onClearBilibili = viewModel::clearBilibiliSavedNotes,
-                        onDeleteXiaohongshu = viewModel::deleteXiaohongshuSavedNote,
-                        onClearXiaohongshu = viewModel::clearXiaohongshuSavedNotes,
+                        onKeywordChange = onNotesKeywordChange,
+                        onRefresh = onRefreshNotes,
+                        onDeleteBilibili = onDeleteBilibiliNote,
+                        onClearBilibili = onClearBilibiliNotes,
+                        onDeleteXiaohongshu = onDeleteXiaohongshuNote,
+                        onClearXiaohongshu = onClearXiaohongshuNotes,
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(16.dp),
@@ -428,6 +529,43 @@ private fun formatCooldownText(seconds: Int): String {
         "%d:%02d:%02d".format(hours, minutes, secs)
     } else {
         "%02d:%02d".format(minutes, secs)
+    }
+}
+
+private fun handleExternalAuthNavigation(view: WebView?, rawUrl: String): Boolean {
+    if (rawUrl.isBlank()) {
+        return false
+    }
+    val uri = runCatching { Uri.parse(rawUrl) }.getOrNull() ?: return false
+    val scheme = uri.scheme?.lowercase().orEmpty()
+    if (scheme == "http" || scheme == "https") {
+        return false
+    }
+
+    if (scheme == "intent") {
+        val intent = runCatching {
+            android.content.Intent.parseUri(rawUrl, android.content.Intent.URI_INTENT_SCHEME)
+        }.getOrNull()
+        val fallback = intent?.getStringExtra("browser_fallback_url")
+        if (!fallback.isNullOrBlank()) {
+            val fallbackUri = runCatching { Uri.parse(fallback) }.getOrNull()
+            val fallbackScheme = fallbackUri?.scheme?.lowercase().orEmpty()
+            if (fallbackScheme == "http" || fallbackScheme == "https") {
+                view?.loadUrl(fallback)
+                return true
+            }
+        }
+        return true
+    }
+
+    // Block all non-http(s) deep links inside auth WebView to avoid app-jump failures.
+    return true
+}
+
+private fun recoverAuthWebPage(view: WebView?) {
+    if (view == null) return
+    if (view.url != XHS_AUTH_ENTRY_URL) {
+        view.post { view.loadUrl(XHS_AUTH_ENTRY_URL) }
     }
 }
 
@@ -834,6 +972,7 @@ private fun XiaohongshuPanel(
     onSaveNotes: () -> Unit,
     onPruneSyncedNoteIds: () -> Unit,
     onRefreshAuthConfig: () -> Unit,
+    onSubmitMobileAuth: (String, String) -> Unit,
     onSaveSingleNote: (XiaohongshuSummaryItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -844,6 +983,13 @@ private fun XiaohongshuPanel(
         state.isLoadingSyncCooldown -> "同步收藏(检查中)"
         cooldownSeconds > 0 -> "同步收藏(${formatCooldownText(cooldownSeconds)})"
         else -> "同步收藏"
+    }
+    var showMobileAuthWebView by remember { mutableStateOf(false) }
+    var authWebView by remember { mutableStateOf<WebView?>(null) }
+
+    fun closeMobileAuthWebView() {
+        showMobileAuthWebView = false
+        authWebView = null
     }
 
     Column(
@@ -893,14 +1039,23 @@ private fun XiaohongshuPanel(
         Button(
             onClick = onPruneSyncedNoteIds,
             enabled = !state.isPruningSyncedNoteIds && !state.isSyncing,
+            modifier = Modifier.testTag("xhs_prune_button"),
         ) {
             SingleLineActionText(if (state.isPruningSyncedNoteIds) "清理中..." else "清理无效ID")
         }
         Button(
             onClick = onRefreshAuthConfig,
             enabled = !state.isRefreshingCaptureConfig && !state.isSyncing,
+            modifier = Modifier.testTag("xhs_refresh_auth_button"),
         ) {
             SingleLineActionText(if (state.isRefreshingCaptureConfig) "更新中..." else "更新Auth")
+        }
+        Button(
+            onClick = { showMobileAuthWebView = true },
+            enabled = !state.isRefreshingCaptureConfig && !state.isSyncing,
+            modifier = Modifier.testTag("xhs_mobile_auth_button"),
+        ) {
+            SingleLineActionText("手机授权")
         }
         Text(
             text = "清理已被标记为“已同步”但你并未保存的笔记，下次同步时会重新尝试生成。",
@@ -912,6 +1067,112 @@ private fun XiaohongshuPanel(
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+        if (showMobileAuthWebView) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "请在下方完成小红书网页登录，再点“完成上传”。",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        text = "若页面提示“用App打开”，可忽略，继续停留网页登录即可。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(
+                            onClick = {
+                                val cookie = CookieManager
+                                    .getInstance()
+                                    .getCookie("https://www.xiaohongshu.com")
+                                    .orEmpty()
+                                val userAgent = authWebView?.settings?.userAgentString.orEmpty()
+                                onSubmitMobileAuth(cookie, userAgent)
+                                closeMobileAuthWebView()
+                            },
+                            enabled = !state.isRefreshingCaptureConfig,
+                        ) {
+                            SingleLineActionText("完成上传")
+                        }
+                        Button(onClick = { closeMobileAuthWebView() }) {
+                            SingleLineActionText("取消")
+                        }
+                    }
+                    AndroidView(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(420.dp)
+                            .testTag("xhs_mobile_auth_webview"),
+                        factory = { context ->
+                            WebView(context).apply {
+                                val cookieManager = CookieManager.getInstance()
+                                cookieManager.setAcceptCookie(true)
+                                cookieManager.setAcceptThirdPartyCookies(this, true)
+                                settings.javaScriptEnabled = true
+                                settings.domStorageEnabled = true
+                                settings.javaScriptCanOpenWindowsAutomatically = true
+                                settings.cacheMode = WebSettings.LOAD_DEFAULT
+                                settings.userAgentString = XHS_AUTH_DESKTOP_UA
+                                webViewClient = object : WebViewClient() {
+                                    override fun shouldOverrideUrlLoading(
+                                        view: WebView?,
+                                        request: WebResourceRequest?,
+                                    ): Boolean {
+                                        val url = request?.url?.toString().orEmpty()
+                                        return handleExternalAuthNavigation(view, url)
+                                    }
+
+                                    @Deprecated("Deprecated in Java")
+                                    override fun shouldOverrideUrlLoading(
+                                        view: WebView?,
+                                        url: String?,
+                                    ): Boolean {
+                                        return handleExternalAuthNavigation(view, url.orEmpty())
+                                    }
+
+                                    override fun onPageStarted(
+                                        view: WebView?,
+                                        url: String?,
+                                        favicon: Bitmap?,
+                                    ) {
+                                        if (handleExternalAuthNavigation(view, url.orEmpty())) {
+                                            view?.stopLoading()
+                                            recoverAuthWebPage(view)
+                                            return
+                                        }
+                                        super.onPageStarted(view, url, favicon)
+                                    }
+
+                                    override fun onReceivedError(
+                                        view: WebView?,
+                                        request: WebResourceRequest?,
+                                        error: WebResourceError?,
+                                    ) {
+                                        if (
+                                            request?.isForMainFrame == true &&
+                                            error?.errorCode == ERROR_UNSUPPORTED_SCHEME
+                                        ) {
+                                            recoverAuthWebPage(view)
+                                            return
+                                        }
+                                        super.onReceivedError(view, request, error)
+                                    }
+                                }
+                                loadUrl(XHS_AUTH_ENTRY_URL)
+                            }.also { view ->
+                                authWebView = view
+                            }
+                        },
+                        update = { view ->
+                            authWebView = view
+                        },
+                    )
+                }
+            }
+        }
 
         if (state.isSyncing) {
             if (state.progressTotal > 0) {
@@ -983,6 +1244,7 @@ private fun XiaohongshuSummaryCard(
                 Button(
                     onClick = onSave,
                     enabled = !batchSaving && !isSaving && !isSaved,
+                    modifier = Modifier.testTag("xhs_save_single_${item.noteId}"),
                 ) {
                     SingleLineActionText(
                         when {

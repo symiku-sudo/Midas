@@ -36,6 +36,19 @@ def _ensure_venv_bin_on_path() -> None:
     os.environ["PATH"] = f"{venv_bin_str}:{current_path}" if current_path else venv_bin_str
 
 
+def _ensure_playwright_runtime_lib_on_path() -> None:
+    pw_lib_dir = SERVER_ROOT / ".venv" / "opt" / "pw-libs" / "usr" / "lib" / "x86_64-linux-gnu"
+    if not pw_lib_dir.is_dir():
+        return
+    current = os.environ.get("LD_LIBRARY_PATH", "")
+    pw_lib_dir_str = str(pw_lib_dir)
+    if pw_lib_dir_str in [item for item in current.split(":") if item]:
+        return
+    os.environ["LD_LIBRARY_PATH"] = (
+        f"{pw_lib_dir_str}:{current}" if current else pw_lib_dir_str
+    )
+
+
 def run_selfcheck(settings: Settings) -> list[CheckResult]:
     results: list[CheckResult] = []
     results.extend(check_config_key_schema())
@@ -330,11 +343,13 @@ def check_xiaohongshu(settings: Settings) -> list[CheckResult]:
     if page_fetch_driver in {"auto", "playwright"}:
         has_playwright = importlib.util.find_spec("playwright") is not None
         if has_playwright:
+            ok, detail = _check_playwright_runtime_launch()
+            status = "pass" if ok else ("warn" if page_fetch_driver == "auto" else "fail")
             results.append(
                 CheckResult(
                     name="xiaohongshu.web_readonly.playwright",
-                    status="pass",
-                    message="Playwright 依赖可用。",
+                    status=status,
+                    message=detail,
                 )
             )
         else:
@@ -389,6 +404,37 @@ def check_xiaohongshu(settings: Settings) -> list[CheckResult]:
     return results
 
 
+def _check_playwright_runtime_launch() -> tuple[bool, str]:
+    try:
+        from playwright.sync_api import sync_playwright
+    except ModuleNotFoundError:
+        return (
+            False,
+            (
+                "缺少 Playwright 依赖。请执行 "
+                "`pip install playwright && python -m playwright install chromium`。"
+            ),
+        )
+
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            browser.close()
+    except Exception as exc:
+        first_line = str(exc).strip().splitlines()[0] if str(exc).strip() else repr(exc)
+        return (
+            False,
+            (
+                "Playwright 已安装但浏览器启动失败："
+                f"{first_line}。请执行 `python -m playwright install chromium`，"
+                "并补齐系统依赖（Ubuntu 可执行 "
+                "`sudo python -m playwright install-deps chromium`）。"
+            ),
+        )
+
+    return True, "Playwright 依赖可用，浏览器可启动。"
+
+
 def _check_command(name: str, command: str) -> CheckResult:
     if shutil.which(command):
         return CheckResult(name=name, status="pass", message=f"命令可用: {command}")
@@ -407,6 +453,7 @@ def main() -> int:
     parser.parse_args()
 
     _ensure_venv_bin_on_path()
+    _ensure_playwright_runtime_lib_on_path()
     settings = load_settings()
     results = run_selfcheck(settings)
 

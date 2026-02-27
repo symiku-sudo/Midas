@@ -121,6 +121,19 @@ data class XiaohongshuCaptureRefreshData(
     @Json(name = "empty_keys") val emptyKeys: List<String>
 )
 
+data class XiaohongshuAuthUpdateRequest(
+    val cookie: String,
+    @Json(name = "user_agent") val userAgent: String = "",
+    val origin: String = "",
+    val referer: String = ""
+)
+
+data class XiaohongshuAuthUpdateData(
+    @Json(name = "updated_keys") val updatedKeys: List<String>,
+    @Json(name = "non_empty_keys") val nonEmptyKeys: Int,
+    @Json(name = "cookie_pairs") val cookiePairs: Int
+)
+
 data class XiaohongshuSyncCooldownData(
     val mode: String,
     val allowed: Boolean,
@@ -150,6 +163,20 @@ data class XiaohongshuSyncJobCreateData(
     @Json(name = "requested_limit") val requestedLimit: Int
 )
 
+data class XiaohongshuSyncJobAckRequest(
+    @Json(name = "note_ids") val noteIds: List<String>
+)
+
+data class XiaohongshuSyncJobAckData(
+    @Json(name = "job_id") val jobId: String,
+    val status: String,
+    @Json(name = "requested_count") val requestedCount: Int,
+    @Json(name = "acked_count") val ackedCount: Int,
+    @Json(name = "already_acked_count") val alreadyAckedCount: Int,
+    @Json(name = "missing_note_ids") val missingNoteIds: List<String>,
+    @Json(name = "acked_note_ids") val ackedNoteIds: List<String>,
+)
+
 data class XiaohongshuSyncJobError(
     val code: String,
     val message: String,
@@ -163,6 +190,7 @@ data class XiaohongshuSyncJobStatusData(
     val current: Int,
     val total: Int,
     val message: String,
+    val summaries: List<XiaohongshuSummaryItem> = emptyList(),
     val result: XiaohongshuSyncData?,
     val error: XiaohongshuSyncJobError?
 )

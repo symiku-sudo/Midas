@@ -11,6 +11,7 @@ from app.repositories.xiaohongshu_repo import XiaohongshuSyncRepository
 from app.services.xiaohongshu import (
     XiaohongshuNote,
     XiaohongshuPageBatch,
+    XiaohongshuSyncProgress,
     XiaohongshuSyncService,
     XiaohongshuWebReadonlySource,
 )
@@ -205,6 +206,36 @@ async def test_sync_circuit_breaker(tmp_path) -> None:
     assert err.code == ErrorCode.CIRCUIT_OPEN
     assert err.details["failed_count"] == 2
     assert err.details["circuit_opened"] is True
+
+
+@pytest.mark.asyncio
+async def test_sync_progress_callback_contains_incremental_summaries(tmp_path) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="mock",
+            db_path=str(tmp_path / "midas.db"),
+        )
+    )
+    service = XiaohongshuSyncService(
+        settings=settings,
+        repository=XiaohongshuSyncRepository(str(tmp_path / "midas.db")),
+        source=FixedSource(),
+        llm_service=SimpleLLM(),
+    )
+
+    events: list[XiaohongshuSyncProgress] = []
+
+    async def _on_progress(progress: XiaohongshuSyncProgress) -> None:
+        events.append(progress)
+
+    result = await service.sync(limit=2, confirm_live=False, progress_callback=_on_progress)
+
+    assert result.new_count == 2
+    assert len(events) >= 3
+    assert events[0].current == 0
+    assert events[0].summaries == []
+    assert any(len(item.summaries) == 1 for item in events)
+    assert [item.note_id for item in events[-1].summaries] == ["n1", "n2"]
 
 
 @pytest.mark.asyncio
@@ -1479,6 +1510,45 @@ async def test_web_readonly_detail_fetch_extracts_content_and_images(monkeypatch
     assert len(_FakeClient.calls) == 3
     assert any("/explore/n1" in url for url in _FakeClient.calls)
     assert any("/note/detail?" in url for url in _FakeClient.calls)
+
+
+def test_extract_image_urls_prefers_ordered_single_url_per_image() -> None:
+    source = XiaohongshuWebReadonlySource(Settings())
+    payload = {
+        "note_card": {
+            "image_list": [
+                {
+                    "url_default": "https://sns-webpic-qc.xhscdn.com/img-1-default",
+                    "url_pre": "https://sns-webpic-qc.xhscdn.com/img-1-pre",
+                    "info_list": [
+                        {"url": "https://sns-webpic-qc.xhscdn.com/img-1-info"}
+                    ],
+                },
+                {
+                    "url_default": "https://sns-webpic-qc.xhscdn.com/img-2-default",
+                    "url_pre": "https://sns-webpic-qc.xhscdn.com/img-2-pre",
+                },
+                {
+                    "url_pre": "https://sns-webpic-qc.xhscdn.com/img-3-pre",
+                    "info_list": [
+                        {"url": "https://sns-webpic-qc.xhscdn.com/img-3-info"}
+                    ],
+                },
+            ]
+        }
+    }
+
+    image_urls = source._extract_image_urls(
+        payload=payload,
+        candidates=["note_card.image_list"],
+        max_count=3,
+    )
+
+    assert image_urls == [
+        "https://sns-webpic-qc.xhscdn.com/img-1-default",
+        "https://sns-webpic-qc.xhscdn.com/img-2-default",
+        "https://sns-webpic-qc.xhscdn.com/img-3-pre",
+    ]
 
 
 @pytest.mark.asyncio

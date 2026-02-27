@@ -359,6 +359,40 @@ Success `data`:
 失败场景：
 - HAR/cURL 不包含 `Cookie`：返回 `400 INVALID_INPUT`，提示重新导出包含敏感数据的抓包。
 
+## `POST /api/xiaohongshu/auth/update`
+
+用途：由客户端（如 Android WebView 登录页）直接上传 Cookie/UA，更新小红书鉴权配置。
+
+Request:
+
+```json
+{
+  "cookie": "a=1; b=2",
+  "user_agent": "Mozilla/5.0 (Linux; Android 14)",
+  "origin": "https://www.xiaohongshu.com",
+  "referer": "https://www.xiaohongshu.com/"
+}
+```
+
+Success `data`:
+
+```json
+{
+  "updated_keys": [
+    "XHS_HEADER_COOKIE",
+    "XHS_HEADER_ORIGIN",
+    "XHS_HEADER_REFERER",
+    "XHS_HEADER_USER_AGENT"
+  ],
+  "non_empty_keys": 4,
+  "cookie_pairs": 2
+}
+```
+
+说明：
+- 会写入 `server/.env` 并立即刷新运行时配置（无需手动重启）。
+- `cookie` 必填，其他字段可选；未提供时保留原值。
+
 ## `GET /api/config/editable`
 
 用途：读取“可由客户端修改”的配置子集（已排除敏感项）。
@@ -476,6 +510,20 @@ Success `data`（运行中）:
   "current": 2,
   "total": 5,
   "message": "已完成有效同步：2/5（mock-note-002）",
+  "summaries": [
+    {
+      "note_id": "mock-note-001",
+      "title": "...",
+      "source_url": "...",
+      "summary_markdown": "..."
+    },
+    {
+      "note_id": "mock-note-002",
+      "title": "...",
+      "source_url": "...",
+      "summary_markdown": "..."
+    }
+  ],
   "result": null,
   "error": null
 }
@@ -491,6 +539,14 @@ Success `data`（完成）:
   "current": 5,
   "total": 5,
   "message": "同步任务完成。",
+  "summaries": [
+    {
+      "note_id": "mock-note-001",
+      "title": "...",
+      "source_url": "...",
+      "summary_markdown": "..."
+    }
+  ],
   "result": {
     "requested_limit": 5,
     "fetched_count": 5,
@@ -498,11 +554,54 @@ Success `data`（完成）:
     "skipped_count": 0,
     "failed_count": 0,
     "circuit_opened": false,
-    "summaries": []
+    "summaries": [
+      {
+        "note_id": "mock-note-001",
+        "title": "...",
+        "source_url": "...",
+        "summary_markdown": "..."
+      }
+    ]
   },
   "error": null
 }
 ```
+
+说明：
+- `GET /api/xiaohongshu/sync/jobs/{job_id}` 的 `summaries` 字段会在任务运行期间增量增长；
+- 客户端可在轮询过程中直接消费 `summaries` 实现“成功一篇展示一篇”。
+- 异步任务模式下，服务端不会自动写入去重表；需要客户端在“已展示”后调用 ACK 接口。
+
+## `POST /api/xiaohongshu/sync/jobs/{job_id}/ack`
+
+用途：客户端确认“这些笔记已展示给用户”，据此把对应 `note_id` 写入去重表。
+
+Request:
+
+```json
+{
+  "note_ids": ["mock-note-001", "mock-note-002"]
+}
+```
+
+Success `data`:
+
+```json
+{
+  "job_id": "6a9f....",
+  "status": "running",
+  "requested_count": 2,
+  "acked_count": 2,
+  "already_acked_count": 0,
+  "missing_note_ids": [],
+  "acked_note_ids": ["mock-note-001", "mock-note-002"]
+}
+```
+
+说明：
+- `acked_count`：本次新写入去重表的数量。
+- `already_acked_count`：已 ACK 过的数量（幂等）。
+- `missing_note_ids`：不在当前任务 `summaries` 里的 `note_id`。
 
 ## Error codes
 

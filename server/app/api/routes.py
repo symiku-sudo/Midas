@@ -19,6 +19,8 @@ from app.models.schemas import (
     HealthData,
     NotesDeleteData,
     NotesSaveBatchData,
+    XiaohongshuAuthUpdateData,
+    XiaohongshuAuthUpdateRequest,
     XiaohongshuCaptureRefreshData,
     XiaohongshuPendingCountData,
     XiaohongshuNotesSaveRequest,
@@ -26,9 +28,12 @@ from app.models.schemas import (
     XiaohongshuSyncCooldownData,
     XiaohongshuSyncedNotesPruneData,
     XiaohongshuSyncJobCreateData,
+    XiaohongshuSyncJobAckData,
+    XiaohongshuSyncJobAckRequest,
     XiaohongshuSyncJobError,
     XiaohongshuSyncJobStatusData,
     XiaohongshuSyncRequest,
+    XiaohongshuSummaryItem,
 )
 from app.services.bilibili import BilibiliSummarizer
 from app.services.editable_config import EditableConfigService
@@ -75,6 +80,15 @@ def _reload_runtime_services() -> None:
     _get_xiaohongshu_sync_service.cache_clear()
     _get_note_library_service.cache_clear()
     _get_editable_config_service.cache_clear()
+
+
+def _count_cookie_pairs(raw_cookie: str) -> int:
+    pairs = 0
+    for segment in raw_cookie.split(";"):
+        token = segment.strip()
+        if token and "=" in token:
+            pairs += 1
+    return pairs
 
 
 @router.get("/health")
@@ -132,6 +146,8 @@ async def xiaohongshu_sync(payload: XiaohongshuSyncRequest, request: Request) ->
     logger.info("Receive xiaohongshu sync request, limit=%s", payload.limit)
     service = _get_xiaohongshu_sync_service()
     result = await service.sync(limit=payload.limit, confirm_live=payload.confirm_live)
+    # Keep synchronous endpoint backward-compatible: response returned means client has content.
+    await asyncio.to_thread(service.mark_synced_from_summaries, result.summaries)
     return success_response(data=result.model_dump(), request_id=request.state.request_id)
 
 
@@ -201,6 +217,50 @@ async def prune_unsaved_xiaohongshu_synced_notes(request: Request) -> dict:
     data = XiaohongshuSyncedNotesPruneData(
         candidate_count=result.candidate_count,
         deleted_count=result.deleted_count,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/xiaohongshu/auth/update")
+async def update_xiaohongshu_auth(
+    payload: XiaohongshuAuthUpdateRequest, request: Request
+) -> dict:
+    cookie = payload.cookie.strip()
+    if not cookie:
+        raise AppError(
+            code=ErrorCode.INVALID_INPUT,
+            message="Cookie 不能为空，请先在手机授权页完成登录后再上传。",
+            status_code=400,
+        )
+
+    updates: dict[str, str] = {"XHS_HEADER_COOKIE": cookie}
+    if payload.user_agent.strip():
+        updates["XHS_HEADER_USER_AGENT"] = payload.user_agent.strip()
+    if payload.origin.strip():
+        updates["XHS_HEADER_ORIGIN"] = payload.origin.strip()
+    if payload.referer.strip():
+        updates["XHS_HEADER_REFERER"] = payload.referer.strip()
+
+    try:
+        xhs_capture_tool.upsert_env_file(xhs_capture_tool.DEFAULT_ENV_PATH, updates)
+    except Exception as exc:
+        logger.exception("Failed to persist xiaohongshu auth to .env.")
+        raise AppError(
+            code=ErrorCode.INTERNAL_ERROR,
+            message="写入小红书鉴权配置失败。",
+            status_code=500,
+            details={"error": str(exc)},
+        ) from exc
+
+    for key, value in updates.items():
+        if value:
+            os.environ[key] = value
+    _reload_runtime_services()
+
+    data = XiaohongshuAuthUpdateData(
+        updated_keys=sorted(updates.keys()),
+        non_empty_keys=len(updates),
+        cookie_pairs=_count_cookie_pairs(cookie),
     )
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
@@ -316,6 +376,12 @@ async def xiaohongshu_sync_get_job(job_id: str, request: Request) -> dict:
         if state.error
         else None
     )
+    summaries = [XiaohongshuSummaryItem(**item) for item in state.summaries]
+    result = (
+        state.result.model_copy(update={"summaries": summaries})
+        if state.result is not None
+        else None
+    )
     data = XiaohongshuSyncJobStatusData(
         job_id=state.job_id,
         status=state.status.value,
@@ -323,8 +389,50 @@ async def xiaohongshu_sync_get_job(job_id: str, request: Request) -> dict:
         current=state.current,
         total=state.total,
         message=state.message,
-        result=state.result,
+        summaries=summaries,
+        result=result,
         error=error,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/xiaohongshu/sync/jobs/{job_id}/ack")
+async def xiaohongshu_sync_ack_job_items(
+    job_id: str,
+    payload: XiaohongshuSyncJobAckRequest,
+    request: Request,
+) -> dict:
+    manager = _get_xiaohongshu_sync_job_manager()
+    service = _get_xiaohongshu_sync_service()
+
+    state = await manager.get_job(job_id)
+    if state is None:
+        raise AppError(
+            code=ErrorCode.INVALID_INPUT,
+            message=f"同步任务不存在：{job_id}",
+            status_code=404,
+        )
+
+    to_ack, already_acked, missing_ids = await manager.build_ack_plan(
+        job_id,
+        note_ids=payload.note_ids,
+    )
+    ack_summaries = [XiaohongshuSummaryItem(**item) for item in to_ack]
+    if ack_summaries:
+        await asyncio.to_thread(service.mark_synced_from_summaries, ack_summaries)
+        await manager.apply_acked_note_ids(
+            job_id,
+            note_ids=[item.note_id for item in ack_summaries],
+        )
+
+    data = XiaohongshuSyncJobAckData(
+        job_id=job_id,
+        status=state.status.value,
+        requested_count=len(payload.note_ids),
+        acked_count=len(ack_summaries),
+        already_acked_count=len(already_acked),
+        missing_note_ids=missing_ids,
+        acked_note_ids=[item.note_id for item in ack_summaries],
     )
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
@@ -345,10 +453,14 @@ async def _run_xiaohongshu_sync_job(
         message="任务已启动，正在同步小红书笔记。",
     )
 
-    async def _on_progress(current: int, total: int, message: str) -> None:
+    async def _on_progress(progress) -> None:
         try:
             await manager.set_progress(
-                job_id, current=current, total=total, message=message
+                job_id,
+                current=progress.current,
+                total=progress.total,
+                message=progress.message,
+                summaries=[item.model_dump() for item in progress.summaries],
             )
         except Exception:
             logger.exception("Failed to update xiaohongshu sync progress, job=%s", job_id)

@@ -108,6 +108,19 @@ class XiaohongshuCaptureRefreshData(BaseModel):
     empty_keys: list[str]
 
 
+class XiaohongshuAuthUpdateRequest(BaseModel):
+    cookie: str = Field(min_length=1, max_length=50000)
+    user_agent: str = Field(default="", max_length=2000)
+    origin: str = Field(default="", max_length=2000)
+    referer: str = Field(default="", max_length=2000)
+
+
+class XiaohongshuAuthUpdateData(BaseModel):
+    updated_keys: list[str]
+    non_empty_keys: int
+    cookie_pairs: int
+
+
 class XiaohongshuSyncCooldownData(BaseModel):
     mode: str
     allowed: bool
@@ -137,6 +150,20 @@ class XiaohongshuSyncJobCreateData(BaseModel):
     requested_limit: int
 
 
+class XiaohongshuSyncJobAckRequest(BaseModel):
+    note_ids: list[str] = Field(min_length=1)
+
+
+class XiaohongshuSyncJobAckData(BaseModel):
+    job_id: str
+    status: str
+    requested_count: int
+    acked_count: int
+    already_acked_count: int
+    missing_note_ids: list[str]
+    acked_note_ids: list[str]
+
+
 class XiaohongshuSyncJobError(BaseModel):
     code: str
     message: str
@@ -150,5 +177,6 @@ class XiaohongshuSyncJobStatusData(BaseModel):
     current: int
     total: int
     message: str
+    summaries: list[XiaohongshuSummaryItem] = Field(default_factory=list)
     result: XiaohongshuSyncData | None = None
     error: XiaohongshuSyncJobError | None = None

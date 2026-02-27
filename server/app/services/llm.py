@@ -40,45 +40,53 @@ class LLMService:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
 
-    async def summarize(self, transcript: str, video_url: str) -> str:
-        if not self._settings.llm.enabled:
-            logger.info("LLM disabled, return deterministic local summary")
-            preview = transcript[:400].strip()
-            return (
-                "# B站视频总结（本地降级）\n\n"
-                f"- 视频链接：{video_url}\n"
-                f"- 转写字数：{len(transcript)}\n\n"
-                "## 摘要\n\n"
-                "当前为本地降级输出（未启用 LLM）。\n\n"
-                "## 转写片段\n\n"
-                f"> {preview}\n"
-            )
+    def _normalize_image_urls(self, image_urls: list[str] | None) -> list[str]:
+        return [
+            item.strip()
+            for item in (image_urls or [])
+            if isinstance(item, str) and item.strip().startswith(("http://", "https://"))
+        ]
 
-        if not self._settings.llm.api_key:
-            raise AppError(
-                code=ErrorCode.INVALID_INPUT,
-                message="LLM 已启用但缺少 api_key 配置。",
-                status_code=400,
+    def _build_multimodal_user_content(
+        self,
+        user_text: str,
+        image_urls: list[str],
+    ) -> list[dict[str, Any]]:
+        user_content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
+        for image_url in image_urls:
+            user_content.append(
+                {"type": "image_url", "image_url": {"url": image_url}}
             )
+        return user_content
 
-        url = f"{self._settings.llm.api_base.rstrip('/')}/chat/completions"
-        payload = {
-            "model": self._settings.llm.model,
-            "temperature": 0.2,
-            "messages": [
-                {"role": "system", "content": _SYSTEM_PROMPT},
-                {
-                    "role": "user",
-                    "content": f"视频链接: {video_url}\n\n转写文本:\n{transcript}",
-                },
-            ],
-        }
-        headers = {
-            "Authorization": f"Bearer {self._settings.llm.api_key}",
+    def _chat_completions_url(self) -> str:
+        return f"{self._settings.llm.api_base.rstrip('/')}/chat/completions"
+
+    def _require_api_key(self) -> str:
+        api_key = self._settings.llm.api_key
+        if api_key:
+            return api_key
+        raise AppError(
+            code=ErrorCode.INVALID_INPUT,
+            message="LLM 已启用但缺少 api_key 配置。",
+            status_code=400,
+        )
+
+    def _build_auth_headers(self, api_key: str) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         }
 
-        logger.info("Request LLM summarize, model=%s", self._settings.llm.model)
+    async def _request_chat_completion(
+        self,
+        payload: dict[str, Any],
+        *,
+        api_key: str,
+        server_error_message: str | None = None,
+    ) -> str:
+        url = self._chat_completions_url()
+        headers = self._build_auth_headers(api_key)
         try:
             async with httpx.AsyncClient(
                 timeout=self._settings.llm.timeout_seconds
@@ -103,10 +111,10 @@ class LLMService:
                 message="LLM 请求触发限流，请稍后重试。",
                 status_code=429,
             )
-        if resp.status_code >= 500:
+        if server_error_message and resp.status_code >= 500:
             raise AppError(
                 code=ErrorCode.UPSTREAM_ERROR,
-                message="LLM 上游服务异常。",
+                message=server_error_message,
                 status_code=502,
             )
         if resp.status_code >= 400:
@@ -117,16 +125,47 @@ class LLMService:
             )
 
         raw = resp.json()
-        content = self._extract_response_text(raw)
-
-        if not content:
+        result = self._extract_response_text(raw)
+        if not result:
             raise AppError(
                 code=ErrorCode.UPSTREAM_ERROR,
                 message="LLM 未返回有效内容。",
                 status_code=502,
             )
+        return result
 
-        return content
+    async def summarize(self, transcript: str, video_url: str) -> str:
+        if not self._settings.llm.enabled:
+            logger.info("LLM disabled, return deterministic local summary")
+            preview = transcript[:400].strip()
+            return (
+                "# B站视频总结（本地降级）\n\n"
+                f"- 视频链接：{video_url}\n"
+                f"- 转写字数：{len(transcript)}\n\n"
+                "## 摘要\n\n"
+                "当前为本地降级输出（未启用 LLM）。\n\n"
+                "## 转写片段\n\n"
+                f"> {preview}\n"
+            )
+
+        api_key = self._require_api_key()
+        payload = {
+            "model": self._settings.llm.model,
+            "temperature": 0.2,
+            "messages": [
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {
+                    "role": "user",
+                    "content": f"视频链接: {video_url}\n\n转写文本:\n{transcript}",
+                },
+            ],
+        }
+        logger.info("Request LLM summarize, model=%s", self._settings.llm.model)
+        return await self._request_chat_completion(
+            payload,
+            api_key=api_key,
+            server_error_message="LLM 上游服务异常。",
+        )
 
     async def summarize_xiaohongshu_note(
         self,
@@ -137,11 +176,7 @@ class LLMService:
         source_url: str,
         image_urls: list[str] | None = None,
     ) -> str:
-        normalized_image_urls = [
-            item.strip()
-            for item in (image_urls or [])
-            if isinstance(item, str) and item.strip().startswith(("http://", "https://"))
-        ]
+        normalized_image_urls = self._normalize_image_urls(image_urls)
         if not self._settings.llm.enabled:
             preview = content[:300].strip()
             image_section = ""
@@ -162,14 +197,7 @@ class LLMService:
                 f"{image_section}"
             )
 
-        if not self._settings.llm.api_key:
-            raise AppError(
-                code=ErrorCode.INVALID_INPUT,
-                message="LLM 已启用但缺少 api_key 配置。",
-                status_code=400,
-            )
-
-        url = f"{self._settings.llm.api_base.rstrip('/')}/chat/completions"
+        api_key = self._require_api_key()
         user_text = (
             f"笔记ID: {note_id}\n"
             f"标题: {title}\n"
@@ -177,11 +205,10 @@ class LLMService:
             f"正文:\n{content}\n\n"
             f"配图数量: {len(normalized_image_urls)}"
         )
-        user_content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
-        for image_url in normalized_image_urls:
-            user_content.append(
-                {"type": "image_url", "image_url": {"url": image_url}}
-            )
+        user_content = self._build_multimodal_user_content(
+            user_text=user_text,
+            image_urls=normalized_image_urls,
+        )
 
         payload = {
             "model": self._settings.llm.model,
@@ -194,53 +221,7 @@ class LLMService:
                 },
             ],
         }
-        headers = {
-            "Authorization": f"Bearer {self._settings.llm.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        try:
-            async with httpx.AsyncClient(
-                timeout=self._settings.llm.timeout_seconds
-            ) as client:
-                resp = await client.post(url, headers=headers, json=payload)
-        except httpx.HTTPError as exc:
-            raise AppError(
-                code=ErrorCode.UPSTREAM_ERROR,
-                message="LLM 服务连接失败。",
-                status_code=502,
-            ) from exc
-
-        if resp.status_code in {401, 403}:
-            raise AppError(
-                code=ErrorCode.AUTH_EXPIRED,
-                message="LLM 鉴权失败，请检查 API Key。",
-                status_code=401,
-            )
-        if resp.status_code == 429:
-            raise AppError(
-                code=ErrorCode.RATE_LIMITED,
-                message="LLM 请求触发限流，请稍后重试。",
-                status_code=429,
-            )
-        if resp.status_code >= 400:
-            raise AppError(
-                code=ErrorCode.UPSTREAM_ERROR,
-                message=f"LLM 请求失败（HTTP {resp.status_code}）。",
-                status_code=502,
-            )
-
-        raw = resp.json()
-        result = self._extract_response_text(raw)
-
-        if not result:
-            raise AppError(
-                code=ErrorCode.UPSTREAM_ERROR,
-                message="LLM 未返回有效内容。",
-                status_code=502,
-            )
-
-        return result
+        return await self._request_chat_completion(payload, api_key=api_key)
 
     async def summarize_xiaohongshu_video_note(
         self,
@@ -252,11 +233,7 @@ class LLMService:
         source_url: str,
         image_urls: list[str] | None = None,
     ) -> str:
-        normalized_image_urls = [
-            item.strip()
-            for item in (image_urls or [])
-            if isinstance(item, str) and item.strip().startswith(("http://", "https://"))
-        ]
+        normalized_image_urls = self._normalize_image_urls(image_urls)
         content_text = content.strip() or "（无正文）"
         transcript_text = transcript.strip()
         if not transcript_text:
@@ -278,14 +255,7 @@ class LLMService:
                 f"> {preview}\n"
             )
 
-        if not self._settings.llm.api_key:
-            raise AppError(
-                code=ErrorCode.INVALID_INPUT,
-                message="LLM 已启用但缺少 api_key 配置。",
-                status_code=400,
-            )
-
-        url = f"{self._settings.llm.api_base.rstrip('/')}/chat/completions"
+        api_key = self._require_api_key()
         user_text = (
             f"笔记ID: {note_id}\n"
             f"标题: {title}\n"
@@ -294,11 +264,10 @@ class LLMService:
             f"视频转写:\n{transcript_text}\n\n"
             f"配图数量: {len(normalized_image_urls)}"
         )
-        user_content: list[dict[str, Any]] = [{"type": "text", "text": user_text}]
-        for image_url in normalized_image_urls:
-            user_content.append(
-                {"type": "image_url", "image_url": {"url": image_url}}
-            )
+        user_content = self._build_multimodal_user_content(
+            user_text=user_text,
+            image_urls=normalized_image_urls,
+        )
 
         payload = {
             "model": self._settings.llm.model,
@@ -311,53 +280,7 @@ class LLMService:
                 },
             ],
         }
-        headers = {
-            "Authorization": f"Bearer {self._settings.llm.api_key}",
-            "Content-Type": "application/json",
-        }
-
-        try:
-            async with httpx.AsyncClient(
-                timeout=self._settings.llm.timeout_seconds
-            ) as client:
-                resp = await client.post(url, headers=headers, json=payload)
-        except httpx.HTTPError as exc:
-            raise AppError(
-                code=ErrorCode.UPSTREAM_ERROR,
-                message="LLM 服务连接失败。",
-                status_code=502,
-            ) from exc
-
-        if resp.status_code in {401, 403}:
-            raise AppError(
-                code=ErrorCode.AUTH_EXPIRED,
-                message="LLM 鉴权失败，请检查 API Key。",
-                status_code=401,
-            )
-        if resp.status_code == 429:
-            raise AppError(
-                code=ErrorCode.RATE_LIMITED,
-                message="LLM 请求触发限流，请稍后重试。",
-                status_code=429,
-            )
-        if resp.status_code >= 400:
-            raise AppError(
-                code=ErrorCode.UPSTREAM_ERROR,
-                message=f"LLM 请求失败（HTTP {resp.status_code}）。",
-                status_code=502,
-            )
-
-        raw = resp.json()
-        result = self._extract_response_text(raw)
-
-        if not result:
-            raise AppError(
-                code=ErrorCode.UPSTREAM_ERROR,
-                message="LLM 未返回有效内容。",
-                status_code=502,
-            )
-
-        return result
+        return await self._request_chat_completion(payload, api_key=api_key)
 
     def _extract_response_text(self, payload: dict[str, Any]) -> str:
         try:
