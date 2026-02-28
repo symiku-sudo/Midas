@@ -7,10 +7,7 @@ import httpx
 from tools.smoke_test import (
     check_bilibili_invalid_input,
     check_health,
-    check_xhs_confirm_guard,
-    check_xhs_job_guard,
-    check_xhs_job_mock,
-    check_xhs_sync_mock,
+    check_xhs_summarize_url_mock,
 )
 
 
@@ -61,112 +58,47 @@ def test_check_bilibili_invalid_input_pass() -> None:
     assert result.status == "pass"
 
 
-def test_check_xhs_sync_mock_reports_wrong_mode() -> None:
+def test_check_xhs_summarize_url_mock_pass() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST" and request.url.path == "/api/xiaohongshu/sync":
-            return httpx.Response(
-                400,
-                json={
-                    "ok": False,
-                    "code": "INVALID_INPUT",
-                    "message": "web_readonly 模式需要显式确认。请在请求体中传 confirm_live=true。",
-                },
-            )
-        return httpx.Response(404, json={})
-
-    with _client_with_handler(handler) as client:
-        result = check_xhs_sync_mock(client)
-    assert result.status == "fail"
-    assert "web_readonly" in result.message
-
-
-def test_check_xhs_confirm_guard_pass() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST" and request.url.path == "/api/xiaohongshu/sync":
-            return httpx.Response(
-                400,
-                json={
-                    "ok": False,
-                    "code": "INVALID_INPUT",
-                    "message": "web_readonly 模式需要显式确认。请在请求体中传 confirm_live=true。",
-                },
-            )
-        return httpx.Response(404, json={})
-
-    with _client_with_handler(handler) as client:
-        result = check_xhs_confirm_guard(client)
-    assert result.status == "pass"
-
-
-def test_check_xhs_job_mock_pass() -> None:
-    calls = {"status": 0}
-
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST" and request.url.path == "/api/xiaohongshu/sync/jobs":
+        if request.method == "POST" and request.url.path == "/api/xiaohongshu/summarize-url":
             return httpx.Response(
                 200,
                 json={
                     "ok": True,
                     "code": "OK",
-                    "data": {"job_id": "job-1", "status": "pending", "requested_limit": 1},
+                    "message": "",
+                    "data": {
+                        "note_id": "mock-note-001",
+                        "title": "示例",
+                        "source_url": "https://www.xiaohongshu.com/explore/mock-note-001",
+                        "summary_markdown": "# 总结",
+                    },
                     "request_id": "r3",
                 },
             )
+        return httpx.Response(404, json={})
 
-        if request.method == "GET" and request.url.path == "/api/xiaohongshu/sync/jobs/job-1":
-            calls["status"] += 1
-            state = "running" if calls["status"] == 1 else "succeeded"
+    with _client_with_handler(handler) as client:
+        result = check_xhs_summarize_url_mock(client)
+    assert result.status == "pass"
+
+
+def test_check_xhs_summarize_url_mock_fail_on_unexpected_status() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/api/xiaohongshu/summarize-url":
             return httpx.Response(
-                200,
+                400,
                 json={
-                    "ok": True,
-                    "code": "OK",
-                    "data": {"job_id": "job-1", "status": state},
+                    "ok": False,
+                    "code": "INVALID_INPUT",
+                    "message": "url invalid",
+                    "data": None,
                     "request_id": "r4",
                 },
             )
-
         return httpx.Response(404, json={})
 
     with _client_with_handler(handler) as client:
-        result = check_xhs_job_mock(client, poll_timeout_seconds=2)
-    assert result.status == "pass"
-
-
-def test_check_xhs_job_guard_pass() -> None:
-    def handler(request: httpx.Request) -> httpx.Response:
-        if request.method == "POST" and request.url.path == "/api/xiaohongshu/sync/jobs":
-            return httpx.Response(
-                200,
-                json={
-                    "ok": True,
-                    "code": "OK",
-                    "data": {"job_id": "job-2", "status": "pending", "requested_limit": 1},
-                    "request_id": "r5",
-                },
-            )
-
-        if request.method == "GET" and request.url.path == "/api/xiaohongshu/sync/jobs/job-2":
-            return httpx.Response(
-                200,
-                json={
-                    "ok": True,
-                    "code": "OK",
-                    "data": {
-                        "job_id": "job-2",
-                        "status": "failed",
-                        "error": {
-                            "code": "INVALID_INPUT",
-                            "message": "需要 confirm_live",
-                            "details": None,
-                        },
-                    },
-                    "request_id": "r6",
-                },
-            )
-
-        return httpx.Response(404, json={})
-
-    with _client_with_handler(handler) as client:
-        result = check_xhs_job_guard(client, poll_timeout_seconds=2)
-    assert result.status == "pass"
+        result = check_xhs_summarize_url_mock(client)
+    assert result.status == "fail"
+    assert "期望 200" in result.message

@@ -7,10 +7,10 @@
 - 连接测试（`/health`）
 - B 站总结（`/api/bilibili/summarize`）
 - B 站总结保存到笔记库（`/api/notes/bilibili/save`）
-- 小红书同步进度（`/api/xiaohongshu/sync/jobs` + 轮询状态）
-- 小红书总结批量保存到笔记库（`/api/notes/xiaohongshu/save-batch`）
+- 小红书单篇 URL 总结（`/api/xiaohongshu/summarize-url`）
+- 小红书单篇总结保存到笔记库（`/api/notes/xiaohongshu/save-batch`，按单篇触发）
 - 笔记库阅读/检索、单条删除与分组清空（B站/小红书独立）
-- 小红书真实同步确认开关（对应 `confirm_live`）
+- 小红书 auth 刷新与浏览器授权辅助（用于单篇总结前准备登录态）
 - 错误码场景化提示（`AUTH_EXPIRED` / `RATE_LIMITED` / `CIRCUIT_OPEN` 等）
 - Markdown 渲染展示（Markwon）
 

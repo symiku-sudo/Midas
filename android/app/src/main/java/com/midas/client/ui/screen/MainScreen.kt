@@ -26,7 +26,6 @@ import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -294,13 +293,8 @@ fun MainScreen(viewModel: MainViewModel) {
         onBilibiliVideoUrlChange = viewModel::onBilibiliUrlInputChange,
         onSubmitBilibiliSummary = viewModel::submitBilibiliSummary,
         onSaveBilibiliNote = viewModel::saveCurrentBilibiliResult,
-        onXiaohongshuLimitChange = viewModel::onXiaohongshuLimitInputChange,
         onXiaohongshuUrlChange = viewModel::onXiaohongshuUrlInputChange,
-        onStartXiaohongshuSync = viewModel::startXiaohongshuSync,
         onSummarizeXiaohongshuUrl = viewModel::summarizeXiaohongshuByUrl,
-        onRefreshXiaohongshuPendingCount = viewModel::refreshXiaohongshuPendingCount,
-        onSaveXiaohongshuNotes = viewModel::saveCurrentXiaohongshuSummaries,
-        onPruneXiaohongshuSyncedNoteIds = viewModel::pruneUnsavedXiaohongshuSyncedNotes,
         onRefreshXiaohongshuAuthConfig = viewModel::refreshXiaohongshuAuthConfig,
         onSaveSingleXiaohongshuNote = viewModel::saveSingleXiaohongshuSummary,
         onNotesKeywordChange = viewModel::onNotesKeywordInputChange,
@@ -329,13 +323,8 @@ fun MainScreenContent(
     onBilibiliVideoUrlChange: (String) -> Unit,
     onSubmitBilibiliSummary: () -> Unit,
     onSaveBilibiliNote: () -> Unit,
-    onXiaohongshuLimitChange: (String) -> Unit,
     onXiaohongshuUrlChange: (String) -> Unit,
-    onStartXiaohongshuSync: () -> Unit,
     onSummarizeXiaohongshuUrl: () -> Unit,
-    onRefreshXiaohongshuPendingCount: () -> Unit,
-    onSaveXiaohongshuNotes: () -> Unit,
-    onPruneXiaohongshuSyncedNoteIds: () -> Unit,
     onRefreshXiaohongshuAuthConfig: () -> Unit,
     onSaveSingleXiaohongshuNote: (XiaohongshuSummaryItem) -> Unit,
     onNotesKeywordChange: (String) -> Unit,
@@ -449,13 +438,8 @@ fun MainScreenContent(
                 MainTab.XHS -> {
                     XiaohongshuPanel(
                         state = xiaohongshu,
-                        onLimitChange = onXiaohongshuLimitChange,
                         onUrlChange = onXiaohongshuUrlChange,
-                        onStartSync = onStartXiaohongshuSync,
                         onSummarizeUrl = onSummarizeXiaohongshuUrl,
-                        onRefreshPendingCount = onRefreshXiaohongshuPendingCount,
-                        onSaveNotes = onSaveXiaohongshuNotes,
-                        onPruneSyncedNoteIds = onPruneXiaohongshuSyncedNoteIds,
                         onRefreshAuthConfig = onRefreshXiaohongshuAuthConfig,
                         onSaveSingleNote = onSaveSingleXiaohongshuNote,
                         modifier = Modifier
@@ -504,18 +488,6 @@ private fun SingleLineActionText(text: String) {
         softWrap = false,
         overflow = TextOverflow.Ellipsis,
     )
-}
-
-private fun formatCooldownText(seconds: Int): String {
-    val safe = seconds.coerceAtLeast(0)
-    val hours = safe / 3600
-    val minutes = (safe % 3600) / 60
-    val secs = safe % 60
-    return if (hours > 0) {
-        "%d:%02d:%02d".format(hours, minutes, secs)
-    } else {
-        "%02d:%02d".format(minutes, secs)
-    }
 }
 
 @Composable
@@ -913,38 +885,18 @@ private fun BilibiliResult(result: BilibiliSummaryData) {
 @Composable
 private fun XiaohongshuPanel(
     state: XiaohongshuUiState,
-    onLimitChange: (String) -> Unit,
     onUrlChange: (String) -> Unit,
-    onStartSync: () -> Unit,
     onSummarizeUrl: () -> Unit,
-    onRefreshPendingCount: () -> Unit,
-    onSaveNotes: () -> Unit,
-    onPruneSyncedNoteIds: () -> Unit,
     onRefreshAuthConfig: () -> Unit,
     onSaveSingleNote: (XiaohongshuSummaryItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
-    val cooldownSeconds = state.syncCooldownRemainingSeconds.coerceAtLeast(0)
-    val canStartSync = !state.isSyncing && !state.isLoadingSyncCooldown && cooldownSeconds <= 0
-    val startSyncLabel = when {
-        state.isSyncing -> "同步中"
-        state.isLoadingSyncCooldown -> "同步收藏(检查中)"
-        cooldownSeconds > 0 -> "同步收藏(${formatCooldownText(cooldownSeconds)})"
-        else -> "同步收藏"
-    }
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("小红书同步", style = MaterialTheme.typography.titleMedium)
-        OutlinedTextField(
-            value = state.limitInput,
-            onValueChange = onLimitChange,
-            label = { Text("本次同步条数") },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-        )
+        Text("小红书单篇总结", style = MaterialTheme.typography.titleMedium)
         OutlinedTextField(
             value = state.urlInput,
             onValueChange = onUrlChange,
@@ -952,41 +904,15 @@ private fun XiaohongshuPanel(
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onStartSync, enabled = canStartSync) {
-                SingleLineActionText(startSyncLabel)
-            }
-            Button(
-                onClick = onSaveNotes,
-                enabled = !state.isSavingNotes && state.summaries.isNotEmpty(),
-            ) {
-                SingleLineActionText(if (state.isSavingNotes) "保存中..." else "批量保存")
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(
-                onClick = onSummarizeUrl,
-                enabled = !state.isSummarizingUrl,
-            ) {
-                SingleLineActionText(if (state.isSummarizingUrl) "总结中..." else "总结单篇")
-            }
-            Button(
-                onClick = onRefreshPendingCount,
-                enabled = !state.isLoadingPendingCount && !state.isSyncing,
-            ) {
-                SingleLineActionText(if (state.isLoadingPendingCount) "统计中..." else "统计未登记")
-            }
-        }
         Button(
-            onClick = onPruneSyncedNoteIds,
-            enabled = !state.isPruningSyncedNoteIds && !state.isSyncing,
-            modifier = Modifier.testTag("xhs_prune_button"),
+            onClick = onSummarizeUrl,
+            enabled = !state.isSummarizingUrl,
         ) {
-            SingleLineActionText(if (state.isPruningSyncedNoteIds) "清理中..." else "清理无效ID")
+            SingleLineActionText(if (state.isSummarizingUrl) "总结中..." else "总结单篇")
         }
         Button(
             onClick = onRefreshAuthConfig,
-            enabled = !state.isRefreshingCaptureConfig && !state.isSyncing,
+            enabled = !state.isRefreshingCaptureConfig,
             modifier = Modifier.testTag("xhs_refresh_auth_button"),
         ) {
             SingleLineActionText(if (state.isRefreshingCaptureConfig) "更新中..." else "更新Auth(兜底)")
@@ -1001,39 +927,21 @@ private fun XiaohongshuPanel(
                 }
                 runCatching { context.startActivity(browserIntent) }
             },
-            enabled = !state.isRefreshingCaptureConfig && !state.isSyncing,
+            enabled = !state.isRefreshingCaptureConfig,
             modifier = Modifier.testTag("xhs_browser_auth_button"),
         ) {
             SingleLineActionText("浏览器授权")
         }
-        Text(
-            text = "清理已被标记为“已同步”但你并未保存的笔记，下次同步时会重新尝试生成。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
         Text(
             text = "优先读取默认 HAR，失败后回退默认 cURL，自动更新小红书请求头。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
-            text = "请在系统浏览器完成登录/验证，返回后再执行同步。",
+            text = "请在系统浏览器完成登录/验证，返回后再执行单篇总结。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (state.isSyncing) {
-            if (state.progressTotal > 0) {
-                val progress = (state.progressCurrent.toFloat() / state.progressTotal.toFloat()).coerceIn(0f, 1f)
-                LinearProgressIndicator(progress = progress, modifier = Modifier.fillMaxWidth())
-                Text("进度：${state.progressCurrent}/${state.progressTotal}")
-            } else {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                Text("进度：准备中")
-            }
-            if (state.progressMessage.isNotBlank()) {
-                Text(state.progressMessage)
-            }
-        }
 
         if (state.errorMessage.isNotBlank()) {
             Text(text = state.errorMessage, color = Color(0xFFC62828))
@@ -1041,20 +949,11 @@ private fun XiaohongshuPanel(
         if (state.saveStatus.isNotBlank()) {
             Text(text = state.saveStatus, color = Color(0xFF2E7D32))
         }
-        if (state.pruneStatus.isNotBlank()) {
-            Text(text = state.pruneStatus, color = Color(0xFF2E7D32))
-        }
         if (state.captureRefreshStatus.isNotBlank()) {
             Text(text = state.captureRefreshStatus, color = Color(0xFF2E7D32))
         }
         if (state.summarizeUrlStatus.isNotBlank()) {
             Text(text = state.summarizeUrlStatus, color = Color(0xFF2E7D32))
-        }
-        if (state.pendingCountText.isNotBlank()) {
-            Text(text = state.pendingCountText, fontWeight = FontWeight.SemiBold)
-        }
-        if (state.statsText.isNotBlank()) {
-            Text(text = state.statsText, fontWeight = FontWeight.SemiBold)
         }
 
         state.summaries.forEach { summary ->
@@ -1063,7 +962,6 @@ private fun XiaohongshuPanel(
                 onSave = { onSaveSingleNote(summary) },
                 isSaving = summary.noteId in state.savingSingleNoteIds,
                 isSaved = summary.noteId in state.savedNoteIds,
-                batchSaving = state.isSavingNotes,
             )
         }
     }
@@ -1075,7 +973,6 @@ private fun XiaohongshuSummaryCard(
     onSave: () -> Unit,
     isSaving: Boolean,
     isSaved: Boolean,
-    batchSaving: Boolean,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -1090,7 +987,7 @@ private fun XiaohongshuSummaryCard(
                 )
                 Button(
                     onClick = onSave,
-                    enabled = !batchSaving && !isSaving && !isSaved,
+                    enabled = !isSaving && !isSaved,
                     modifier = Modifier.testTag("xhs_save_single_${item.noteId}"),
                 ) {
                     SingleLineActionText(

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -22,6 +21,8 @@ def run_smoke(
     profile: str,
     poll_timeout_seconds: int,
 ) -> list[CheckResult]:
+    _ = poll_timeout_seconds  # backward-compatible arg; not used.
+
     results: list[CheckResult] = []
     with httpx.Client(
         base_url=base_url.rstrip("/"),
@@ -31,14 +32,8 @@ def run_smoke(
         results.append(check_health(client))
         results.append(check_bilibili_invalid_input(client))
 
-        if profile == "mock":
-            results.append(check_xhs_sync_mock(client))
-            results.append(check_xhs_job_mock(client, poll_timeout_seconds=poll_timeout_seconds))
-        elif profile == "web_guard":
-            results.append(check_xhs_confirm_guard(client))
-            results.append(
-                check_xhs_job_guard(client, poll_timeout_seconds=poll_timeout_seconds)
-            )
+        if profile in {"mock", "web_guard"}:
+            results.append(check_xhs_summarize_url_mock(client))
         else:
             results.append(
                 CheckResult(
@@ -97,186 +92,43 @@ def check_bilibili_invalid_input(client: httpx.Client) -> CheckResult:
     )
 
 
-def check_xhs_sync_mock(client: httpx.Client) -> CheckResult:
+def check_xhs_summarize_url_mock(client: httpx.Client) -> CheckResult:
+    mock_url = "https://www.xiaohongshu.com/explore/mock-note-001"
     try:
-        resp = client.post("/api/xiaohongshu/sync", json={"limit": 2})
+        resp = client.post("/api/xiaohongshu/summarize-url", json={"url": mock_url})
     except httpx.HTTPError as exc:
-        return CheckResult(name="xhs.sync.mock", status="fail", message=str(exc))
+        return CheckResult(name="xhs.summarize_url.mock", status="fail", message=str(exc))
 
     body = _parse_json(resp)
     if body is None:
-        return CheckResult(name="xhs.sync.mock", status="fail", message="响应不是 JSON。")
+        return CheckResult(
+            name="xhs.summarize_url.mock",
+            status="fail",
+            message="响应不是 JSON。",
+        )
 
     if resp.status_code == 200 and body.get("ok") is True:
         data = body.get("data") or {}
-        fetched = data.get("fetched_count")
+        if (
+            data.get("note_id") == "mock-note-001"
+            and data.get("source_url") == mock_url
+            and data.get("summary_markdown")
+        ):
+            return CheckResult(
+                name="xhs.summarize_url.mock",
+                status="pass",
+                message="单篇 URL 总结成功。",
+            )
         return CheckResult(
-            name="xhs.sync.mock",
-            status="pass",
-            message=f"同步成功，fetched_count={fetched}",
-        )
-
-    if (
-        resp.status_code == 400
-        and body.get("code") == "INVALID_INPUT"
-        and "confirm_live" in str(body.get("message", ""))
-    ):
-        return CheckResult(
-            name="xhs.sync.mock",
+            name="xhs.summarize_url.mock",
             status="fail",
-            message="当前服务似乎处于 web_readonly 模式，请改用 --profile web_guard。",
+            message=f"响应结构异常: {data}",
         )
 
     return CheckResult(
-        name="xhs.sync.mock",
+        name="xhs.summarize_url.mock",
         status="fail",
         message=f"期望 200 成功，实际 {resp.status_code} / {body.get('code')}",
-    )
-
-
-def check_xhs_confirm_guard(client: httpx.Client) -> CheckResult:
-    try:
-        resp = client.post("/api/xiaohongshu/sync", json={"limit": 1})
-    except httpx.HTTPError as exc:
-        return CheckResult(name="xhs.sync.guard", status="fail", message=str(exc))
-
-    body = _parse_json(resp)
-    if body is None:
-        return CheckResult(name="xhs.sync.guard", status="fail", message="响应不是 JSON。")
-
-    if (
-        resp.status_code == 400
-        and body.get("code") == "INVALID_INPUT"
-        and "confirm_live" in str(body.get("message", ""))
-    ):
-        return CheckResult(
-            name="xhs.sync.guard",
-            status="pass",
-            message="confirm_live 显式确认保护生效。",
-        )
-
-    return CheckResult(
-        name="xhs.sync.guard",
-        status="fail",
-        message=f"未命中 confirm_live 保护，实际 {resp.status_code} / {body.get('code')}",
-    )
-
-
-def check_xhs_job_mock(client: httpx.Client, *, poll_timeout_seconds: int) -> CheckResult:
-    try:
-        create = client.post("/api/xiaohongshu/sync/jobs", json={"limit": 1})
-    except httpx.HTTPError as exc:
-        return CheckResult(name="xhs.job.mock", status="fail", message=str(exc))
-
-    create_body = _parse_json(create)
-    if create_body is None:
-        return CheckResult(name="xhs.job.mock", status="fail", message="create 响应不是 JSON。")
-    if create.status_code != 200 or create_body.get("ok") is not True:
-        return CheckResult(
-            name="xhs.job.mock",
-            status="fail",
-            message=f"create 失败: {create.status_code} / {create_body.get('code')}",
-        )
-
-    job_id = str((create_body.get("data") or {}).get("job_id", "")).strip()
-    if not job_id:
-        return CheckResult(name="xhs.job.mock", status="fail", message="缺少 job_id。")
-
-    deadline = time.time() + poll_timeout_seconds
-    while time.time() < deadline:
-        try:
-            status_resp = client.get(f"/api/xiaohongshu/sync/jobs/{job_id}")
-        except httpx.HTTPError as exc:
-            return CheckResult(name="xhs.job.mock", status="fail", message=str(exc))
-        status_body = _parse_json(status_resp)
-        if status_body is None:
-            return CheckResult(name="xhs.job.mock", status="fail", message="status 响应不是 JSON。")
-
-        state = ((status_body.get("data") or {}).get("status") or "").strip()
-        if state == "succeeded":
-            return CheckResult(name="xhs.job.mock", status="pass", message=f"job={job_id} succeeded")
-        if state == "failed":
-            error = (status_body.get("data") or {}).get("error") or {}
-            return CheckResult(
-                name="xhs.job.mock",
-                status="fail",
-                message=f"job={job_id} failed: {error}",
-            )
-        time.sleep(0.2)
-
-    return CheckResult(
-        name="xhs.job.mock",
-        status="fail",
-        message=f"轮询超时（{poll_timeout_seconds}s），job={job_id}",
-    )
-
-
-def check_xhs_job_guard(client: httpx.Client, *, poll_timeout_seconds: int) -> CheckResult:
-    try:
-        create = client.post("/api/xiaohongshu/sync/jobs", json={"limit": 1})
-    except httpx.HTTPError as exc:
-        return CheckResult(name="xhs.job.guard", status="fail", message=str(exc))
-
-    create_body = _parse_json(create)
-    if create_body is None:
-        return CheckResult(
-            name="xhs.job.guard",
-            status="fail",
-            message="create 响应不是 JSON。",
-        )
-    if create.status_code != 200 or create_body.get("ok") is not True:
-        return CheckResult(
-            name="xhs.job.guard",
-            status="fail",
-            message=f"create 失败: {create.status_code} / {create_body.get('code')}",
-        )
-
-    job_id = str((create_body.get("data") or {}).get("job_id", "")).strip()
-    if not job_id:
-        return CheckResult(name="xhs.job.guard", status="fail", message="缺少 job_id。")
-
-    deadline = time.time() + poll_timeout_seconds
-    while time.time() < deadline:
-        try:
-            status_resp = client.get(f"/api/xiaohongshu/sync/jobs/{job_id}")
-        except httpx.HTTPError as exc:
-            return CheckResult(name="xhs.job.guard", status="fail", message=str(exc))
-        status_body = _parse_json(status_resp)
-        if status_body is None:
-            return CheckResult(
-                name="xhs.job.guard",
-                status="fail",
-                message="status 响应不是 JSON。",
-            )
-
-        data = status_body.get("data") or {}
-        state = (data.get("status") or "").strip()
-        if state == "failed":
-            error = data.get("error") or {}
-            if error.get("code") == "INVALID_INPUT":
-                return CheckResult(
-                    name="xhs.job.guard",
-                    status="pass",
-                    message=f"job={job_id} 命中 confirm_live 保护失败（符合预期）",
-                )
-            return CheckResult(
-                name="xhs.job.guard",
-                status="fail",
-                message=f"job={job_id} failed，但错误码异常: {error}",
-            )
-
-        if state == "succeeded":
-            return CheckResult(
-                name="xhs.job.guard",
-                status="fail",
-                message=f"job={job_id} succeeded，说明当前不是 web_readonly 保护场景。",
-            )
-        time.sleep(0.2)
-
-    return CheckResult(
-        name="xhs.job.guard",
-        status="fail",
-        message=f"轮询超时（{poll_timeout_seconds}s），job={job_id}",
     )
 
 
@@ -314,14 +166,14 @@ def main() -> int:
         "--poll-timeout-seconds",
         type=int,
         default=15,
-        help="异步任务轮询超时（秒）",
+        help="兼容参数（已不使用）",
     )
     parser.add_argument(
         "--profile",
         type=str,
         default="mock",
         choices=["mock", "web_guard"],
-        help="mock: 期望 xhs mock 同步成功；web_guard: 期望 confirm_live 保护生效",
+        help="冒烟配置档位（当前两种 profile 执行相同检查）。",
     )
     args = parser.parse_args()
 

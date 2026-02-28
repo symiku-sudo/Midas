@@ -22,7 +22,6 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import kotlin.math.min
 
 data class SettingsUiState(
     val baseUrlInput: String = "",
@@ -47,30 +46,16 @@ data class BilibiliUiState(
 )
 
 data class XiaohongshuUiState(
-    val limitInput: String = "5",
     val urlInput: String = "",
-    val isSyncing: Boolean = false,
     val isSummarizingUrl: Boolean = false,
-    val isSavingNotes: Boolean = false,
-    val isPruningSyncedNoteIds: Boolean = false,
     val isRefreshingCaptureConfig: Boolean = false,
-    val isLoadingPendingCount: Boolean = false,
-    val isLoadingSyncCooldown: Boolean = false,
-    val syncCooldownRemainingSeconds: Int = 0,
     val savingSingleNoteIds: Set<String> = emptySet(),
     val savedNoteIds: Set<String> = emptySet(),
-    val ackedSyncedNoteIds: Set<String> = emptySet(),
-    val progressCurrent: Int = 0,
-    val progressTotal: Int = 0,
-    val progressMessage: String = "",
     val errorMessage: String = "",
     val saveStatus: String = "",
-    val pruneStatus: String = "",
     val captureRefreshStatus: String = "",
     val summarizeUrlStatus: String = "",
-    val pendingCountText: String = "",
     val summaries: List<XiaohongshuSummaryItem> = emptyList(),
-    val statsText: String = "",
 )
 
 data class NotesUiState(
@@ -83,12 +68,6 @@ data class NotesUiState(
 )
 
 class MainViewModel(application: Application) : AndroidViewModel(application) {
-    companion object {
-        private const val ACK_MAX_RETRIES = 5
-        private const val ACK_INITIAL_BACKOFF_MS = 1000L
-        private const val ACK_MAX_BACKOFF_MS = 15000L
-    }
-
     private val settingsRepository = SettingsRepository(application)
     private val apiRepository = MidasRepository()
 
@@ -106,22 +85,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _notesState = MutableStateFlow(NotesUiState())
     val notesState: StateFlow<NotesUiState> = _notesState.asStateFlow()
 
-    private var syncPollingJob: Job? = null
-    private var syncCooldownTickerJob: Job? = null
     private var autoSaveConfigJob: Job? = null
-    private var syncCooldownTargetEpochSeconds: Int = 0
-    private var ackRetryCount: Int = 0
-    private var ackNextRetryAtMillis: Long = 0
 
     init {
         loadEditableConfig()
         loadSavedNotes()
-        refreshXiaohongshuSyncCooldown()
     }
 
     fun onAppForeground() {
         loadSavedNotes()
-        refreshXiaohongshuSyncCooldown()
     }
 
     fun onBaseUrlInputChange(newValue: String) {
@@ -144,7 +116,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         loadEditableConfig()
-        refreshXiaohongshuSyncCooldown()
     }
 
     fun testConnection() {
@@ -485,19 +456,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun onXiaohongshuLimitInputChange(newValue: String) {
-        _xiaohongshuState.update {
-            it.copy(
-                limitInput = newValue,
-                errorMessage = "",
-                saveStatus = "",
-                pruneStatus = "",
-                captureRefreshStatus = "",
-                summarizeUrlStatus = "",
-            )
-        }
-    }
-
     fun onXiaohongshuUrlInputChange(newValue: String) {
         _xiaohongshuState.update {
             it.copy(
@@ -505,144 +463,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 errorMessage = "",
                 summarizeUrlStatus = "",
                 saveStatus = "",
-                pruneStatus = "",
                 captureRefreshStatus = "",
             )
-        }
-    }
-
-    fun refreshXiaohongshuSyncCooldown() {
-        val baseUrl = requireBaseUrl {
-            syncCooldownTickerJob?.cancel()
-            syncCooldownTargetEpochSeconds = 0
-            _xiaohongshuState.update {
-                it.copy(
-                    isLoadingSyncCooldown = false,
-                    syncCooldownRemainingSeconds = 0,
-                )
-            }
-        } ?: return
-        viewModelScope.launch {
-            _xiaohongshuState.update { it.copy(isLoadingSyncCooldown = true) }
-            when (val result = apiRepository.getXiaohongshuSyncCooldown(baseUrl)) {
-                is AppResult.Success -> {
-                    val remaining = result.data.remainingSeconds.coerceAtLeast(0)
-                    syncCooldownTargetEpochSeconds = result.data.nextAllowedAtEpoch.coerceAtLeast(0)
-                    _xiaohongshuState.update {
-                        it.copy(
-                            isLoadingSyncCooldown = false,
-                            syncCooldownRemainingSeconds = remaining,
-                        )
-                    }
-                    if (remaining > 0) {
-                        startSyncCooldownTicker(syncCooldownTargetEpochSeconds)
-                    } else {
-                        syncCooldownTickerJob?.cancel()
-                    }
-                }
-
-                is AppResult.Error -> {
-                    syncCooldownTickerJob?.cancel()
-                    syncCooldownTargetEpochSeconds = 0
-                    _xiaohongshuState.update {
-                        it.copy(
-                            isLoadingSyncCooldown = false,
-                            syncCooldownRemainingSeconds = 0,
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    private fun startSyncCooldownTicker(nextAllowedAtEpoch: Int) {
-        syncCooldownTickerJob?.cancel()
-        if (nextAllowedAtEpoch <= 0) {
-            return
-        }
-        syncCooldownTickerJob = viewModelScope.launch {
-            while (true) {
-                val nowEpoch = (System.currentTimeMillis() / 1000L).toInt()
-                val remaining = (nextAllowedAtEpoch - nowEpoch).coerceAtLeast(0)
-                _xiaohongshuState.update {
-                    it.copy(syncCooldownRemainingSeconds = remaining)
-                }
-                if (remaining <= 0) {
-                    break
-                }
-                delay(1000)
-            }
-            refreshXiaohongshuSyncCooldown()
-        }
-    }
-
-    fun startXiaohongshuSync() {
-        val baseUrl = requireBaseUrl {
-            _xiaohongshuState.update { it.copy(errorMessage = "请先填写服务端地址。") }
-        } ?: return
-        val limit = _xiaohongshuState.value.limitInput.toIntOrNull()
-        if (limit == null || limit <= 0) {
-            _xiaohongshuState.update { it.copy(errorMessage = "同步数量必须为正整数。") }
-            return
-        }
-        val cooldownRemaining = _xiaohongshuState.value.syncCooldownRemainingSeconds
-        if (cooldownRemaining > 0) {
-            _xiaohongshuState.update {
-                it.copy(errorMessage = "请等待 ${cooldownRemaining} 秒后再发起真实同步。")
-            }
-            return
-        }
-
-        syncPollingJob?.cancel()
-        ackRetryCount = 0
-        ackNextRetryAtMillis = 0
-        syncPollingJob = viewModelScope.launch {
-            _xiaohongshuState.update {
-                it.copy(
-                    isSyncing = true,
-                    isSavingNotes = false,
-                    savingSingleNoteIds = emptySet(),
-                    savedNoteIds = emptySet(),
-                    ackedSyncedNoteIds = emptySet(),
-                    progressCurrent = 0,
-                    progressTotal = limit,
-                    progressMessage = "正在创建同步任务...",
-                    errorMessage = "",
-                    saveStatus = "",
-                    pruneStatus = "",
-                    captureRefreshStatus = "",
-                    summarizeUrlStatus = "",
-                    summaries = emptyList(),
-                    statsText = "",
-                )
-            }
-
-            when (
-                val create = apiRepository.createXiaohongshuSyncJob(
-                    baseUrl = baseUrl,
-                    limit = limit,
-                    confirmLive = true,
-                )
-            ) {
-                is AppResult.Error -> {
-                    _xiaohongshuState.update {
-                        it.copy(
-                            isSyncing = false,
-                            errorMessage = ErrorMessageMapper.format(
-                                code = create.code,
-                                message = create.message,
-                                context = ErrorContext.XIAOHONGSHU_SYNC,
-                            ),
-                        )
-                    }
-                    refreshXiaohongshuSyncCooldown()
-                }
-
-                is AppResult.Success -> {
-                    val jobId = create.data.jobId
-                    pollSyncJob(baseUrl, jobId)
-                }
-            }
         }
     }
 
@@ -663,7 +485,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     errorMessage = "",
                     summarizeUrlStatus = "",
                     saveStatus = "",
-                    pruneStatus = "",
                     captureRefreshStatus = "",
                 )
             }
@@ -677,7 +498,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             isSummarizingUrl = false,
                             summaries = listOf(result.data) + currentList,
                             summarizeUrlStatus = "单篇笔记总结完成，可直接保存。",
-                            statsText = "",
                         )
                     }
                 }
@@ -687,104 +507,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         it.copy(
                             isSummarizingUrl = false,
                             errorMessage = ErrorMessageMapper.format(
-                                code = result.code,
-                                message = result.message,
-                                context = ErrorContext.XIAOHONGSHU_SYNC,
-                            ),
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    fun refreshXiaohongshuPendingCount() {
-        val baseUrl = requireBaseUrl {
-            _xiaohongshuState.update {
-                it.copy(
-                    isLoadingPendingCount = false,
-                    pendingCountText = "",
-                    errorMessage = "请先填写服务端地址。",
-                )
-            }
-        } ?: return
-        if (_xiaohongshuState.value.isLoadingPendingCount) {
-            return
-        }
-
-        viewModelScope.launch {
-            _xiaohongshuState.update {
-                it.copy(
-                    isLoadingPendingCount = true,
-                    pendingCountText = "正在统计未登记数量...",
-                    errorMessage = "",
-                )
-            }
-            when (val result = apiRepository.getXiaohongshuPendingCount(baseUrl)) {
-                is AppResult.Success -> {
-                    _xiaohongshuState.update {
-                        it.copy(
-                            isLoadingPendingCount = false,
-                            pendingCountText = "未登记笔记：${result.data.pendingCount}（共扫描 ${result.data.scannedCount} 条）",
-                        )
-                    }
-                }
-
-                is AppResult.Error -> {
-                    _xiaohongshuState.update {
-                        it.copy(
-                            isLoadingPendingCount = false,
-                            pendingCountText = "",
-                            errorMessage = ErrorMessageMapper.format(
-                                code = result.code,
-                                message = result.message,
-                                context = ErrorContext.XIAOHONGSHU_SYNC,
-                            ),
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    fun saveCurrentXiaohongshuSummaries() {
-        val baseUrl = requireBaseUrl {
-            _xiaohongshuState.update { it.copy(saveStatus = "请先填写服务端地址。") }
-        } ?: return
-        val summaries = _xiaohongshuState.value.summaries
-        if (summaries.isEmpty()) {
-            _xiaohongshuState.update { it.copy(saveStatus = "暂无可保存的小红书总结。") }
-            return
-        }
-
-        viewModelScope.launch {
-            _xiaohongshuState.update {
-                it.copy(
-                    isSavingNotes = true,
-                    saveStatus = "",
-                    pruneStatus = "",
-                    captureRefreshStatus = "",
-                )
-            }
-            when (val result = apiRepository.saveXiaohongshuNotes(baseUrl, summaries)) {
-                is AppResult.Success -> {
-                    _xiaohongshuState.update {
-                        val savedIds = it.summaries.map { item -> item.noteId }.toSet()
-                        it.copy(
-                            isSavingNotes = false,
-                            savingSingleNoteIds = emptySet(),
-                            savedNoteIds = savedIds,
-                            saveStatus = "已保存 ${result.data.savedCount} 条小红书笔记。",
-                        )
-                    }
-                    loadSavedNotes()
-                }
-
-                is AppResult.Error -> {
-                    _xiaohongshuState.update {
-                        it.copy(
-                            isSavingNotes = false,
-                            saveStatus = ErrorMessageMapper.format(
                                 code = result.code,
                                 message = result.message,
                                 context = ErrorContext.XIAOHONGSHU_SYNC,
@@ -814,7 +536,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _xiaohongshuState.update {
                 it.copy(
                     saveStatus = "",
-                    pruneStatus = "",
                     captureRefreshStatus = "",
                     savingSingleNoteIds = it.savingSingleNoteIds + noteId,
                 )
@@ -847,51 +568,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun pruneUnsavedXiaohongshuSyncedNotes() {
-        val baseUrl = requireBaseUrl {
-            _xiaohongshuState.update { it.copy(pruneStatus = "请先填写服务端地址。") }
-        } ?: return
-        if (_xiaohongshuState.value.isPruningSyncedNoteIds) {
-            return
-        }
-
-        viewModelScope.launch {
-            _xiaohongshuState.update {
-                it.copy(
-                    isPruningSyncedNoteIds = true,
-                    pruneStatus = "正在清理去重表...",
-                    captureRefreshStatus = "",
-                    saveStatus = "",
-                    errorMessage = "",
-                )
-            }
-            when (val result = apiRepository.pruneUnsavedXiaohongshuSyncedNotes(baseUrl)) {
-                is AppResult.Success -> {
-                    _xiaohongshuState.update {
-                        it.copy(
-                            isPruningSyncedNoteIds = false,
-                            pruneStatus = "已清理 ${result.data.deletedCount} 条无效去重 ID（候选 ${result.data.candidateCount} 条）。",
-                        )
-                    }
-                }
-
-                is AppResult.Error -> {
-                    _xiaohongshuState.update {
-                        it.copy(
-                            isPruningSyncedNoteIds = false,
-                            pruneStatus = "",
-                            errorMessage = ErrorMessageMapper.format(
-                                code = result.code,
-                                message = result.message,
-                                context = ErrorContext.XIAOHONGSHU_SYNC,
-                            ),
-                        )
-                    }
-                }
-            }
-        }
-    }
-
     fun submitXiaohongshuMobileAuth(cookie: String, userAgent: String) {
         val baseUrl = requireBaseUrl {
             _xiaohongshuState.update { it.copy(errorMessage = "请先填写服务端地址。") }
@@ -912,7 +588,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     isRefreshingCaptureConfig = true,
                     captureRefreshStatus = "正在上传手机登录态...",
-                    pruneStatus = "",
                     saveStatus = "",
                     errorMessage = "",
                 )
@@ -966,7 +641,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     isRefreshingCaptureConfig = true,
                     captureRefreshStatus = "正在更新 auth 配置...",
-                    pruneStatus = "",
                     saveStatus = "",
                     errorMessage = "",
                 )
@@ -1177,166 +851,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    private suspend fun pollSyncJob(baseUrl: String, jobId: String) {
-        val maxPollCount = 180
-        repeat(maxPollCount) {
-            when (val poll = apiRepository.getXiaohongshuSyncJob(baseUrl, jobId)) {
-                is AppResult.Error -> {
-                    _xiaohongshuState.update {
-                        it.copy(
-                            isSyncing = false,
-                            errorMessage = ErrorMessageMapper.format(
-                                code = poll.code,
-                                message = poll.message,
-                                context = ErrorContext.XIAOHONGSHU_JOB,
-                            ),
-                        )
-                    }
-                    return
-                }
-
-                is AppResult.Success -> {
-                    val data = poll.data
-                    _xiaohongshuState.update {
-                        val mergedSummaries = mergeSummaryItems(it.summaries, data.summaries)
-                        it.copy(
-                            progressCurrent = data.current,
-                            progressTotal = data.total,
-                            progressMessage = data.message,
-                            summaries = mergedSummaries,
-                        )
-                    }
-                    ackDisplayedSummaries(baseUrl = baseUrl, jobId = jobId)
-
-                    when (data.status) {
-                        "pending", "running" -> {
-                            delay(600)
-                        }
-
-                        "succeeded" -> {
-                            val result = data.result
-                            val stats = if (result == null) {
-                                "同步完成（未返回结果明细）。"
-                            } else {
-                                "同步完成：请求 ${result.requestedLimit}，拉取 ${result.fetchedCount}，新增 ${result.newCount}，跳过 ${result.skippedCount}，失败 ${result.failedCount}"
-                            }
-                            _xiaohongshuState.update {
-                                val mergedSummaries = if (result == null) {
-                                    it.summaries
-                                } else {
-                                    mergeSummaryItems(it.summaries, result.summaries)
-                                }
-                                it.copy(
-                                    isSyncing = false,
-                                    summaries = mergedSummaries,
-                                    statsText = stats,
-                                    progressMessage = "同步任务完成。",
-                                )
-                            }
-                            refreshXiaohongshuSyncCooldown()
-                            return
-                        }
-
-                        "failed" -> {
-                            val err = data.error
-                            val message = if (err == null) {
-                                "同步任务失败。"
-                            } else {
-                                ErrorMessageMapper.format(
-                                    code = err.code,
-                                    message = err.message,
-                                    context = ErrorContext.XIAOHONGSHU_JOB,
-                                )
-                            }
-                            _xiaohongshuState.update {
-                                it.copy(isSyncing = false, errorMessage = message)
-                            }
-                            refreshXiaohongshuSyncCooldown()
-                            return
-                        }
-
-                        else -> {
-                            _xiaohongshuState.update {
-                                it.copy(isSyncing = false, errorMessage = "未知任务状态：${data.status}")
-                            }
-                            return
-                        }
-                    }
-                }
-            }
-        }
-
-        _xiaohongshuState.update {
-            it.copy(isSyncing = false, errorMessage = "同步超时，请稍后重试。")
-        }
-        refreshXiaohongshuSyncCooldown()
-    }
-
-    private suspend fun ackDisplayedSummaries(baseUrl: String, jobId: String) {
-        val now = System.currentTimeMillis()
-        if (ackRetryCount >= ACK_MAX_RETRIES) {
-            return
-        }
-        if (now < ackNextRetryAtMillis) {
-            return
-        }
-        val snapshot = _xiaohongshuState.value
-        val pendingNoteIds = snapshot.summaries
-            .asSequence()
-            .map { item -> item.noteId.trim() }
-            .filter { id -> id.isNotEmpty() }
-            .distinct()
-            .filterNot { id -> id in snapshot.ackedSyncedNoteIds }
-            .toList()
-        if (pendingNoteIds.isEmpty()) {
-            return
-        }
-
-        when (
-            val ack = apiRepository.ackXiaohongshuSyncJob(
-                baseUrl = baseUrl,
-                jobId = jobId,
-                noteIds = pendingNoteIds,
-            )
-        ) {
-            is AppResult.Success -> {
-                ackRetryCount = 0
-                ackNextRetryAtMillis = 0
-                _xiaohongshuState.update {
-                    val clearAckError = it.errorMessage.startsWith("ACK 失败") ||
-                        it.errorMessage.startsWith("同步结果已展示，但 ACK")
-                    it.copy(
-                        ackedSyncedNoteIds = it.ackedSyncedNoteIds + pendingNoteIds.toSet(),
-                        errorMessage = if (clearAckError) "" else it.errorMessage,
-                    )
-                }
-            }
-
-            is AppResult.Error -> {
-                ackRetryCount += 1
-                if (ackRetryCount >= ACK_MAX_RETRIES) {
-                    _xiaohongshuState.update {
-                        it.copy(
-                            errorMessage = "同步结果已展示，但 ACK 连续失败，请稍后重试同步。\n[${ack.code}] ${ack.message}",
-                        )
-                    }
-                    return
-                }
-                val expFactor = 1L shl (ackRetryCount - 1)
-                val backoffMillis = min(ACK_INITIAL_BACKOFF_MS * expFactor, ACK_MAX_BACKOFF_MS)
-                ackNextRetryAtMillis = now + backoffMillis
-                _xiaohongshuState.update {
-                    it.copy(
-                        errorMessage = "ACK 失败，将在 ${backoffMillis / 1000} 秒后重试。\n[${ack.code}] ${ack.message}",
-                    )
-                }
-            }
-        }
-    }
-
     override fun onCleared() {
-        syncPollingJob?.cancel()
-        syncCooldownTickerJob?.cancel()
         autoSaveConfigJob?.cancel()
         super.onCleared()
     }
@@ -1356,16 +871,4 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return normalized
     }
 
-    private fun mergeSummaryItems(
-        existing: List<XiaohongshuSummaryItem>,
-        incoming: List<XiaohongshuSummaryItem>,
-    ): List<XiaohongshuSummaryItem> {
-        if (incoming.isEmpty()) {
-            return existing
-        }
-        val merged = LinkedHashMap<String, XiaohongshuSummaryItem>()
-        existing.forEach { item -> merged[item.noteId] = item }
-        incoming.forEach { item -> merged[item.noteId] = item }
-        return merged.values.toList()
-    }
 }

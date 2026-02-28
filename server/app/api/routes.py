@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 from functools import lru_cache
@@ -23,24 +22,14 @@ from app.models.schemas import (
     XiaohongshuAuthUpdateData,
     XiaohongshuAuthUpdateRequest,
     XiaohongshuCaptureRefreshData,
-    XiaohongshuPendingCountData,
     XiaohongshuNotesSaveRequest,
     XiaohongshuUrlSummaryRequest,
-    XiaohongshuSyncCooldownData,
     XiaohongshuSyncedNotesPruneData,
-    XiaohongshuSyncJobCreateData,
-    XiaohongshuSyncJobAckData,
-    XiaohongshuSyncJobAckRequest,
-    XiaohongshuSyncJobError,
-    XiaohongshuSyncJobStatusData,
-    XiaohongshuSyncRequest,
-    XiaohongshuSummaryItem,
 )
 from app.services.bilibili import BilibiliSummarizer
 from app.services.editable_config import EditableConfigService
 from app.services.note_library import NoteLibraryService
 from app.services.xiaohongshu import XiaohongshuSyncService
-from app.services.xiaohongshu_job import XiaohongshuSyncJobManager
 from tools import xhs_capture_to_config as xhs_capture_tool
 
 router = APIRouter()
@@ -57,12 +46,6 @@ def _get_summarizer() -> BilibiliSummarizer:
 def _get_xiaohongshu_sync_service() -> XiaohongshuSyncService:
     settings = get_settings()
     return XiaohongshuSyncService(settings)
-
-
-@lru_cache(maxsize=1)
-def _get_xiaohongshu_sync_job_manager() -> XiaohongshuSyncJobManager:
-    return XiaohongshuSyncJobManager()
-
 
 @lru_cache(maxsize=1)
 def _get_note_library_service() -> NoteLibraryService:
@@ -211,16 +194,6 @@ async def clear_bilibili_notes(request: Request) -> dict:
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 
-@router.post("/api/xiaohongshu/sync")
-async def xiaohongshu_sync(payload: XiaohongshuSyncRequest, request: Request) -> dict:
-    logger.info("Receive xiaohongshu sync request, limit=%s", payload.limit)
-    service = _get_xiaohongshu_sync_service()
-    result = await service.sync(limit=payload.limit, confirm_live=payload.confirm_live)
-    # Keep synchronous endpoint backward-compatible: response returned means client has content.
-    await asyncio.to_thread(service.mark_synced_from_summaries, result.summaries)
-    return success_response(data=result.model_dump(), request_id=request.state.request_id)
-
-
 @router.post("/api/xiaohongshu/summarize-url")
 async def xiaohongshu_summarize_url(
     payload: XiaohongshuUrlSummaryRequest, request: Request
@@ -229,22 +202,6 @@ async def xiaohongshu_summarize_url(
     service = _get_xiaohongshu_sync_service()
     result = await service.summarize_url(payload.url)
     return success_response(data=result.model_dump(), request_id=request.state.request_id)
-
-
-@router.get("/api/xiaohongshu/sync/cooldown")
-async def xiaohongshu_sync_cooldown(request: Request) -> dict:
-    service = _get_xiaohongshu_sync_service()
-    cooldown = service.get_live_sync_cooldown()
-    data = XiaohongshuSyncCooldownData(**cooldown)
-    return success_response(data=data.model_dump(), request_id=request.state.request_id)
-
-
-@router.get("/api/xiaohongshu/sync/pending-count")
-async def xiaohongshu_sync_pending_count(request: Request) -> dict:
-    service = _get_xiaohongshu_sync_service()
-    result = await service.get_pending_unsynced_count()
-    data = XiaohongshuPendingCountData(**result)
-    return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 
 @router.post("/api/notes/xiaohongshu/save-batch")
@@ -420,182 +377,3 @@ async def reset_editable_config(request: Request) -> dict:
     _reload_runtime_services()
     data = EditableConfigData(settings=settings_data)
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
-
-
-@router.post("/api/xiaohongshu/sync/jobs")
-async def xiaohongshu_sync_create_job(
-    payload: XiaohongshuSyncRequest, request: Request
-) -> dict:
-    logger.info("Receive xiaohongshu sync job create request, limit=%s", payload.limit)
-    settings = get_settings()
-    requested_limit = payload.limit or settings.xiaohongshu.default_limit
-    manager = _get_xiaohongshu_sync_job_manager()
-    job = await manager.create_job(requested_limit=requested_limit)
-    sync_task = asyncio.create_task(
-        _run_xiaohongshu_sync_job(
-            job.job_id,
-            payload.limit,
-            payload.confirm_live,
-        )
-    )
-    status = job.status.value
-    if settings.xiaohongshu.mode.strip().lower() == "mock":
-        # In mock mode keep behavior deterministic for local/dev/testing:
-        # wait for the short task to finish in the same request lifecycle.
-        await sync_task
-        latest = await manager.get_job(job.job_id)
-        if latest is not None:
-            status = latest.status.value
-    data = XiaohongshuSyncJobCreateData(
-        job_id=job.job_id,
-        status=status,
-        requested_limit=requested_limit,
-    )
-    return success_response(data=data.model_dump(), request_id=request.state.request_id)
-
-
-@router.get("/api/xiaohongshu/sync/jobs/{job_id}")
-async def xiaohongshu_sync_get_job(job_id: str, request: Request) -> dict:
-    manager = _get_xiaohongshu_sync_job_manager()
-    state = await manager.get_job(job_id)
-    if state is None:
-        raise AppError(
-            code=ErrorCode.INVALID_INPUT,
-            message=f"同步任务不存在：{job_id}",
-            status_code=404,
-        )
-
-    error = (
-        XiaohongshuSyncJobError(
-            code=state.error.get("code", ErrorCode.INTERNAL_ERROR.value),
-            message=state.error.get("message", "unknown error"),
-            details=state.error.get("details"),
-        )
-        if state.error
-        else None
-    )
-    summaries = [XiaohongshuSummaryItem(**item) for item in state.summaries]
-    result = (
-        state.result.model_copy(update={"summaries": summaries})
-        if state.result is not None
-        else None
-    )
-    data = XiaohongshuSyncJobStatusData(
-        job_id=state.job_id,
-        status=state.status.value,
-        requested_limit=state.requested_limit,
-        current=state.current,
-        total=state.total,
-        message=state.message,
-        summaries=summaries,
-        result=result,
-        error=error,
-    )
-    return success_response(data=data.model_dump(), request_id=request.state.request_id)
-
-
-@router.post("/api/xiaohongshu/sync/jobs/{job_id}/ack")
-async def xiaohongshu_sync_ack_job_items(
-    job_id: str,
-    payload: XiaohongshuSyncJobAckRequest,
-    request: Request,
-) -> dict:
-    manager = _get_xiaohongshu_sync_job_manager()
-    service = _get_xiaohongshu_sync_service()
-
-    state = await manager.get_job(job_id)
-    if state is None:
-        raise AppError(
-            code=ErrorCode.INVALID_INPUT,
-            message=f"同步任务不存在：{job_id}",
-            status_code=404,
-        )
-
-    to_ack, already_acked, missing_ids = await manager.build_ack_plan(
-        job_id,
-        note_ids=payload.note_ids,
-    )
-    ack_summaries = [XiaohongshuSummaryItem(**item) for item in to_ack]
-    if ack_summaries:
-        await asyncio.to_thread(service.mark_synced_from_summaries, ack_summaries)
-        await manager.apply_acked_note_ids(
-            job_id,
-            note_ids=[item.note_id for item in ack_summaries],
-        )
-
-    data = XiaohongshuSyncJobAckData(
-        job_id=job_id,
-        status=state.status.value,
-        requested_count=len(payload.note_ids),
-        acked_count=len(ack_summaries),
-        already_acked_count=len(already_acked),
-        missing_note_ids=missing_ids,
-        acked_note_ids=[item.note_id for item in ack_summaries],
-    )
-    return success_response(data=data.model_dump(), request_id=request.state.request_id)
-
-
-async def _run_xiaohongshu_sync_job(
-    job_id: str,
-    limit: int | None,
-    confirm_live: bool,
-) -> None:
-    settings = get_settings()
-    requested_limit = limit or settings.xiaohongshu.default_limit
-    service = _get_xiaohongshu_sync_service()
-    manager = _get_xiaohongshu_sync_job_manager()
-
-    await manager.set_running(
-        job_id,
-        total=requested_limit,
-        message="任务已启动，正在同步小红书笔记。",
-    )
-
-    async def _on_progress(progress) -> None:
-        try:
-            await manager.set_progress(
-                job_id,
-                current=progress.current,
-                total=progress.total,
-                message=progress.message,
-                summaries=[item.model_dump() for item in progress.summaries],
-            )
-        except Exception:
-            logger.exception("Failed to update xiaohongshu sync progress, job=%s", job_id)
-
-    try:
-        result = await service.sync(
-            limit=limit,
-            confirm_live=confirm_live,
-            progress_callback=_on_progress,
-        )
-        await manager.set_success(job_id, result=result)
-    except asyncio.CancelledError:
-        logger.warning("Xiaohongshu sync job cancelled, job=%s", job_id)
-        await manager.set_failed(
-            job_id,
-            code=ErrorCode.INTERNAL_ERROR.value,
-            message="同步任务被取消。",
-            details={"reason": "cancelled"},
-        )
-        raise
-    except AppError as exc:
-        details = exc.details if isinstance(exc.details, dict) else {}
-        processed = int(details.get("processed_count", 0))
-        total = int(details.get("fetched_count", requested_limit))
-        await manager.set_failed(
-            job_id,
-            code=exc.code.value,
-            message=exc.message,
-            details=details or None,
-            current=processed,
-            total=total,
-        )
-    except Exception as exc:
-        logger.exception("Unhandled xiaohongshu sync job error, job=%s", job_id)
-        await manager.set_failed(
-            job_id,
-            code=ErrorCode.INTERNAL_ERROR.value,
-            message="服务端发生未预期错误。",
-            details={"error": str(exc)},
-        )

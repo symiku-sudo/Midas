@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-import time
 from pathlib import Path
 
 import app.api.routes as routes_module
@@ -10,7 +9,6 @@ from fastapi.testclient import TestClient
 from app.api.routes import (
     _get_editable_config_service,
     _get_note_library_service,
-    _get_xiaohongshu_sync_job_manager,
     _get_xiaohongshu_sync_service,
 )
 from app.core.config import get_settings
@@ -23,7 +21,6 @@ def _reset_xiaohongshu_state() -> None:
     _get_editable_config_service.cache_clear()
     _get_note_library_service.cache_clear()
     _get_xiaohongshu_sync_service.cache_clear()
-    _get_xiaohongshu_sync_job_manager.cache_clear()
     get_settings.cache_clear()
     db_path = Path(get_settings().xiaohongshu.db_path)
     if db_path.exists():
@@ -51,176 +48,6 @@ def test_bilibili_invalid_url() -> None:
     assert body["code"] == "INVALID_INPUT"
 
 
-def test_xiaohongshu_sync_and_dedupe() -> None:
-    _reset_xiaohongshu_state()
-
-    first = client.post("/api/xiaohongshu/sync", json={"limit": 3})
-    assert first.status_code == 200
-    first_body = first.json()
-    assert first_body["ok"] is True
-    assert first_body["data"]["fetched_count"] == 3
-    assert first_body["data"]["new_count"] == 3
-    assert first_body["data"]["skipped_count"] == 0
-    assert first_body["data"]["failed_count"] == 0
-    assert first_body["data"]["circuit_opened"] is False
-    assert len(first_body["data"]["summaries"]) == 3
-
-    second = client.post("/api/xiaohongshu/sync", json={"limit": 3})
-    assert second.status_code == 200
-    second_body = second.json()
-    assert second_body["ok"] is True
-    assert second_body["data"]["fetched_count"] == 5
-    assert second_body["data"]["new_count"] == 2
-    assert second_body["data"]["skipped_count"] == 3
-    assert second_body["data"]["failed_count"] == 0
-    assert len(second_body["data"]["summaries"]) == 2
-
-
-def test_xiaohongshu_sync_limit_exceeded() -> None:
-    _reset_xiaohongshu_state()
-
-    resp = client.post("/api/xiaohongshu/sync", json={"limit": 99})
-    assert resp.status_code == 400
-    body = resp.json()
-    assert body["ok"] is False
-    assert body["code"] == "INVALID_INPUT"
-
-
-def test_xiaohongshu_sync_job_progress_and_result() -> None:
-    _reset_xiaohongshu_state()
-
-    create_resp = client.post("/api/xiaohongshu/sync/jobs", json={"limit": 2})
-    assert create_resp.status_code == 200
-    create_body = create_resp.json()
-    assert create_body["ok"] is True
-    job_id = create_body["data"]["job_id"]
-    assert job_id
-
-    final_body: dict | None = None
-    for _ in range(30):
-        status_resp = client.get(f"/api/xiaohongshu/sync/jobs/{job_id}")
-        assert status_resp.status_code == 200
-        body = status_resp.json()
-        assert body["ok"] is True
-        assert body["data"]["job_id"] == job_id
-        assert body["data"]["status"] in {"pending", "running", "succeeded", "failed"}
-
-        if body["data"]["status"] in {"succeeded", "failed"}:
-            final_body = body
-            break
-        time.sleep(0.05)
-
-    assert final_body is not None
-    assert final_body["data"]["status"] == "succeeded"
-    assert len(final_body["data"]["summaries"]) == 2
-    assert final_body["data"]["result"]["new_count"] == 2
-    assert final_body["data"]["result"]["fetched_count"] == 2
-    assert len(final_body["data"]["result"]["summaries"]) == 2
-
-
-def test_xiaohongshu_sync_job_ack_marks_dedupe_only_for_acked_notes() -> None:
-    _reset_xiaohongshu_state()
-
-    create_resp = client.post("/api/xiaohongshu/sync/jobs", json={"limit": 2})
-    assert create_resp.status_code == 200
-    job_id = create_resp.json()["data"]["job_id"]
-
-    final_body: dict | None = None
-    for _ in range(30):
-        status_resp = client.get(f"/api/xiaohongshu/sync/jobs/{job_id}")
-        assert status_resp.status_code == 200
-        body = status_resp.json()
-        if body["data"]["status"] in {"succeeded", "failed"}:
-            final_body = body
-            break
-        time.sleep(0.05)
-
-    assert final_body is not None
-    assert final_body["data"]["status"] == "succeeded"
-    summaries = final_body["data"]["summaries"]
-    assert len(summaries) == 2
-
-    first_note_id = summaries[0]["note_id"]
-    second_note_id = summaries[1]["note_id"]
-    service = _get_xiaohongshu_sync_service()
-    assert service._repository.is_synced(first_note_id) is False
-    assert service._repository.is_synced(second_note_id) is False
-
-    ack_first = client.post(
-        f"/api/xiaohongshu/sync/jobs/{job_id}/ack",
-        json={"note_ids": [first_note_id]},
-    )
-    assert ack_first.status_code == 200
-    ack_first_body = ack_first.json()
-    assert ack_first_body["ok"] is True
-    assert ack_first_body["data"]["requested_count"] == 1
-    assert ack_first_body["data"]["acked_count"] == 1
-    assert ack_first_body["data"]["already_acked_count"] == 0
-    assert ack_first_body["data"]["acked_note_ids"] == [first_note_id]
-    assert ack_first_body["data"]["missing_note_ids"] == []
-    assert service._repository.is_synced(first_note_id) is True
-    assert service._repository.is_synced(second_note_id) is False
-
-    ack_idempotent = client.post(
-        f"/api/xiaohongshu/sync/jobs/{job_id}/ack",
-        json={"note_ids": [first_note_id, "missing-note"]},
-    )
-    assert ack_idempotent.status_code == 200
-    ack_idempotent_body = ack_idempotent.json()
-    assert ack_idempotent_body["ok"] is True
-    assert ack_idempotent_body["data"]["requested_count"] == 2
-    assert ack_idempotent_body["data"]["acked_count"] == 0
-    assert ack_idempotent_body["data"]["already_acked_count"] == 1
-    assert ack_idempotent_body["data"]["acked_note_ids"] == []
-    assert ack_idempotent_body["data"]["missing_note_ids"] == ["missing-note"]
-    assert service._repository.is_synced(first_note_id) is True
-    assert service._repository.is_synced(second_note_id) is False
-
-    ack_second = client.post(
-        f"/api/xiaohongshu/sync/jobs/{job_id}/ack",
-        json={"note_ids": [second_note_id]},
-    )
-    assert ack_second.status_code == 200
-    ack_second_body = ack_second.json()
-    assert ack_second_body["ok"] is True
-    assert ack_second_body["data"]["acked_count"] == 1
-    assert ack_second_body["data"]["acked_note_ids"] == [second_note_id]
-    assert service._repository.is_synced(second_note_id) is True
-
-
-def test_xiaohongshu_sync_job_not_found() -> None:
-    _reset_xiaohongshu_state()
-
-    resp = client.get("/api/xiaohongshu/sync/jobs/not-exists")
-    assert resp.status_code == 404
-    body = resp.json()
-    assert body["ok"] is False
-    assert body["code"] == "INVALID_INPUT"
-
-
-def test_xiaohongshu_sync_cooldown_status() -> None:
-    _reset_xiaohongshu_state()
-    service = _get_xiaohongshu_sync_service()
-    now = int(time.time())
-    service._repository.set_state("last_live_sync_ts", str(now - 11))
-
-    resp = client.get("/api/xiaohongshu/sync/cooldown")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["ok"] is True
-    data = body["data"]
-    assert data["mode"] in {"mock", "web_readonly"}
-    assert data["min_interval_seconds"] >= 0
-    if data["mode"] == "web_readonly":
-        assert data["last_sync_at_epoch"] == now - 11
-        assert data["allowed"] is False
-        assert data["remaining_seconds"] > 0
-    else:
-        assert data["last_sync_at_epoch"] == 0
-        assert data["allowed"] is True
-        assert data["remaining_seconds"] == 0
-
-
 def test_xiaohongshu_summarize_single_url() -> None:
     _reset_xiaohongshu_state()
 
@@ -234,22 +61,6 @@ def test_xiaohongshu_summarize_single_url() -> None:
     assert body["data"]["note_id"] == "mock-note-001"
     assert body["data"]["source_url"] == "https://www.xiaohongshu.com/explore/mock-note-001"
     assert body["data"]["summary_markdown"]
-
-
-def test_xiaohongshu_pending_count() -> None:
-    _reset_xiaohongshu_state()
-
-    sync_resp = client.post("/api/xiaohongshu/sync", json={"limit": 1})
-    assert sync_resp.status_code == 200
-    assert sync_resp.json()["data"]["new_count"] == 1
-
-    count_resp = client.get("/api/xiaohongshu/sync/pending-count")
-    assert count_resp.status_code == 200
-    body = count_resp.json()
-    assert body["ok"] is True
-    assert body["data"]["mode"] == "mock"
-    assert body["data"]["scanned_count"] == 5
-    assert body["data"]["pending_count"] == 4
 
 
 def test_bilibili_saved_notes_crud() -> None:
@@ -290,12 +101,14 @@ def test_bilibili_saved_notes_crud() -> None:
 def test_xiaohongshu_saved_notes_crud_and_dedupe_independent() -> None:
     _reset_xiaohongshu_state()
 
-    sync_resp = client.post("/api/xiaohongshu/sync", json={"limit": 1})
-    assert sync_resp.status_code == 200
-    sync_body = sync_resp.json()
-    assert sync_body["ok"] is True
-    assert sync_body["data"]["new_count"] == 1
-    first_summary = sync_body["data"]["summaries"][0]
+    summarize_resp = client.post(
+        "/api/xiaohongshu/summarize-url",
+        json={"url": "https://www.xiaohongshu.com/explore/mock-note-001"},
+    )
+    assert summarize_resp.status_code == 200
+    summarize_body = summarize_resp.json()
+    assert summarize_body["ok"] is True
+    first_summary = summarize_body["data"]
 
     save_resp = client.post(
         "/api/notes/xiaohongshu/save-batch",
@@ -319,23 +132,24 @@ def test_xiaohongshu_saved_notes_crud_and_dedupe_independent() -> None:
     assert listed_after.json()["data"]["total"] == 0
 
     # Saved note deletion should not affect xiaohongshu dedupe table.
-    sync_again = client.post("/api/xiaohongshu/sync", json={"limit": 1})
-    assert sync_again.status_code == 200
-    sync_again_body = sync_again.json()
-    assert sync_again_body["data"]["new_count"] == 1
-    assert sync_again_body["data"]["skipped_count"] == 1
-    assert sync_again_body["data"]["summaries"][0]["note_id"] != first_summary["note_id"]
+    service = _get_xiaohongshu_sync_service()
+    assert service._repository.is_synced(first_summary["note_id"]) is True
 
 
 def test_prune_unsaved_xiaohongshu_synced_notes() -> None:
     _reset_xiaohongshu_state()
 
-    sync_resp = client.post("/api/xiaohongshu/sync", json={"limit": 2})
-    assert sync_resp.status_code == 200
-    sync_body = sync_resp.json()
-    assert sync_body["ok"] is True
-    summaries = sync_body["data"]["summaries"]
-    assert len(summaries) == 2
+    first_resp = client.post(
+        "/api/xiaohongshu/summarize-url",
+        json={"url": "https://www.xiaohongshu.com/explore/mock-note-001"},
+    )
+    assert first_resp.status_code == 200
+    second_resp = client.post(
+        "/api/xiaohongshu/summarize-url",
+        json={"url": "https://www.xiaohongshu.com/explore/mock-note-002"},
+    )
+    assert second_resp.status_code == 200
+    summaries = [first_resp.json()["data"], second_resp.json()["data"]]
 
     save_resp = client.post(
         "/api/notes/xiaohongshu/save-batch",
@@ -547,11 +361,6 @@ def test_editable_config_update_and_reset(tmp_path) -> None:
         assert update_body["ok"] is True
         assert update_body["data"]["settings"]["xiaohongshu"]["default_limit"] == 7
         assert update_body["data"]["settings"]["runtime"]["log_level"] == "DEBUG"
-
-        # Verify new default_limit is effective in runtime behavior.
-        sync_resp = client.post("/api/xiaohongshu/sync", json={})
-        assert sync_resp.status_code == 200
-        assert sync_resp.json()["data"]["requested_limit"] == 7
 
         reset_resp = client.post("/api/config/editable/reset")
         assert reset_resp.status_code == 200

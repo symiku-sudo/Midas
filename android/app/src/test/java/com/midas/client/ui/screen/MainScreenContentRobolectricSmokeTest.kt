@@ -30,12 +30,7 @@ class MainScreenContentRobolectricSmokeTest {
         var resetConfigClicks = 0
         var bilibiliSubmitClicks = 0
         var bilibiliSaveClicks = 0
-        var xhsSyncClicks = 0
         var xhsSummarizeUrlClicks = 0
-        var xhsPendingCountClicks = 0
-        var xhsBatchSaveClicks = 0
-        var xhsPruneClicks = 0
-        var xhsRefreshAuthClicks = 0
         var xhsSaveSingleClicks = 0
         var notesRefreshClicks = 0
         var notesClearBilibiliClicks = 0
@@ -57,7 +52,6 @@ class MainScreenContentRobolectricSmokeTest {
                         ),
                     ),
                     xiaohongshu = XiaohongshuUiState(
-                        limitInput = "5",
                         urlInput = "https://www.xiaohongshu.com/explore/test-note-id",
                         summaries = listOf(
                             XiaohongshuSummaryItem(
@@ -100,14 +94,9 @@ class MainScreenContentRobolectricSmokeTest {
                     onBilibiliVideoUrlChange = {},
                     onSubmitBilibiliSummary = { bilibiliSubmitClicks += 1 },
                     onSaveBilibiliNote = { bilibiliSaveClicks += 1 },
-                    onXiaohongshuLimitChange = {},
                     onXiaohongshuUrlChange = {},
-                    onStartXiaohongshuSync = { xhsSyncClicks += 1 },
                     onSummarizeXiaohongshuUrl = { xhsSummarizeUrlClicks += 1 },
-                    onRefreshXiaohongshuPendingCount = { xhsPendingCountClicks += 1 },
-                    onSaveXiaohongshuNotes = { xhsBatchSaveClicks += 1 },
-                    onPruneXiaohongshuSyncedNoteIds = { xhsPruneClicks += 1 },
-                    onRefreshXiaohongshuAuthConfig = { xhsRefreshAuthClicks += 1 },
+                    onRefreshXiaohongshuAuthConfig = {},
                     onSaveSingleXiaohongshuNote = { _ -> xhsSaveSingleClicks += 1 },
                     onNotesKeywordChange = {},
                     onRefreshNotes = { notesRefreshClicks += 1 },
@@ -127,12 +116,7 @@ class MainScreenContentRobolectricSmokeTest {
 
         composeRule.onNodeWithText("小红书").performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithText("同步收藏").performClick()
-        composeRule.onNodeWithText("批量保存").performClick()
         composeRule.onNodeWithText("总结单篇").performClick()
-        composeRule.onNodeWithText("统计未登记").performClick()
-        composeRule.onNodeWithTag("xhs_prune_button", useUnmergedTree = true).performScrollTo().performClick()
-        composeRule.onNodeWithTag("xhs_refresh_auth_button", useUnmergedTree = true).performScrollTo().performClick()
         composeRule.onNodeWithTag("xhs_save_single_test-note-id", useUnmergedTree = true).performScrollTo().performClick()
 
         composeRule.onNodeWithText("笔记库").performClick()
@@ -150,12 +134,7 @@ class MainScreenContentRobolectricSmokeTest {
 
         assertEquals(1, bilibiliSubmitClicks)
         assertEquals(1, bilibiliSaveClicks)
-        assertEquals(1, xhsSyncClicks)
-        assertEquals(1, xhsBatchSaveClicks)
         assertEquals(1, xhsSummarizeUrlClicks)
-        assertEquals(1, xhsPendingCountClicks)
-        assertEquals(1, xhsPruneClicks)
-        assertEquals(1, xhsRefreshAuthClicks)
         assertEquals(1, xhsSaveSingleClicks)
         assertEquals(1, notesRefreshClicks)
         assertEquals(1, notesClearBilibiliClicks)

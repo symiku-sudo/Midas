@@ -7,10 +7,7 @@
 - `POST /api/notes/bilibili/save`
 - `GET /api/notes/bilibili`
 - `DELETE /api/notes/bilibili/{note_id}` / `DELETE /api/notes/bilibili`
-- `POST /api/xiaohongshu/sync`
 - `POST /api/xiaohongshu/summarize-url`
-- `GET /api/xiaohongshu/sync/cooldown`
-- `GET /api/xiaohongshu/sync/pending-count`
 - `POST /api/notes/xiaohongshu/save-batch`
 - `GET /api/notes/xiaohongshu`
 - `DELETE /api/notes/xiaohongshu/{note_id}` / `DELETE /api/notes/xiaohongshu`
@@ -20,12 +17,10 @@
 - `GET /api/config/editable`
 - `PUT /api/config/editable`
 - `POST /api/config/editable/reset`
-- `POST /api/xiaohongshu/sync/jobs`
-- `GET /api/xiaohongshu/sync/jobs/{job_id}`
 - Unified response envelope: `ok/code/message/data/request_id`
 - Unified error handling and request-id middleware
 - Config-driven runtime (`config.yaml`)
-- Xiaohongshu sync controls: limit, dedupe(SQLite), circuit-breaker
+- Xiaohongshu URL summarize + dedupe(SQLite)
 - Xiaohongshu 视频笔记总结：音频导出 -> ASR -> LLM（合并正文）
 - API schema reference: `API_CONTRACT.md`
 
@@ -129,8 +124,6 @@ Then fill:
 服务端支持 `xiaohongshu.mode=web_readonly` 的低风险只读模式：
 - 只允许 `GET/POST` 单请求回放
 - 强制 HTTPS + 域名白名单
-- 需要显式 `confirm_live=true`
-- 带最小同步间隔保护（默认 1800 秒）
 - `page_fetch_driver=auto` 时会在静态签名翻页遇到 `406` 后自动切换 Playwright 实时抓取
 
 若使用 `auto/playwright`，需安装 Playwright 依赖与浏览器：
@@ -151,7 +144,7 @@ python -m playwright install chromium
    ```bash
    uvicorn app.main:app --host 0.0.0.0 --port 8000
    ```
-4. 先用小 `limit`（如 3）并传 `confirm_live=true` 试跑。
+4. 先用 1-2 条真实 URL 试跑。
 5. 观察是否返回 `AUTH_EXPIRED` 或 `RATE_LIMITED`，再调整。
 
 详细步骤见：`XHS_WEB_READONLY_SETUP.md`
@@ -181,51 +174,14 @@ curl http://127.0.0.1:8000/api/notes/bilibili
 ```
 
 ```bash
-# 仅 mock 模式可直接调用（web_readonly 下需 confirm_live=true）
-curl -X POST http://127.0.0.1:8000/api/xiaohongshu/sync \
-  -H 'Content-Type: application/json' \
-  -d '{"limit":5}'
-
 # 按 URL 总结单篇小红书笔记
 curl -X POST http://127.0.0.1:8000/api/xiaohongshu/summarize-url \
   -H 'Content-Type: application/json' \
   -d '{"url":"https://www.xiaohongshu.com/explore/xxxxxx"}'
-
-# 查询真实同步冷却状态（remaining_seconds>0 时建议倒计时后再发起）
-curl http://127.0.0.1:8000/api/xiaohongshu/sync/cooldown
-
-# 统计收藏中未登记到去重表的笔记数量
-curl http://127.0.0.1:8000/api/xiaohongshu/sync/pending-count
 ```
 
 ```bash
-# 创建异步任务
-curl -X POST http://127.0.0.1:8000/api/xiaohongshu/sync/jobs \
-  -H 'Content-Type: application/json' \
-  -d '{"limit":5}'
-
-# 查询任务进度
-curl http://127.0.0.1:8000/api/xiaohongshu/sync/jobs/<job_id>
-
-# ACK 已展示的笔记（把 note_id 写入去重表）
-curl -X POST http://127.0.0.1:8000/api/xiaohongshu/sync/jobs/<job_id>/ack \
-  -H 'Content-Type: application/json' \
-  -d '{"note_ids":["mock-note-001","mock-note-002"]}'
-```
-
-说明：
-- 异步任务状态接口会在运行中返回 `summaries` 增量结果，可用于“同步成功一篇就展示一篇”。
-- 异步任务不会自动写去重；客户端应在“展示成功”后调用 ACK 接口。
-
-```bash
-# web_readonly 模式（真实请求）需显式确认
-curl -X POST http://127.0.0.1:8000/api/xiaohongshu/sync/jobs \
-  -H 'Content-Type: application/json' \
-  -d '{"limit":3,"confirm_live":true}'
-```
-
-```bash
-# 批量保存小红书总结结果（notes 数组元素结构与 /api/xiaohongshu/sync 返回 summaries 一致）
+# 批量保存小红书总结结果（notes 数组元素结构与 /api/xiaohongshu/summarize-url 返回一致）
 curl -X POST http://127.0.0.1:8000/api/notes/xiaohongshu/save-batch \
   -H 'Content-Type: application/json' \
   -d '{"notes":[{"note_id":"mock-note-001","title":"示例","source_url":"https://www.xiaohongshu.com/explore/mock-note-001","summary_markdown":"# 总结"}]}'
@@ -253,10 +209,8 @@ curl -X POST http://127.0.0.1:8000/api/config/editable/reset
 - Default LLM mode is enabled (`llm.enabled=true`); set `llm.api_key` before real run.
 - Default Xiaohongshu integration mode is `web_readonly`.
 - Synced note IDs persist in `xiaohongshu.db_path` (default `.tmp/midas.db`).
-- 小红书同步中的 `limit` 是“有效新增（`new_count`）目标”；命中去重表的条目只计入 `skipped_count`，不会占用 `limit`。
-- 同步会自动按 cursor 翻页，直到凑满 `limit` 条有效笔记，或收藏列表已遍历完。
-- 同步接口 `POST /api/xiaohongshu/sync` 为向后兼容会自动写去重；异步 jobs 模式改为 ACK 驱动写去重。
-- 删除“已保存小红书笔记”不会删除去重表中的 `note_id`，后续同步仍会跳过已处理笔记。
+- 单篇 URL 总结成功后会自动把 `note_id` 写入去重表。
+- 删除“已保存小红书笔记”不会删除去重表中的 `note_id`，后续按 URL 总结仍会复用已处理状态。
 - `web_readonly` 模式仍属于非官方接口回放，务必低频、低并发、只读请求，优先保护账号安全。
 
 ## Tests
@@ -282,12 +236,12 @@ python tools/selfcheck.py
 ```bash
 cd server
 source .venv/bin/activate
-python tools/smoke_test.py --profile web_guard
+python tools/smoke_test.py --profile mock
 ```
 
-- 用于做无风险接口冒烟（`/health`、B站参数校验、小红书 confirm_live 保护链路）。
+- 用于做无风险接口冒烟（`/health`、B站参数校验、小红书 `summarize-url` mock 检查）。
 
-如果服务端当前是 `web_readonly` 模式（不发真实请求，仅验证保护机制）：
+如果服务端当前是 `web_readonly` 模式，仍可沿用同一命令做基础可用性检查：
 
 ```bash
 python tools/smoke_test.py --profile web_guard
@@ -297,14 +251,14 @@ python tools/smoke_test.py --profile web_guard
 
 ```bash
 cd server
-tools/run_local_stack.sh --profile web_guard
+tools/run_local_stack.sh --profile mock
 ```
 
 - 执行顺序：`selfcheck -> 启动服务 -> smoke_test`。
 - 默认 `selfcheck` 失败仅告警继续；如果你想严格阻断：
 
 ```bash
-tools/run_local_stack.sh --profile web_guard --strict-selfcheck
+tools/run_local_stack.sh --profile mock --strict-selfcheck
 ```
 
 停止本地服务：

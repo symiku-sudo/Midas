@@ -140,17 +140,6 @@ Success `data`:
 }
 ```
 
-## `POST /api/xiaohongshu/sync`
-
-Request:
-
-```json
-{
-  "limit": 5,
-  "confirm_live": false
-}
-```
-
 ## `POST /api/xiaohongshu/summarize-url`
 
 用途：按指定小红书笔记 URL 总结单篇内容（支持图文与视频笔记）。
@@ -174,69 +163,9 @@ Success `data`:
 }
 ```
 
-## `GET /api/xiaohongshu/sync/cooldown`
-
-用途：查询“小红书真实同步”冷却状态（用于客户端倒计时与按钮禁用）。
-
-Success `data`:
-
-```json
-{
-  "mode": "web_readonly",
-  "allowed": false,
-  "remaining_seconds": 1260,
-  "next_allowed_at_epoch": 1772100000,
-  "last_sync_at_epoch": 1772098740,
-  "min_interval_seconds": 1800
-}
-```
-
 说明：
-- `confirm_live` 仅在 `xiaohongshu.mode=web_readonly` 时需要设为 `true`。
-- 默认 `false`，用于防止误触发真实账号请求。
 - 对视频型笔记，会走“音频导出 -> ASR 转写 -> LLM 总结”，并合并正文（若存在）。
-- `limit` 表示“有效同步目标条数”，对应 `new_count`。
-- 命中去重表的笔记会计入 `skipped_count`，但不会占用 `limit` 名额。
-- 服务端会自动翻页（cursor）继续拉取，直到：
-  - `new_count >= limit`，或
-  - 已遍历完当前收藏列表（即无更多可检查 `note_id`）。
-- 当 `xiaohongshu.web_readonly.page_fetch_driver=auto` 时，若静态签名翻页出现 `HTTP 406`，会自动回退到 Playwright 实时抓取继续同步。
-- `fetched_count` 表示本次实际检查过的笔记条数（含跳过与失败）。
-
-Success `data`:
-
-```json
-{
-  "requested_limit": 5,
-  "fetched_count": 5,
-  "new_count": 5,
-  "skipped_count": 0,
-  "failed_count": 0,
-  "circuit_opened": false,
-  "summaries": [
-    {
-      "note_id": "mock-note-001",
-      "title": "...",
-      "source_url": "...",
-      "summary_markdown": "..."
-    }
-  ]
-}
-```
-
-## `GET /api/xiaohongshu/sync/pending-count`
-
-用途：统计收藏中“尚未写入去重表”的笔记数量（仅返回数量与扫描总数）。
-
-Success `data`:
-
-```json
-{
-  "mode": "web_readonly",
-  "pending_count": 12,
-  "scanned_count": 87
-}
-```
+- 总结成功后会自动写入去重表 `xiaohongshu_synced_notes`。
 
 ## `POST /api/notes/xiaohongshu/save-batch`
 
@@ -312,15 +241,15 @@ Success `data`:
 
 说明：
 - 删除“已保存笔记”不会删除去重表 `xiaohongshu_synced_notes` 里的 `note_id`。
-- 因此同一 `note_id` 下次同步仍会被判定为重复并跳过。
+- 因此同一 `note_id` 后续按 URL 总结仍会被判定为已处理。
 
 ## `POST /api/notes/xiaohongshu/synced/prune`
 
 用途：清理去重表中“未保存到笔记库”的 `note_id`。
 
 适用场景：
-- 某次同步生成失败或未保存，导致后续被去重跳过。
-- 希望让这部分条目在后续同步中可再次生成总结。
+- 某次按 URL 总结生成后未保存，导致后续被去重跳过。
+- 希望让这部分条目在后续按 URL 总结时可再次生成总结。
 
 Success `data`:
 
@@ -473,142 +402,12 @@ Success `data`:
 }
 ```
 
-## `POST /api/xiaohongshu/sync/jobs`
-
-用途：创建异步同步任务（用于客户端显示实时进度）。
-
-Request:
-
-```json
-{
-  "limit": 5,
-  "confirm_live": false
-}
-```
-
-Success `data`:
-
-```json
-{
-  "job_id": "6a9f....",
-  "status": "pending",
-  "requested_limit": 5
-}
-```
-
-## `GET /api/xiaohongshu/sync/jobs/{job_id}`
-
-用途：查询同步任务状态与进度。
-
-Success `data`（运行中）:
-
-```json
-{
-  "job_id": "6a9f....",
-  "status": "running",
-  "requested_limit": 5,
-  "current": 2,
-  "total": 5,
-  "message": "已完成有效同步：2/5（mock-note-002）",
-  "summaries": [
-    {
-      "note_id": "mock-note-001",
-      "title": "...",
-      "source_url": "...",
-      "summary_markdown": "..."
-    },
-    {
-      "note_id": "mock-note-002",
-      "title": "...",
-      "source_url": "...",
-      "summary_markdown": "..."
-    }
-  ],
-  "result": null,
-  "error": null
-}
-```
-
-Success `data`（完成）:
-
-```json
-{
-  "job_id": "6a9f....",
-  "status": "succeeded",
-  "requested_limit": 5,
-  "current": 5,
-  "total": 5,
-  "message": "同步任务完成。",
-  "summaries": [
-    {
-      "note_id": "mock-note-001",
-      "title": "...",
-      "source_url": "...",
-      "summary_markdown": "..."
-    }
-  ],
-  "result": {
-    "requested_limit": 5,
-    "fetched_count": 5,
-    "new_count": 5,
-    "skipped_count": 0,
-    "failed_count": 0,
-    "circuit_opened": false,
-    "summaries": [
-      {
-        "note_id": "mock-note-001",
-        "title": "...",
-        "source_url": "...",
-        "summary_markdown": "..."
-      }
-    ]
-  },
-  "error": null
-}
-```
-
-说明：
-- `GET /api/xiaohongshu/sync/jobs/{job_id}` 的 `summaries` 字段会在任务运行期间增量增长；
-- 客户端可在轮询过程中直接消费 `summaries` 实现“成功一篇展示一篇”。
-- 异步任务模式下，服务端不会自动写入去重表；需要客户端在“已展示”后调用 ACK 接口。
-
-## `POST /api/xiaohongshu/sync/jobs/{job_id}/ack`
-
-用途：客户端确认“这些笔记已展示给用户”，据此把对应 `note_id` 写入去重表。
-
-Request:
-
-```json
-{
-  "note_ids": ["mock-note-001", "mock-note-002"]
-}
-```
-
-Success `data`:
-
-```json
-{
-  "job_id": "6a9f....",
-  "status": "running",
-  "requested_count": 2,
-  "acked_count": 2,
-  "already_acked_count": 0,
-  "missing_note_ids": [],
-  "acked_note_ids": ["mock-note-001", "mock-note-002"]
-}
-```
-
-说明：
-- `acked_count`：本次新写入去重表的数量。
-- `already_acked_count`：已 ACK 过的数量（幂等）。
-- `missing_note_ids`：不在当前任务 `summaries` 里的 `note_id`。
-
 ## Error codes
 
 - `INVALID_INPUT`: request field invalid or config invalid
 - `AUTH_EXPIRED`: upstream auth expired
 - `RATE_LIMITED`: upstream throttling
-- `CIRCUIT_OPEN`: sync stopped due to consecutive failures
+- `CIRCUIT_OPEN`: request blocked by circuit-breaker
 - `UPSTREAM_ERROR`: third-party/downstream failure
 - `DEPENDENCY_MISSING`: required local dependency missing
 - `INTERNAL_ERROR`: unhandled server error

@@ -14,18 +14,9 @@ import com.midas.client.data.model.NotesSaveBatchData
 import com.midas.client.data.model.XiaohongshuAuthUpdateData
 import com.midas.client.data.model.XiaohongshuAuthUpdateRequest
 import com.midas.client.data.model.XiaohongshuCaptureRefreshData
-import com.midas.client.data.model.XiaohongshuSyncedNotesPruneData
-import com.midas.client.data.model.XiaohongshuSyncData
-import com.midas.client.data.model.XiaohongshuSyncCooldownData
-import com.midas.client.data.model.XiaohongshuSyncJobCreateData
-import com.midas.client.data.model.XiaohongshuSyncJobAckData
-import com.midas.client.data.model.XiaohongshuSyncJobAckRequest
-import com.midas.client.data.model.XiaohongshuSyncJobStatusData
-import com.midas.client.data.model.XiaohongshuPendingCountData
 import com.midas.client.data.model.XiaohongshuNotesSaveRequest
 import com.midas.client.data.model.XiaohongshuSavedNotesData
 import com.midas.client.data.model.XiaohongshuSummarizeUrlRequest
-import com.midas.client.data.model.XiaohongshuSyncRequest
 import com.midas.client.data.model.XiaohongshuSummaryItem
 import retrofit2.Response
 import retrofit2.http.Body
@@ -60,11 +51,6 @@ interface MidasApiService {
     @DELETE("api/notes/bilibili")
     suspend fun clearBilibiliNotes(): Response<ApiEnvelope<NotesDeleteData>>
 
-    @POST("api/xiaohongshu/sync")
-    suspend fun syncXiaohongshu(
-        @Body request: XiaohongshuSyncRequest
-    ): Response<ApiEnvelope<XiaohongshuSyncData>>
-
     @POST("api/xiaohongshu/summarize-url")
     suspend fun summarizeXiaohongshuUrl(
         @Body request: XiaohongshuSummarizeUrlRequest
@@ -86,10 +72,6 @@ interface MidasApiService {
     @DELETE("api/notes/xiaohongshu")
     suspend fun clearXiaohongshuNotes(): Response<ApiEnvelope<NotesDeleteData>>
 
-    @POST("api/notes/xiaohongshu/synced/prune")
-    suspend fun pruneUnsavedXiaohongshuSyncedNotes():
-        Response<ApiEnvelope<XiaohongshuSyncedNotesPruneData>>
-
     @POST("api/xiaohongshu/capture/refresh")
     suspend fun refreshXiaohongshuCapture():
         Response<ApiEnvelope<XiaohongshuCaptureRefreshData>>
@@ -98,14 +80,6 @@ interface MidasApiService {
     suspend fun updateXiaohongshuAuth(
         @Body request: XiaohongshuAuthUpdateRequest
     ): Response<ApiEnvelope<XiaohongshuAuthUpdateData>>
-
-    @GET("api/xiaohongshu/sync/cooldown")
-    suspend fun getXiaohongshuSyncCooldown():
-        Response<ApiEnvelope<XiaohongshuSyncCooldownData>>
-
-    @GET("api/xiaohongshu/sync/pending-count")
-    suspend fun getXiaohongshuPendingCount():
-        Response<ApiEnvelope<XiaohongshuPendingCountData>>
 
     @GET("api/config/editable")
     suspend fun getEditableConfig(): Response<ApiEnvelope<EditableConfigData>>
@@ -118,19 +92,4 @@ interface MidasApiService {
     @POST("api/config/editable/reset")
     suspend fun resetEditableConfig(): Response<ApiEnvelope<EditableConfigData>>
 
-    @POST("api/xiaohongshu/sync/jobs")
-    suspend fun createXiaohongshuSyncJob(
-        @Body request: XiaohongshuSyncRequest
-    ): Response<ApiEnvelope<XiaohongshuSyncJobCreateData>>
-
-    @GET("api/xiaohongshu/sync/jobs/{jobId}")
-    suspend fun getXiaohongshuSyncJob(
-        @Path("jobId") jobId: String
-    ): Response<ApiEnvelope<XiaohongshuSyncJobStatusData>>
-
-    @POST("api/xiaohongshu/sync/jobs/{jobId}/ack")
-    suspend fun ackXiaohongshuSyncJob(
-        @Path("jobId") jobId: String,
-        @Body request: XiaohongshuSyncJobAckRequest,
-    ): Response<ApiEnvelope<XiaohongshuSyncJobAckData>>
 }

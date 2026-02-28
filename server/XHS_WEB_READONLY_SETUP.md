@@ -2,13 +2,12 @@
 
 ## 目标
 
-在不做自动化登录、不做高频抓取的前提下，使用你浏览器当前登录会话里的“收藏列表请求”进行只读同步。
+在不做自动化登录、不做高频抓取的前提下，使用你浏览器当前登录会话进行“小红书 URL 单篇总结”。
 
 ## 强安全原则
 
 1. 只读：仅请求列表接口，不做写操作。
-2. 低频：每次只拉少量（建议 3-10 条），并保持较长间隔。
-3. 显式确认：仅在你主动勾选 `confirm_live` 时发真实请求。
+2. 低频：每次只处理少量 URL（建议 1-3 条），并保持较长间隔。
 
 ## 步骤 1：准备配置
 
@@ -19,7 +18,6 @@ cp config.real.example.yaml config.yaml
 
 先保持：
 - `xiaohongshu.mode: web_readonly`
-- `xiaohongshu.min_live_sync_interval_seconds: 1800`
 
 ## 步骤 2：从浏览器抓“收藏列表”请求
 
@@ -40,7 +38,6 @@ cp config.real.example.yaml config.yaml
 ```yaml
 xiaohongshu:
   mode: web_readonly
-  min_live_sync_interval_seconds: 1800
   web_readonly:
     page_fetch_driver: auto  # auto/http/playwright
     request_url: "https://www.xiaohongshu.com/api/..."
@@ -107,14 +104,13 @@ python tools/xhs_capture_to_config.py \
 
 ## 步骤 4：先小流量试跑
 
-- 服务端启动后，先用 `limit=3`。
-- 客户端勾选“确认真实同步请求”开关。
+- 服务端启动后，先用 1 条真实 URL 试跑。
 - 或直接调用：
 
 ```bash
-curl -X POST http://127.0.0.1:8000/api/xiaohongshu/sync/jobs \
+curl -X POST http://127.0.0.1:8000/api/xiaohongshu/summarize-url \
   -H 'Content-Type: application/json' \
-  -d '{"limit":3,"confirm_live":true}'
+  -d '{"url":"https://www.xiaohongshu.com/explore/xxxxxx"}'
 ```
 
 ## 常见返回与处理
@@ -125,6 +121,6 @@ curl -X POST http://127.0.0.1:8000/api/xiaohongshu/sync/jobs \
 
 ## 建议运行节奏
 
-- 单次 3-10 条。
-- 每 30 分钟或更久同步一次。
+- 单次 1-3 条。
+- 每 30 分钟或更久请求一次。
 - 避免多设备并发操作同账号。

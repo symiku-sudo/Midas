@@ -15,18 +15,9 @@ import com.midas.client.data.model.XiaohongshuAuthUpdateData
 import com.midas.client.data.model.XiaohongshuAuthUpdateRequest
 import com.midas.client.data.model.XiaohongshuCaptureRefreshData
 import com.midas.client.data.model.XiaohongshuNotesSaveRequest
-import com.midas.client.data.model.XiaohongshuPendingCountData
 import com.midas.client.data.model.XiaohongshuSavedNotesData
-import com.midas.client.data.model.XiaohongshuSyncedNotesPruneData
 import com.midas.client.data.model.XiaohongshuSummarizeUrlRequest
 import com.midas.client.data.model.XiaohongshuSummaryItem
-import com.midas.client.data.model.XiaohongshuSyncData
-import com.midas.client.data.model.XiaohongshuSyncCooldownData
-import com.midas.client.data.model.XiaohongshuSyncJobAckData
-import com.midas.client.data.model.XiaohongshuSyncJobAckRequest
-import com.midas.client.data.model.XiaohongshuSyncJobCreateData
-import com.midas.client.data.model.XiaohongshuSyncJobStatusData
-import com.midas.client.data.model.XiaohongshuSyncRequest
 import com.midas.client.data.network.MidasApiFactory
 import com.midas.client.data.network.MidasApiService
 import com.midas.client.util.AppResult
@@ -86,18 +77,6 @@ class MidasRepository {
         return request(baseUrl) { clearBilibiliNotes() }
     }
 
-    suspend fun syncXiaohongshu(
-        baseUrl: String,
-        limit: Int,
-        confirmLive: Boolean = false,
-    ): AppResult<XiaohongshuSyncData> {
-        return request(baseUrl) {
-            syncXiaohongshu(
-                XiaohongshuSyncRequest(limit = limit, confirmLive = confirmLive)
-            )
-        }
-    }
-
     suspend fun summarizeXiaohongshuUrl(
         baseUrl: String,
         url: String,
@@ -128,12 +107,6 @@ class MidasRepository {
         return request(baseUrl) { clearXiaohongshuNotes() }
     }
 
-    suspend fun pruneUnsavedXiaohongshuSyncedNotes(
-        baseUrl: String
-    ): AppResult<XiaohongshuSyncedNotesPruneData> {
-        return request(baseUrl) { pruneUnsavedXiaohongshuSyncedNotes() }
-    }
-
     suspend fun refreshXiaohongshuCapture(baseUrl: String): AppResult<XiaohongshuCaptureRefreshData> {
         return request(baseUrl) { refreshXiaohongshuCapture() }
     }
@@ -157,14 +130,6 @@ class MidasRepository {
         }
     }
 
-    suspend fun getXiaohongshuSyncCooldown(baseUrl: String): AppResult<XiaohongshuSyncCooldownData> {
-        return request(baseUrl) { getXiaohongshuSyncCooldown() }
-    }
-
-    suspend fun getXiaohongshuPendingCount(baseUrl: String): AppResult<XiaohongshuPendingCountData> {
-        return request(baseUrl) { getXiaohongshuPendingCount() }
-    }
-
     suspend fun getEditableConfig(baseUrl: String): AppResult<EditableConfigData> {
         return request(baseUrl) { getEditableConfig() }
     }
@@ -180,38 +145,6 @@ class MidasRepository {
 
     suspend fun resetEditableConfig(baseUrl: String): AppResult<EditableConfigData> {
         return request(baseUrl) { resetEditableConfig() }
-    }
-
-    suspend fun createXiaohongshuSyncJob(
-        baseUrl: String,
-        limit: Int,
-        confirmLive: Boolean = false,
-    ): AppResult<XiaohongshuSyncJobCreateData> {
-        return request(baseUrl) {
-            createXiaohongshuSyncJob(
-                XiaohongshuSyncRequest(limit = limit, confirmLive = confirmLive)
-            )
-        }
-    }
-
-    suspend fun getXiaohongshuSyncJob(
-        baseUrl: String,
-        jobId: String,
-    ): AppResult<XiaohongshuSyncJobStatusData> {
-        return request(baseUrl) { getXiaohongshuSyncJob(jobId) }
-    }
-
-    suspend fun ackXiaohongshuSyncJob(
-        baseUrl: String,
-        jobId: String,
-        noteIds: List<String>,
-    ): AppResult<XiaohongshuSyncJobAckData> {
-        return request(baseUrl) {
-            ackXiaohongshuSyncJob(
-                jobId = jobId,
-                request = XiaohongshuSyncJobAckRequest(noteIds = noteIds),
-            )
-        }
     }
 
     private fun <T> unwrap(response: Response<ApiEnvelope<T>>): AppResult<T> {

@@ -56,11 +56,6 @@ data class BilibiliSavedNotesData(
     val items: List<BilibiliSavedNote>
 )
 
-data class XiaohongshuSyncRequest(
-    val limit: Int? = null,
-    @Json(name = "confirm_live") val confirmLive: Boolean = false
-)
-
 data class XiaohongshuSummarizeUrlRequest(
     val url: String
 )
@@ -70,16 +65,6 @@ data class XiaohongshuSummaryItem(
     val title: String,
     @Json(name = "source_url") val sourceUrl: String,
     @Json(name = "summary_markdown") val summaryMarkdown: String
-)
-
-data class XiaohongshuSyncData(
-    @Json(name = "requested_limit") val requestedLimit: Int,
-    @Json(name = "fetched_count") val fetchedCount: Int,
-    @Json(name = "new_count") val newCount: Int,
-    @Json(name = "skipped_count") val skippedCount: Int,
-    @Json(name = "failed_count") val failedCount: Int,
-    @Json(name = "circuit_opened") val circuitOpened: Boolean,
-    val summaries: List<XiaohongshuSummaryItem>
 )
 
 data class XiaohongshuNotesSaveRequest(
@@ -107,11 +92,6 @@ data class NotesSaveBatchData(
     @Json(name = "saved_count") val savedCount: Int
 )
 
-data class XiaohongshuSyncedNotesPruneData(
-    @Json(name = "candidate_count") val candidateCount: Int,
-    @Json(name = "deleted_count") val deletedCount: Int
-)
-
 data class XiaohongshuCaptureRefreshData(
     @Json(name = "har_path") val harPath: String,
     @Json(name = "request_url_host") val requestUrlHost: String,
@@ -134,63 +114,10 @@ data class XiaohongshuAuthUpdateData(
     @Json(name = "cookie_pairs") val cookiePairs: Int
 )
 
-data class XiaohongshuSyncCooldownData(
-    val mode: String,
-    val allowed: Boolean,
-    @Json(name = "remaining_seconds") val remainingSeconds: Int,
-    @Json(name = "next_allowed_at_epoch") val nextAllowedAtEpoch: Int,
-    @Json(name = "last_sync_at_epoch") val lastSyncAtEpoch: Int,
-    @Json(name = "min_interval_seconds") val minIntervalSeconds: Int
-)
-
-data class XiaohongshuPendingCountData(
-    val mode: String,
-    @Json(name = "pending_count") val pendingCount: Int,
-    @Json(name = "scanned_count") val scannedCount: Int
-)
-
 data class EditableConfigData(
     val settings: Map<String, Any?>
 )
 
 data class EditableConfigUpdateRequest(
     val settings: Map<String, Any?>
-)
-
-data class XiaohongshuSyncJobCreateData(
-    @Json(name = "job_id") val jobId: String,
-    val status: String,
-    @Json(name = "requested_limit") val requestedLimit: Int
-)
-
-data class XiaohongshuSyncJobAckRequest(
-    @Json(name = "note_ids") val noteIds: List<String>
-)
-
-data class XiaohongshuSyncJobAckData(
-    @Json(name = "job_id") val jobId: String,
-    val status: String,
-    @Json(name = "requested_count") val requestedCount: Int,
-    @Json(name = "acked_count") val ackedCount: Int,
-    @Json(name = "already_acked_count") val alreadyAckedCount: Int,
-    @Json(name = "missing_note_ids") val missingNoteIds: List<String>,
-    @Json(name = "acked_note_ids") val ackedNoteIds: List<String>,
-)
-
-data class XiaohongshuSyncJobError(
-    val code: String,
-    val message: String,
-    val details: Map<String, Any?>? = null
-)
-
-data class XiaohongshuSyncJobStatusData(
-    @Json(name = "job_id") val jobId: String,
-    val status: String,
-    @Json(name = "requested_limit") val requestedLimit: Int,
-    val current: Int,
-    val total: Int,
-    val message: String,
-    val summaries: List<XiaohongshuSummaryItem> = emptyList(),
-    val result: XiaohongshuSyncData?,
-    val error: XiaohongshuSyncJobError?
 )

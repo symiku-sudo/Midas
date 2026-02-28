@@ -24,5 +24,5 @@ Use the following list as the imported skill registry for this repository.
 ## Midas Scope
 - 项目目标：个人多模态知识库助手（Midas）。
 - 当前主开发目录：`server/`（FastAPI 服务端）。
-- 关键接口：`/health`、`/api/bilibili/summarize`、`/api/xiaohongshu/sync`。
+- 关键接口：`/health`、`/api/bilibili/summarize`、`/api/xiaohongshu/summarize-url`。
 - 核心文档：`README.md`、`server/README.md`、`server/API_CONTRACT.md`。
