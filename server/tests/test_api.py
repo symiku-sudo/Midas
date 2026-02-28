@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 from pathlib import Path
 
 import app.api.routes as routes_module
@@ -17,14 +18,31 @@ from app.main import app
 client = TestClient(app)
 
 
+def _notes_db_path() -> Path:
+    return Path(get_settings().xiaohongshu.db_path)
+
+
+def _notes_backup_dir() -> Path:
+    return _notes_db_path().parent / "backups"
+
+
+def _timestamped_backup_files() -> list[Path]:
+    db_path = _notes_db_path()
+    files = sorted(_notes_backup_dir().glob(f"{db_path.stem}_*.db"))
+    return [path for path in files if not path.name.endswith("_latest.db")]
+
+
 def _reset_xiaohongshu_state() -> None:
     _get_editable_config_service.cache_clear()
     _get_note_library_service.cache_clear()
     _get_xiaohongshu_sync_service.cache_clear()
     get_settings.cache_clear()
-    db_path = Path(get_settings().xiaohongshu.db_path)
+    db_path = _notes_db_path()
     if db_path.exists():
         db_path.unlink()
+    backup_dir = _notes_backup_dir()
+    if backup_dir.exists():
+        shutil.rmtree(backup_dir)
 
 
 def test_health_ok() -> None:
@@ -81,6 +99,13 @@ def test_bilibili_saved_notes_crud() -> None:
     assert save_body["ok"] is True
     note_id = save_body["data"]["note_id"]
     assert note_id
+    backup_files = _timestamped_backup_files()
+    assert len(backup_files) == 1
+    assert backup_files[0].is_file()
+    db_path = _notes_db_path()
+    suffix = db_path.suffix or ".db"
+    latest_backup = _notes_backup_dir() / f"{db_path.stem}_latest{suffix}"
+    assert latest_backup.exists()
 
     listed = client.get("/api/notes/bilibili")
     assert listed.status_code == 200
@@ -116,6 +141,9 @@ def test_xiaohongshu_saved_notes_crud_and_dedupe_independent() -> None:
     )
     assert save_resp.status_code == 200
     assert save_resp.json()["data"]["saved_count"] == 1
+    backup_files = _timestamped_backup_files()
+    assert len(backup_files) == 1
+    assert backup_files[0].is_file()
 
     listed = client.get("/api/notes/xiaohongshu")
     assert listed.status_code == 200

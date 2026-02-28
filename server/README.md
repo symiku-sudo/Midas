@@ -211,6 +211,7 @@ curl -X POST http://127.0.0.1:8000/api/config/editable/reset
 - Synced note IDs persist in `xiaohongshu.db_path` (default `.tmp/midas.db`).
 - 单篇 URL 总结成功后会自动把 `note_id` 写入去重表。
 - 删除“已保存小红书笔记”不会删除去重表中的 `note_id`，后续按 URL 总结仍会复用已处理状态。
+- 每次新增 B 站或小红书已保存笔记后，服务会自动备份一次数据库到 `.tmp/backups/`。
 - `web_readonly` 模式仍属于非官方接口回放，务必低频、低并发、只读请求，优先保护账号安全。
 
 ## Tests

@@ -20,6 +20,7 @@ description: 在 Midas 中实现新功能或增强能力。适用于新增接口
   - `server/API_CONTRACT.md`
   - `server/README.md`
 - 影响使用方式时，必须更新根 `README.md`。
+- 涉及数据持久化时必须保护备份目录：默认不得删除/覆盖 `server/.tmp/backups/` 下的 `.db` 备份文件（含 `*_latest.db`）。
 
 ## 最低交付
 - 代码改动

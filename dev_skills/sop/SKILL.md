@@ -27,9 +27,11 @@ description: Midas 标准作业流程（SOP）。用于功能开发、缺陷修�
 2. 验证重启后仍读取同一份数据文件（至少对比路径 + 记录条数）。
 3. 若存在 `DELETE/clear/reset` 能力，默认增加显式确认（双确认文案或参数）。
 4. 在交付说明中附“数据影响评估”：是否可能导致“看起来像被清空”。
+5. 保护备份文件：默认不得删除/覆盖 `server/.tmp/backups/` 下的 `.db` 备份（含 `*_latest.db`），除非用户明确授权并记录影响评估。
 
 ## Midas 项目约束
 - 统一响应协议不可破坏：`ok/code/message/data/request_id`。
 - 关键错误码要可被客户端区分：`INVALID_INPUT`、`AUTH_EXPIRED`、`RATE_LIMITED`、`CIRCUIT_OPEN`、`UPSTREAM_ERROR`、`INTERNAL_ERROR`。
 - 任何 API 变更必须同步更新：`server/API_CONTRACT.md`。
 - 阶段收尾必须同步更新：`README.md` 与 `server/README.md`（按改动范围）。
+- 备份保护是硬约束：清理/重置脚本必须默认保留 `server/.tmp/backups/`，若要删除必须显式二次确认并在交付说明中写明。

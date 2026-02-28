@@ -20,3 +20,4 @@ description: 在不改变外部行为的前提下优化 Midas 代码结构与可
 - 不引入无关功能。
 - 不顺手改业务逻辑。
 - 如涉及接口层重构，必须回归验证 `health`、`bilibili`、`xiaohongshu` 路由。
+- 如涉及数据层或清理脚本重构，必须保护 `server/.tmp/backups/` 备份目录：默认不得删除/覆盖 `.db` 备份文件（含 `*_latest.db`）。

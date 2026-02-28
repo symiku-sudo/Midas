@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sqlite3
+import shutil
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -9,6 +11,8 @@ class NoteLibraryRepository:
     def __init__(self, db_path: str) -> None:
         self._db_path = Path(db_path).expanduser()
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        self._backup_dir = self._db_path.parent / "backups"
+        self._backup_dir.mkdir(parents=True, exist_ok=True)
         self._init_tables()
 
     def _connect(self) -> sqlite3.Connection:
@@ -81,6 +85,20 @@ class NoteLibraryRepository:
                 ),
             )
             conn.commit()
+
+    def backup_database(self) -> Path:
+        suffix = self._db_path.suffix or ".db"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        backup_path = self._backup_dir / f"{self._db_path.stem}_{timestamp}{suffix}"
+
+        with self._connect() as source_conn:
+            with sqlite3.connect(str(backup_path)) as backup_conn:
+                source_conn.backup(backup_conn)
+                backup_conn.commit()
+
+        latest_path = self._backup_dir / f"{self._db_path.stem}_latest{suffix}"
+        shutil.copy2(backup_path, latest_path)
+        return backup_path
 
     def list_bilibili_notes(self) -> list[dict[str, Any]]:
         with self._connect() as conn:

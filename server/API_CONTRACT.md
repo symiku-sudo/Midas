@@ -63,6 +63,9 @@ Success `data`:
 }
 ```
 
+说明：
+- 保存成功后会自动备份一次笔记数据库到 `server/.tmp/backups/`。
+
 ## `POST /api/notes/bilibili/save`
 
 用途：手动保存一次 B 站总结结果到笔记库。
@@ -92,6 +95,9 @@ Success `data`:
   "saved_at": "2026-02-25 13:20:00"
 }
 ```
+
+说明：
+- 保存成功后会自动备份一次笔记数据库到 `server/.tmp/backups/`。
 
 ## `GET /api/notes/bilibili`
 

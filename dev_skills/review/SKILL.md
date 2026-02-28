@@ -10,6 +10,7 @@ description: 对 Midas 改动做结构化评审，重点关注正确性、风险
 - 错误处理与错误码一致性
 - 安全与敏感信息处理
 - 配置与可运维性
+- 备份保护：是否误删/覆盖 `server/.tmp/backups/` 下 `.db` 备份（含 `*_latest.db`）
 - 测试覆盖和回归风险
 - 文档一致性（README/API_CONTRACT/WEEKLY_PROGRESS）
 

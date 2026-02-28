@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 
 from app.core.config import Settings
@@ -12,6 +13,8 @@ from app.models.schemas import (
     XiaohongshuSummaryItem,
 )
 from app.repositories.note_repo import NoteLibraryRepository
+
+logger = logging.getLogger(__name__)
 
 
 class NoteLibraryService:
@@ -48,6 +51,7 @@ class NoteLibraryService:
             elapsed_ms=elapsed_ms,
             transcript_chars=transcript_chars,
         )
+        self._backup_database_after_note_save()
         items = self._repository.list_bilibili_notes()
         for item in items:
             if item["note_id"] == note_id:
@@ -83,7 +87,10 @@ class NoteLibraryService:
             }
             for item in notes
         ]
-        return self._repository.save_xiaohongshu_notes(payload)
+        saved_count = self._repository.save_xiaohongshu_notes(payload)
+        if saved_count > 0:
+            self._backup_database_after_note_save()
+        return saved_count
 
     def list_xiaohongshu_notes(self) -> XiaohongshuSavedNotesData:
         items = [
@@ -122,3 +129,10 @@ class NoteLibraryService:
             if text:
                 return text[:200]
         return f"B站总结 {video_url}"[:200]
+
+    def _backup_database_after_note_save(self) -> None:
+        try:
+            backup_path = self._repository.backup_database()
+            logger.info("Note database backup created: %s", backup_path)
+        except Exception:
+            logger.exception("Failed to backup note database after save.")
