@@ -1403,7 +1403,7 @@ async def test_web_readonly_page_fallback_extracts_content_and_images(monkeypatc
     assert notes[0].title == "页面标题"
     assert notes[0].content == "页面正文"
     assert notes[0].image_urls == ["https://sns-webpic-qc.xhscdn.com/page-1"]
-    assert len(_FakeClient.calls) == 2
+    assert len(_FakeClient.calls) == 3
     assert any("/explore/n2" in url for url in _FakeClient.calls)
 
 
@@ -1507,7 +1507,7 @@ async def test_web_readonly_detail_fetch_extracts_content_and_images(monkeypatch
         "https://sns-webpic-qc.xhscdn.com/detail-2",
         "https://sns-webpic-qc.xhscdn.com/cover-1",
     ]
-    assert len(_FakeClient.calls) == 3
+    assert len(_FakeClient.calls) == 4
     assert any("/explore/n1" in url for url in _FakeClient.calls)
     assert any("/note/detail?" in url for url in _FakeClient.calls)
 
@@ -1783,6 +1783,189 @@ async def test_web_readonly_fallback_items_path_and_note_card_shape(monkeypatch)
     assert notes[0].title == "回退路径标题"
     assert notes[0].content == "回退路径正文"
     assert notes[0].image_urls == ["https://sns-webpic-qc.xhscdn.com/fallback-1"]
+
+
+@pytest.mark.asyncio
+async def test_web_readonly_empty_notes_list_is_not_treated_as_error(monkeypatch) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=".tmp/test-midas.db",
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
+                request_method="GET",
+                request_headers={"Cookie": "a=b"},
+                items_path="data.notes",
+                note_id_field="note_id",
+                title_field="title",
+                content_field_candidates=["desc"],
+                detail_fetch_mode="never",
+            ),
+        )
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+
+    class _FakeResp:
+        status_code = 200
+
+        @staticmethod
+        def json():
+            return {"data": {"notes": [], "has_more": False}}
+
+    class _FakeClient:
+        def __init__(self, *_, **__):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, **_):
+            return _FakeResp()
+
+    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeClient)
+
+    notes = await source.fetch_recent(limit=5)
+    assert notes == []
+
+
+@pytest.mark.asyncio
+async def test_web_readonly_empty_notes_list_with_guest_cookie_raises_auth_expired(
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=".tmp/test-midas.db",
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url=(
+                    "https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page?"
+                    "num=30&cursor=&user_id=old-user"
+                ),
+                request_method="GET",
+                request_headers={"Cookie": "a=b"},
+                items_path="data.notes",
+                note_id_field="note_id",
+                title_field="title",
+                content_field_candidates=["desc"],
+                detail_fetch_mode="never",
+            ),
+        )
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+
+    class _FakeResp:
+        def __init__(self, payload: dict) -> None:
+            self.status_code = 200
+            self._payload = payload
+
+        def json(self) -> dict:
+            return self._payload
+
+    class _FakeClient:
+        def __init__(self, *_, **__):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, **kwargs):
+            url = kwargs["url"]
+            if "/api/sns/web/v2/user/me" in url:
+                return _FakeResp({"code": 0, "success": True, "data": {"guest": True}})
+            return _FakeResp({"code": 0, "success": True, "data": {"notes": []}})
+
+    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeClient)
+
+    with pytest.raises(AppError) as exc_info:
+        await source.fetch_recent(limit=5)
+    assert exc_info.value.code == ErrorCode.AUTH_EXPIRED
+    assert "游客态" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_web_readonly_empty_notes_list_with_user_id_mismatch_raises_auth_expired(
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=".tmp/test-midas.db",
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url=(
+                    "https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page?"
+                    "num=30&cursor=&user_id=old-user"
+                ),
+                request_method="GET",
+                request_headers={"Cookie": "a=b"},
+                items_path="data.notes",
+                note_id_field="note_id",
+                title_field="title",
+                content_field_candidates=["desc"],
+                detail_fetch_mode="never",
+            ),
+        )
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+
+    class _FakeResp:
+        def __init__(self, payload: dict) -> None:
+            self.status_code = 200
+            self._payload = payload
+
+        def json(self) -> dict:
+            return self._payload
+
+    class _FakeClient:
+        def __init__(self, *_, **__):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, **kwargs):
+            url = kwargs["url"]
+            if "/api/sns/web/v2/user/me" in url:
+                return _FakeResp(
+                    {
+                        "code": 0,
+                        "success": True,
+                        "data": {"guest": False, "user_id": "current-user"},
+                    }
+                )
+            return _FakeResp({"code": 0, "success": True, "data": {"notes": []}})
+
+    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeClient)
+
+    with pytest.raises(AppError) as exc_info:
+        await source.fetch_recent(limit=5)
+    assert exc_info.value.code == ErrorCode.AUTH_EXPIRED
+    assert "user_id 不一致" in exc_info.value.message
+    assert exc_info.value.details == {
+        "configured_user_id": "old-user",
+        "current_user_id": "current-user",
+    }
+
+
+def test_build_playwright_collect_page_url_prefers_live_user_id_override() -> None:
+    source = XiaohongshuWebReadonlySource(Settings())
+    url = source._build_playwright_collect_page_url(
+        request_url=(
+            "https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page?"
+            "num=30&cursor=&user_id=old-user"
+        ),
+        template="https://www.xiaohongshu.com/user/profile/{user_id}?tab=collect",
+        user_id_override="new-user",
+    )
+    assert url == "https://www.xiaohongshu.com/user/profile/new-user?tab=collect"
 
 
 def test_live_sync_cooldown_allowed_when_no_history(tmp_path) -> None:

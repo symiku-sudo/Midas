@@ -6,6 +6,7 @@ import os
 from functools import lru_cache
 from urllib.parse import urlparse
 
+import httpx
 from fastapi import APIRouter, Request
 
 from app.core.config import clear_settings_cache, get_settings
@@ -89,6 +90,75 @@ def _count_cookie_pairs(raw_cookie: str) -> int:
         if token and "=" in token:
             pairs += 1
     return pairs
+
+
+def _coerce_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "y"}:
+            return True
+        if normalized in {"0", "false", "no", "n"}:
+            return False
+    return None
+
+
+async def _probe_xiaohongshu_web_identity(
+    *,
+    cookie: str,
+    user_agent: str,
+    origin: str,
+    referer: str,
+) -> tuple[str, bool] | None:
+    settings = get_settings()
+    request_url = settings.xiaohongshu.web_readonly.request_url.strip()
+    if not request_url:
+        return None
+
+    host = urlparse(request_url).netloc.strip().lower()
+    if not host:
+        return None
+
+    headers: dict[str, str] = {
+        "Cookie": cookie,
+        "User-Agent": user_agent,
+        "Accept": "application/json, text/plain, */*",
+    }
+    if origin:
+        headers["Origin"] = origin
+    if referer:
+        headers["Referer"] = referer
+
+    url = f"https://{host}/api/sns/web/v2/user/me"
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get(url, headers=headers)
+    except httpx.HTTPError:
+        return None
+
+    if response.status_code in {401, 403}:
+        return "", True
+    if response.status_code >= 400:
+        return None
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return None
+    user_id = str(data.get("user_id", "") or "").strip()
+    guest = _coerce_bool(data.get("guest"))
+    if guest is None:
+        return None
+    return user_id, guest
 
 
 @router.get("/health")
@@ -256,6 +326,26 @@ async def update_xiaohongshu_auth(
         if value:
             os.environ[key] = value
     _reload_runtime_services()
+
+    identity = await _probe_xiaohongshu_web_identity(
+        cookie=cookie,
+        user_agent=updates.get("XHS_HEADER_USER_AGENT", ""),
+        origin=updates.get("XHS_HEADER_ORIGIN", ""),
+        referer=updates.get("XHS_HEADER_REFERER", ""),
+    )
+    if identity is not None:
+        user_id, guest = identity
+        if guest:
+            details = {"user_id": user_id} if user_id else None
+            raise AppError(
+                code=ErrorCode.AUTH_EXPIRED,
+                message=(
+                    "上传的 Cookie 仍是游客态。"
+                    "请使用“内置授权(可回传)”完成登录后再上传。"
+                ),
+                status_code=401,
+                details=details,
+            )
 
     data = XiaohongshuAuthUpdateData(
         updated_keys=sorted(updates.keys()),

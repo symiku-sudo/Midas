@@ -492,6 +492,30 @@ def test_xiaohongshu_auth_update_rejects_empty_cookie() -> None:
         assert body["code"] == "INVALID_INPUT"
 
 
+def test_xiaohongshu_auth_update_rejects_guest_identity(monkeypatch) -> None:
+    _reset_xiaohongshu_state()
+
+    async def _fake_probe(**_kwargs):
+        return "guest-user-id", True
+
+    monkeypatch.setattr(routes_module, "_probe_xiaohongshu_web_identity", _fake_probe)
+
+    resp = client.post(
+        "/api/xiaohongshu/auth/update",
+        json={
+            "cookie": "a=1; b=2",
+            "user_agent": "Mozilla/5.0 (Linux; Android 14)",
+            "origin": "https://www.xiaohongshu.com",
+            "referer": "https://www.xiaohongshu.com/",
+        },
+    )
+    assert resp.status_code == 401
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["code"] == "AUTH_EXPIRED"
+    assert "游客态" in body["message"]
+
+
 def test_editable_config_update_and_reset(tmp_path) -> None:
     original_config_path = os.environ.get("MIDAS_CONFIG_PATH", "")
     source_config = Path(original_config_path)

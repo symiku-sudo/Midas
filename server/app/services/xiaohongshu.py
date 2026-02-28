@@ -93,6 +93,12 @@ class _PlaywrightCollectResponse:
     payload: dict[str, Any] | None
 
 
+@dataclass(frozen=True)
+class _WebUserIdentity:
+    user_id: str
+    guest: bool
+
+
 class MockXiaohongshuSource:
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -541,9 +547,17 @@ class XiaohongshuWebReadonlySource:
         seen_page_tokens: set[tuple[str, str | None]] = set()
         emitted_any = False
         page_count = 0
+        raw_records_count = 0
         stopped_by_page_limit = False
+        configured_user_id = self._extract_request_user_id(request_url)
+        user_identity: _WebUserIdentity | None = None
 
         async with httpx.AsyncClient(timeout=timeout) as client:
+            user_identity = await self._fetch_web_user_identity(
+                client=client,
+                headers=headers,
+                request_url=request_url,
+            )
             while True:
                 payload = await self._request_json(
                     client=client,
@@ -564,6 +578,7 @@ class XiaohongshuWebReadonlySource:
                         status_code=502,
                     )
                 records, _resolved_path = resolved
+                raw_records_count += len(records)
 
                 notes: list[XiaohongshuNote] = []
                 for record in records:
@@ -620,6 +635,32 @@ class XiaohongshuWebReadonlySource:
                 seen_page_tokens.add(page_token)
 
         if not emitted_any and not stopped_by_page_limit:
+            if page_count > 0 and raw_records_count == 0:
+                if user_identity is not None and user_identity.guest:
+                    raise AppError(
+                        code=ErrorCode.AUTH_EXPIRED,
+                        message="当前 Cookie 仍是游客态，无法读取收藏。请先完成登录并更新授权。",
+                        status_code=401,
+                    )
+                if (
+                    user_identity is not None
+                    and user_identity.user_id
+                    and configured_user_id
+                    and user_identity.user_id != configured_user_id
+                ):
+                    raise AppError(
+                        code=ErrorCode.AUTH_EXPIRED,
+                        message=(
+                            "当前登录账号与抓取配置 user_id 不一致，"
+                            "请更新 auth 配置后重试。"
+                        ),
+                        status_code=401,
+                        details={
+                            "configured_user_id": configured_user_id,
+                            "current_user_id": user_identity.user_id,
+                        },
+                    )
+                return
             raise AppError(
                 code=ErrorCode.UPSTREAM_ERROR,
                 message=(
@@ -692,9 +733,19 @@ class XiaohongshuWebReadonlySource:
         parsed_request_url = urlparse(request_url)
         collect_host = parsed_request_url.netloc
         collect_path = parsed_request_url.path
+        collect_user_id = ""
+        async with httpx.AsyncClient(timeout=timeout) as probe_client:
+            identity = await self._fetch_web_user_identity(
+                client=probe_client,
+                headers=headers,
+                request_url=request_url,
+            )
+            if identity is not None and (not identity.guest) and identity.user_id:
+                collect_user_id = identity.user_id
         collect_page_url = self._build_playwright_collect_page_url(
             request_url=request_url,
             template=cfg.playwright_collect_page_url_template,
+            user_id_override=collect_user_id,
         )
         self._assert_https_and_host(collect_page_url, cfg.host_allowlist)
 
@@ -1103,6 +1154,42 @@ class XiaohongshuWebReadonlySource:
                 return True
         return "HTTP 406" in exc.message
 
+    def _extract_request_user_id(self, request_url: str) -> str:
+        parsed = urlparse(request_url)
+        for key, value in parse_qsl(parsed.query, keep_blank_values=True):
+            if key.lower() == "user_id":
+                return value.strip()
+        return ""
+
+    async def _fetch_web_user_identity(
+        self,
+        *,
+        client: httpx.AsyncClient,
+        headers: dict[str, str],
+        request_url: str,
+    ) -> _WebUserIdentity | None:
+        parsed = urlparse(request_url)
+        host = parsed.netloc.strip().lower() or "edith.xiaohongshu.com"
+        identity_url = f"https://{host}/api/sns/web/v2/user/me"
+        try:
+            payload = await self._request_json(
+                client=client,
+                method="GET",
+                url=identity_url,
+                headers=headers,
+                body=None,
+            )
+        except AppError:
+            return None
+
+        user_id = self._read_str(payload, "data.user_id")
+        guest = self._coerce_bool(self._read_value(payload, "data.guest"))
+        if guest is None:
+            guest = False
+        if not user_id and not guest:
+            return None
+        return _WebUserIdentity(user_id=user_id, guest=guest)
+
     def _extract_request_cursor_from_url(self, request_url: str) -> str:
         parsed = urlparse(request_url)
         for key, value in parse_qsl(parsed.query, keep_blank_values=True):
@@ -1218,13 +1305,14 @@ class XiaohongshuWebReadonlySource:
             return False
         return True
 
-    def _build_playwright_collect_page_url(self, *, request_url: str, template: str) -> str:
-        parsed_request = urlparse(request_url)
-        user_id = ""
-        for key, value in parse_qsl(parsed_request.query, keep_blank_values=True):
-            if key.lower() == "user_id" and value.strip():
-                user_id = value.strip()
-                break
+    def _build_playwright_collect_page_url(
+        self,
+        *,
+        request_url: str,
+        template: str,
+        user_id_override: str = "",
+    ) -> str:
+        user_id = user_id_override.strip() or self._extract_request_user_id(request_url)
 
         tpl = template.strip()
         if tpl:
