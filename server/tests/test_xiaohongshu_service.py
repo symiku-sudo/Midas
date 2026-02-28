@@ -786,6 +786,108 @@ async def test_web_readonly_fetch_note_by_url_resolves_xhslink(
 
 
 @pytest.mark.asyncio
+async def test_web_readonly_fetch_note_by_url_resolves_xhslink_when_final_url_is_not_note(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=str(tmp_path / "midas.db"),
+            min_live_sync_interval_seconds=0,
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://www.xiaohongshu.com/api/some/path"
+            ),
+        )
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+
+    class _FakeResponse:
+        url = "https://www.xiaohongshu.com/explore"
+        text = (
+            '{"jump":"https:\\/\\/www.xiaohongshu.com\\/discovery\\/item\\/abc123"}'
+        )
+
+    class _FakeAsyncClient:
+        def __init__(self, *_, **__):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def get(self, *_args, **_kwargs):
+            return _FakeResponse()
+
+    async def _fake_extract_note_from_record(*_args, **_kwargs):
+        return XiaohongshuNote(
+            note_id="abc123",
+            title="短链回退解析测试",
+            content="正文",
+            source_url="https://www.xiaohongshu.com/discovery/item/abc123",
+        )
+
+    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr(
+        XiaohongshuWebReadonlySource,
+        "_extract_note_from_record",
+        _fake_extract_note_from_record,
+    )
+
+    note = await source.fetch_note_by_url("http://xhslink.com/o/eNmdwzRjEI")
+    assert note.note_id == "abc123"
+    assert note.source_url == "https://www.xiaohongshu.com/discovery/item/abc123"
+
+
+def test_extract_note_id_from_url_supports_note_and_notes_paths(tmp_path) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=str(tmp_path / "midas.db"),
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://www.xiaohongshu.com/api/some/path"
+            ),
+        )
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+
+    assert (
+        source.extract_note_id_from_url("https://www.xiaohongshu.com/note/abc123")
+        == "abc123"
+    )
+    assert (
+        source.extract_note_id_from_url("https://www.xiaohongshu.com/notes/xyz987")
+        == "xyz987"
+    )
+
+
+def test_build_note_page_url_inherits_xsec_token_from_source_url_query(tmp_path) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=str(tmp_path / "midas.db"),
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://www.xiaohongshu.com/api/some/path"
+            ),
+        )
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+
+    built = source._build_note_page_url(
+        note_id="abc123",
+        source_url=(
+            "https://www.xiaohongshu.com/discovery/item/abc123"
+            "?xsec_token=token-1&xsec_source=app_share"
+        ),
+        record={},
+    )
+    assert "xsec_token=token-1" in built
+    assert "xsec_source=app_share" in built
+
+
+@pytest.mark.asyncio
 async def test_web_readonly_skip_does_not_consume_requested_limit(tmp_path) -> None:
     settings = Settings(
         xiaohongshu=XiaohongshuConfig(

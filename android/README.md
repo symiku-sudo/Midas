@@ -10,7 +10,7 @@
 - 小红书单篇 URL 总结（`/api/xiaohongshu/summarize-url`）
 - 小红书单篇总结保存到笔记库（`/api/notes/xiaohongshu/save-batch`，按单篇触发）
 - 笔记库阅读/检索、单条删除与分组清空（B站/小红书独立）
-- 小红书 auth 刷新与浏览器授权辅助（用于单篇总结前准备登录态）
+- 小红书 auth 刷新（用于单篇总结前准备登录态）
 - 错误码场景化提示（`AUTH_EXPIRED` / `RATE_LIMITED` / `CIRCUIT_OPEN` 等）
 - Markdown 渲染展示（Markwon）
 

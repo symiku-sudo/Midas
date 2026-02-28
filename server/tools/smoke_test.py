@@ -32,8 +32,10 @@ def run_smoke(
         results.append(check_health(client))
         results.append(check_bilibili_invalid_input(client))
 
-        if profile in {"mock", "web_guard"}:
+        if profile == "mock":
             results.append(check_xhs_summarize_url_mock(client))
+        elif profile == "web_guard":
+            results.append(check_xhs_summarize_url_guard(client))
         else:
             results.append(
                 CheckResult(
@@ -132,6 +134,37 @@ def check_xhs_summarize_url_mock(client: httpx.Client) -> CheckResult:
     )
 
 
+def check_xhs_summarize_url_guard(client: httpx.Client) -> CheckResult:
+    # In web_guard mode we avoid live upstream dependency by asserting
+    # endpoint-level INVALID_INPUT guard on a non-xiaohongshu URL.
+    invalid_url = "https://example.com/not-xhs-note"
+    try:
+        resp = client.post("/api/xiaohongshu/summarize-url", json={"url": invalid_url})
+    except httpx.HTTPError as exc:
+        return CheckResult(name="xhs.summarize_url.guard", status="fail", message=str(exc))
+
+    body = _parse_json(resp)
+    if body is None:
+        return CheckResult(
+            name="xhs.summarize_url.guard",
+            status="fail",
+            message="响应不是 JSON。",
+        )
+
+    if resp.status_code == 400 and body.get("code") == "INVALID_INPUT":
+        return CheckResult(
+            name="xhs.summarize_url.guard",
+            status="pass",
+            message="web_guard 模式下 URL 输入校验正常。",
+        )
+
+    return CheckResult(
+        name="xhs.summarize_url.guard",
+        status="fail",
+        message=f"期望 INVALID_INPUT，实际 {resp.status_code} / {body.get('code')}",
+    )
+
+
 def summarize_results(results: list[CheckResult]) -> tuple[int, int]:
     pass_count = sum(1 for item in results if item.status == "pass")
     fail_count = sum(1 for item in results if item.status == "fail")
@@ -173,7 +206,7 @@ def main() -> int:
         type=str,
         default="mock",
         choices=["mock", "web_guard"],
-        help="冒烟配置档位（当前两种 profile 执行相同检查）。",
+        help="mock: 验证 mock URL 可总结；web_guard: 验证 URL 输入保护。",
     )
     args = parser.parse_args()
 

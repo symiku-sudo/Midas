@@ -7,6 +7,7 @@ import httpx
 from tools.smoke_test import (
     check_bilibili_invalid_input,
     check_health,
+    check_xhs_summarize_url_guard,
     check_xhs_summarize_url_mock,
 )
 
@@ -102,3 +103,44 @@ def test_check_xhs_summarize_url_mock_fail_on_unexpected_status() -> None:
         result = check_xhs_summarize_url_mock(client)
     assert result.status == "fail"
     assert "期望 200" in result.message
+
+
+def test_check_xhs_summarize_url_guard_pass() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/api/xiaohongshu/summarize-url":
+            return httpx.Response(
+                400,
+                json={
+                    "ok": False,
+                    "code": "INVALID_INPUT",
+                    "message": "仅支持小红书 URL",
+                    "data": None,
+                    "request_id": "r5",
+                },
+            )
+        return httpx.Response(404, json={})
+
+    with _client_with_handler(handler) as client:
+        result = check_xhs_summarize_url_guard(client)
+    assert result.status == "pass"
+
+
+def test_check_xhs_summarize_url_guard_fail_on_unexpected_status() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "POST" and request.url.path == "/api/xiaohongshu/summarize-url":
+            return httpx.Response(
+                200,
+                json={
+                    "ok": True,
+                    "code": "OK",
+                    "message": "",
+                    "data": {"note_id": "x", "summary_markdown": "y"},
+                    "request_id": "r6",
+                },
+            )
+        return httpx.Response(404, json={})
+
+    with _client_with_handler(handler) as client:
+        result = check_xhs_summarize_url_guard(client)
+    assert result.status == "fail"
+    assert "期望 INVALID_INPUT" in result.message

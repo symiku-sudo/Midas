@@ -68,8 +68,6 @@ private enum class MainTab(val title: String) {
     SETTINGS("设置"),
 }
 
-private const val XHS_AUTH_ENTRY_URL = "https://www.xiaohongshu.com/explore"
-
 private enum class ConfigControlKind {
     TEXT,
     SWITCH,
@@ -891,7 +889,6 @@ private fun XiaohongshuPanel(
     onSaveSingleNote: (XiaohongshuSummaryItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val context = LocalContext.current
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -904,33 +901,26 @@ private fun XiaohongshuPanel(
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
-        Button(
-            onClick = onSummarizeUrl,
-            enabled = !state.isSummarizingUrl,
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            SingleLineActionText(if (state.isSummarizingUrl) "总结中..." else "总结单篇")
-        }
-        Button(
-            onClick = onRefreshAuthConfig,
-            enabled = !state.isRefreshingCaptureConfig,
-            modifier = Modifier.testTag("xhs_refresh_auth_button"),
-        ) {
-            SingleLineActionText(if (state.isRefreshingCaptureConfig) "更新中..." else "更新Auth(兜底)")
-        }
-        Button(
-            onClick = {
-                val browserIntent = Intent(
-                    Intent.ACTION_VIEW,
-                    Uri.parse(XHS_AUTH_ENTRY_URL),
-                ).apply {
-                    addCategory(Intent.CATEGORY_BROWSABLE)
-                }
-                runCatching { context.startActivity(browserIntent) }
-            },
-            enabled = !state.isRefreshingCaptureConfig,
-            modifier = Modifier.testTag("xhs_browser_auth_button"),
-        ) {
-            SingleLineActionText("浏览器授权")
+            Button(
+                onClick = onSummarizeUrl,
+                enabled = !state.isSummarizingUrl,
+                modifier = Modifier.weight(1f),
+            ) {
+                SingleLineActionText(if (state.isSummarizingUrl) "总结中..." else "总结单篇")
+            }
+            Button(
+                onClick = onRefreshAuthConfig,
+                enabled = !state.isRefreshingCaptureConfig,
+                modifier = Modifier
+                    .weight(1f)
+                    .testTag("xhs_refresh_auth_button"),
+            ) {
+                SingleLineActionText(if (state.isRefreshingCaptureConfig) "更新中..." else "更新Auth(兜底)")
+            }
         }
         Text(
             text = "优先读取默认 HAR，失败后回退默认 cURL，自动更新小红书请求头。",
@@ -938,7 +928,7 @@ private fun XiaohongshuPanel(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
-            text = "请在系统浏览器完成登录/验证，返回后再执行单篇总结。",
+            text = "若单篇总结失败，请先点击“更新Auth(兜底)”刷新登录态后重试。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )

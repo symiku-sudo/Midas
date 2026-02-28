@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from http.cookies import SimpleCookie
 from pathlib import Path
 from typing import Any, AsyncIterator, Awaitable, Callable, Iterator
-from urllib.parse import parse_qsl, quote, unquote, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlencode, urlparse, urlunparse
 
 import httpx
 
@@ -222,11 +222,13 @@ class XiaohongshuWebReadonlySource:
     )
     _SHORT_LINK_HOSTS = frozenset({"xhslink.com", "www.xhslink.com"})
     _NOTE_URL_IN_TEXT_PATTERN = re.compile(
-        r"https?://www\.xiaohongshu\.com/(?:explore|discovery/item)/[A-Za-z0-9_-]+",
+        r"https?://(?:www\.)?xiaohongshu\.com/"
+        r"(?:explore|discovery/item|note|notes)/[A-Za-z0-9_-]+",
         re.I,
     )
     _NOTE_URL_ENCODED_PATTERN = re.compile(
-        r"https%3A%2F%2Fwww\.xiaohongshu\.com%2F(?:explore|discovery%2Fitem)%2F[A-Za-z0-9_%\-]+",
+        r"https%3A%2F%2F(?:www\.)?xiaohongshu\.com%2F"
+        r"(?:explore|discovery%2Fitem|note|notes)%2F[A-Za-z0-9_%\-]+",
         re.I,
     )
 
@@ -374,15 +376,16 @@ class XiaohongshuWebReadonlySource:
 
         final_url = str(getattr(response, "url", "") or "").strip()
         if final_url:
-            try:
-                return self.normalize_note_url(final_url)
-            except AppError:
-                pass
+            normalized_final = self._normalize_resolved_note_url(final_url)
+            if normalized_final:
+                return normalized_final
 
         response_text = str(getattr(response, "text", "") or "")
         extracted_url = self._extract_note_url_from_text(response_text)
         if extracted_url:
-            return self.normalize_note_url(extracted_url)
+            normalized_extracted = self._normalize_resolved_note_url(extracted_url)
+            if normalized_extracted:
+                return normalized_extracted
 
         raise AppError(
             code=ErrorCode.INVALID_INPUT,
@@ -390,20 +393,45 @@ class XiaohongshuWebReadonlySource:
             status_code=400,
         )
 
+    def _normalize_resolved_note_url(self, candidate_url: str) -> str | None:
+        raw = str(candidate_url or "").strip()
+        if not raw:
+            return None
+        try:
+            normalized = self.normalize_note_url(raw)
+            # Ensure resolved URL already points to a note page.
+            self.extract_note_id_from_url(normalized)
+            return normalized
+        except AppError:
+            return None
+
     def _extract_note_url_from_text(self, text: str) -> str:
         if not text:
             return ""
 
-        matched = self._NOTE_URL_IN_TEXT_PATTERN.search(text)
-        if matched is not None:
-            return matched.group(0).strip()
+        def _search(raw_text: str) -> str:
+            matched = self._NOTE_URL_IN_TEXT_PATTERN.search(raw_text)
+            if matched is not None:
+                return matched.group(0).strip()
 
-        encoded = self._NOTE_URL_ENCODED_PATTERN.search(text)
-        if encoded is not None:
+            encoded = self._NOTE_URL_ENCODED_PATTERN.search(raw_text)
+            if encoded is None:
+                return ""
             decoded = unquote(encoded.group(0))
             matched_decoded = self._NOTE_URL_IN_TEXT_PATTERN.search(decoded)
             if matched_decoded is not None:
                 return matched_decoded.group(0).strip()
+            return ""
+
+        direct = _search(text)
+        if direct:
+            return direct
+
+        # Some pages expose escaped URLs like https:\/\/www.xiaohongshu.com\/explore\/...
+        unescaped = text.replace("\\/", "/")
+        escaped_match = _search(unescaped)
+        if escaped_match:
+            return escaped_match
         return ""
 
     def extract_note_id_from_url(self, note_url: str) -> str:
@@ -418,10 +446,15 @@ class XiaohongshuWebReadonlySource:
             and segments[1] == "item"
         ):
             note_id = segments[2]
+        elif len(segments) >= 2 and segments[0] in {"note", "notes"}:
+            note_id = segments[1]
         if not note_id:
             raise AppError(
                 code=ErrorCode.INVALID_INPUT,
-                message="仅支持 /explore/<note_id> 或 /discovery/item/<note_id> 格式的小红书链接。",
+                message=(
+                    "仅支持 /explore/<note_id>、/discovery/item/<note_id>、"
+                    "/note/<note_id> 或 /notes/<note_id> 格式的小红书链接。"
+                ),
                 status_code=400,
             )
         return note_id.strip()
@@ -1926,12 +1959,24 @@ class XiaohongshuWebReadonlySource:
     def _build_note_page_url(self, *, note_id: str, source_url: str, record: dict) -> str:
         parsed_source = urlparse(source_url)
         if parsed_source.scheme == "https" and parsed_source.netloc == "www.xiaohongshu.com":
+            if parsed_source.query:
+                return urlunparse(parsed_source._replace(fragment=""))
             base_url = f"https://www.xiaohongshu.com{parsed_source.path or f'/explore/{note_id}'}"
         else:
             base_url = f"https://www.xiaohongshu.com/explore/{note_id}"
 
         xsec_token = self._read_str(record, "xsec_token")
         xsec_source = self._read_str(record, "xsec_source") or "pc_feed"
+        if not xsec_token and parsed_source.query:
+            query = parse_qs(parsed_source.query, keep_blank_values=True)
+            raw_token = query.get("xsec_token", [""])
+            raw_source = query.get("xsec_source", [""])
+            token_from_query = str(raw_token[0]).strip() if raw_token else ""
+            source_from_query = str(raw_source[0]).strip() if raw_source else ""
+            if token_from_query:
+                xsec_token = token_from_query
+            if source_from_query:
+                xsec_source = source_from_query
         if not xsec_token:
             return base_url
         return (
