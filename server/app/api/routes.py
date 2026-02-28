@@ -431,16 +431,24 @@ async def xiaohongshu_sync_create_job(
     requested_limit = payload.limit or settings.xiaohongshu.default_limit
     manager = _get_xiaohongshu_sync_job_manager()
     job = await manager.create_job(requested_limit=requested_limit)
-    asyncio.create_task(
+    sync_task = asyncio.create_task(
         _run_xiaohongshu_sync_job(
             job.job_id,
             payload.limit,
             payload.confirm_live,
         )
     )
+    status = job.status.value
+    if settings.xiaohongshu.mode.strip().lower() == "mock":
+        # In mock mode keep behavior deterministic for local/dev/testing:
+        # wait for the short task to finish in the same request lifecycle.
+        await sync_task
+        latest = await manager.get_job(job.job_id)
+        if latest is not None:
+            status = latest.status.value
     data = XiaohongshuSyncJobCreateData(
         job_id=job.job_id,
-        status=job.status.value,
+        status=status,
         requested_limit=requested_limit,
     )
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
@@ -562,6 +570,15 @@ async def _run_xiaohongshu_sync_job(
             progress_callback=_on_progress,
         )
         await manager.set_success(job_id, result=result)
+    except asyncio.CancelledError:
+        logger.warning("Xiaohongshu sync job cancelled, job=%s", job_id)
+        await manager.set_failed(
+            job_id,
+            code=ErrorCode.INTERNAL_ERROR.value,
+            message="同步任务被取消。",
+            details={"reason": "cancelled"},
+        )
+        raise
     except AppError as exc:
         details = exc.details if isinstance(exc.details, dict) else {}
         processed = int(details.get("processed_count", 0))
