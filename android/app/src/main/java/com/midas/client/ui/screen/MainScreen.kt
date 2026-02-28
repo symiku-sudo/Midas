@@ -2,14 +2,6 @@ package com.midas.client.ui.screen
 
 import android.net.Uri
 import android.content.Intent
-import android.graphics.Bitmap
-import android.view.MotionEvent
-import android.webkit.CookieManager
-import android.webkit.WebResourceError
-import android.webkit.WebResourceRequest
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -47,19 +39,15 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -82,9 +70,6 @@ private enum class MainTab(val title: String) {
 }
 
 private const val XHS_AUTH_ENTRY_URL = "https://www.xiaohongshu.com/explore"
-private const val XHS_AUTH_DESKTOP_UA =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36"
 
 private enum class ConfigControlKind {
     TEXT,
@@ -317,7 +302,6 @@ fun MainScreen(viewModel: MainViewModel) {
         onSaveXiaohongshuNotes = viewModel::saveCurrentXiaohongshuSummaries,
         onPruneXiaohongshuSyncedNoteIds = viewModel::pruneUnsavedXiaohongshuSyncedNotes,
         onRefreshXiaohongshuAuthConfig = viewModel::refreshXiaohongshuAuthConfig,
-        onSubmitXiaohongshuMobileAuth = viewModel::submitXiaohongshuMobileAuth,
         onSaveSingleXiaohongshuNote = viewModel::saveSingleXiaohongshuSummary,
         onNotesKeywordChange = viewModel::onNotesKeywordInputChange,
         onRefreshNotes = viewModel::loadSavedNotes,
@@ -353,7 +337,6 @@ fun MainScreenContent(
     onSaveXiaohongshuNotes: () -> Unit,
     onPruneXiaohongshuSyncedNoteIds: () -> Unit,
     onRefreshXiaohongshuAuthConfig: () -> Unit,
-    onSubmitXiaohongshuMobileAuth: (String, String) -> Unit = { _, _ -> },
     onSaveSingleXiaohongshuNote: (XiaohongshuSummaryItem) -> Unit,
     onNotesKeywordChange: (String) -> Unit,
     onRefreshNotes: () -> Unit,
@@ -474,7 +457,6 @@ fun MainScreenContent(
                         onSaveNotes = onSaveXiaohongshuNotes,
                         onPruneSyncedNoteIds = onPruneXiaohongshuSyncedNoteIds,
                         onRefreshAuthConfig = onRefreshXiaohongshuAuthConfig,
-                        onSubmitMobileAuth = onSubmitXiaohongshuMobileAuth,
                         onSaveSingleNote = onSaveSingleXiaohongshuNote,
                         modifier = Modifier
                             .fillMaxSize()
@@ -533,43 +515,6 @@ private fun formatCooldownText(seconds: Int): String {
         "%d:%02d:%02d".format(hours, minutes, secs)
     } else {
         "%02d:%02d".format(minutes, secs)
-    }
-}
-
-private fun handleExternalAuthNavigation(view: WebView?, rawUrl: String): Boolean {
-    if (rawUrl.isBlank()) {
-        return false
-    }
-    val uri = runCatching { Uri.parse(rawUrl) }.getOrNull() ?: return false
-    val scheme = uri.scheme?.lowercase().orEmpty()
-    if (scheme == "http" || scheme == "https") {
-        return false
-    }
-
-    if (scheme == "intent") {
-        val intent = runCatching {
-            Intent.parseUri(rawUrl, Intent.URI_INTENT_SCHEME)
-        }.getOrNull()
-        val fallback = intent?.getStringExtra("browser_fallback_url")
-        if (!fallback.isNullOrBlank()) {
-            val fallbackUri = runCatching { Uri.parse(fallback) }.getOrNull()
-            val fallbackScheme = fallbackUri?.scheme?.lowercase().orEmpty()
-            if (fallbackScheme == "http" || fallbackScheme == "https") {
-                view?.loadUrl(fallback)
-                return true
-            }
-        }
-        return true
-    }
-
-    // Keep auth page inside WebView and block app deep-link jumps.
-    return true
-}
-
-private fun recoverAuthWebPage(view: WebView?) {
-    if (view == null) return
-    if (view.url != XHS_AUTH_ENTRY_URL) {
-        view.post { view.loadUrl(XHS_AUTH_ENTRY_URL) }
     }
 }
 
@@ -976,7 +921,6 @@ private fun XiaohongshuPanel(
     onSaveNotes: () -> Unit,
     onPruneSyncedNoteIds: () -> Unit,
     onRefreshAuthConfig: () -> Unit,
-    onSubmitMobileAuth: (String, String) -> Unit,
     onSaveSingleNote: (XiaohongshuSummaryItem) -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -989,24 +933,6 @@ private fun XiaohongshuPanel(
         cooldownSeconds > 0 -> "同步收藏(${formatCooldownText(cooldownSeconds)})"
         else -> "同步收藏"
     }
-    var showEmbeddedAuthDialog by rememberSaveable { mutableStateOf(false) }
-    var embeddedAuthWebView by remember { mutableStateOf<WebView?>(null) }
-
-    fun closeEmbeddedAuthDialog() {
-        showEmbeddedAuthDialog = false
-        embeddedAuthWebView = null
-    }
-
-    fun submitEmbeddedCookie() {
-        val cookie = CookieManager
-            .getInstance()
-            .getCookie("https://www.xiaohongshu.com")
-            .orEmpty()
-        val userAgent = embeddedAuthWebView?.settings?.userAgentString.orEmpty()
-        onSubmitMobileAuth(cookie, userAgent)
-        closeEmbeddedAuthDialog()
-    }
-
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -1078,14 +1004,7 @@ private fun XiaohongshuPanel(
             enabled = !state.isRefreshingCaptureConfig && !state.isSyncing,
             modifier = Modifier.testTag("xhs_browser_auth_button"),
         ) {
-            SingleLineActionText("浏览器打开")
-        }
-        Button(
-            onClick = { showEmbeddedAuthDialog = true },
-            enabled = !state.isRefreshingCaptureConfig && !state.isSyncing,
-            modifier = Modifier.testTag("xhs_mobile_auth_button"),
-        ) {
-            SingleLineActionText("内置授权(可回传)")
+            SingleLineActionText("浏览器授权")
         }
         Text(
             text = "清理已被标记为“已同步”但你并未保存的笔记，下次同步时会重新尝试生成。",
@@ -1098,135 +1017,10 @@ private fun XiaohongshuPanel(
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
-            text = "外部浏览器仅用于打开页面；要上传可用登录态请使用“内置授权(可回传)”。",
+            text = "请在系统浏览器完成登录/验证，返回后再执行同步。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
-        if (showEmbeddedAuthDialog) {
-            Dialog(
-                onDismissRequest = { closeEmbeddedAuthDialog() },
-                properties = DialogProperties(
-                    usePlatformDefaultWidth = false,
-                    dismissOnClickOutside = false,
-                ),
-            ) {
-                Card(
-                    modifier = Modifier.fillMaxSize(),
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text(
-                            text = "请在内置页完成登录/验证码，再点“完成上传”。",
-                            style = MaterialTheme.typography.bodySmall,
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Button(
-                                onClick = { submitEmbeddedCookie() },
-                                enabled = !state.isRefreshingCaptureConfig,
-                            ) {
-                                SingleLineActionText("完成上传")
-                            }
-                            Button(
-                                onClick = { closeEmbeddedAuthDialog() },
-                            ) {
-                                SingleLineActionText("关闭")
-                            }
-                        }
-                        AndroidView(
-                            modifier = Modifier
-                                .fillMaxSize()
-                                .testTag("xhs_embedded_auth_webview"),
-                            factory = { viewContext ->
-                                WebView(viewContext).apply {
-                                    val cookieManager = CookieManager.getInstance()
-                                    cookieManager.setAcceptCookie(true)
-                                    cookieManager.setAcceptThirdPartyCookies(this, true)
-                                    settings.javaScriptEnabled = true
-                                    settings.domStorageEnabled = true
-                                    settings.javaScriptCanOpenWindowsAutomatically = true
-                                    settings.cacheMode = WebSettings.LOAD_DEFAULT
-                                    settings.setSupportZoom(true)
-                                    settings.builtInZoomControls = true
-                                    settings.displayZoomControls = false
-                                    settings.useWideViewPort = true
-                                    settings.loadWithOverviewMode = true
-                                    settings.userAgentString = XHS_AUTH_DESKTOP_UA
-                                    setOnTouchListener { view, event ->
-                                        when (event.actionMasked) {
-                                            MotionEvent.ACTION_DOWN,
-                                            MotionEvent.ACTION_MOVE,
-                                            -> view.parent?.requestDisallowInterceptTouchEvent(true)
-
-                                            MotionEvent.ACTION_UP,
-                                            MotionEvent.ACTION_CANCEL,
-                                            -> view.parent?.requestDisallowInterceptTouchEvent(false)
-                                        }
-                                        false
-                                    }
-                                    webViewClient = object : WebViewClient() {
-                                        override fun shouldOverrideUrlLoading(
-                                            view: WebView?,
-                                            request: WebResourceRequest?,
-                                        ): Boolean {
-                                            return handleExternalAuthNavigation(
-                                                view,
-                                                request?.url?.toString().orEmpty(),
-                                            )
-                                        }
-
-                                        @Deprecated("Deprecated in Java")
-                                        override fun shouldOverrideUrlLoading(
-                                            view: WebView?,
-                                            url: String?,
-                                        ): Boolean {
-                                            return handleExternalAuthNavigation(view, url.orEmpty())
-                                        }
-
-                                        override fun onPageStarted(
-                                            view: WebView?,
-                                            url: String?,
-                                            favicon: Bitmap?,
-                                        ) {
-                                            if (handleExternalAuthNavigation(view, url.orEmpty())) {
-                                                view?.stopLoading()
-                                                recoverAuthWebPage(view)
-                                                return
-                                            }
-                                            super.onPageStarted(view, url, favicon)
-                                        }
-
-                                        override fun onReceivedError(
-                                            view: WebView?,
-                                            request: WebResourceRequest?,
-                                            error: WebResourceError?,
-                                        ) {
-                                            if (
-                                                request?.isForMainFrame == true &&
-                                                error?.errorCode == WebViewClient.ERROR_UNSUPPORTED_SCHEME
-                                            ) {
-                                                recoverAuthWebPage(view)
-                                                return
-                                            }
-                                            super.onReceivedError(view, request, error)
-                                        }
-                                    }
-                                    loadUrl(XHS_AUTH_ENTRY_URL)
-                                }.also { webView ->
-                                    embeddedAuthWebView = webView
-                                }
-                            },
-                            update = { webView ->
-                                embeddedAuthWebView = webView
-                            },
-                        )
-                    }
-                }
-            }
-        }
         if (state.isSyncing) {
             if (state.progressTotal > 0) {
                 val progress = (state.progressCurrent.toFloat() / state.progressTotal.toFloat()).coerceIn(0f, 1f)

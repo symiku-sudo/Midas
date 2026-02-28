@@ -154,7 +154,11 @@ if [[ "$SELFCHECK_CODE" -ne 0 ]]; then
 fi
 
 echo "[2/3] Starting uvicorn on $HOST:$PORT ..."
-nohup "$UVICORN_BIN" app.main:app --app-dir "$SERVER_DIR" --host "$HOST" --port "$PORT" > "$LOG_FILE" 2>&1 &
+if command -v setsid >/dev/null 2>&1; then
+  setsid "$UVICORN_BIN" app.main:app --app-dir "$SERVER_DIR" --host "$HOST" --port "$PORT" > "$LOG_FILE" 2>&1 < /dev/null &
+else
+  nohup "$UVICORN_BIN" app.main:app --app-dir "$SERVER_DIR" --host "$HOST" --port "$PORT" > "$LOG_FILE" 2>&1 < /dev/null &
+fi
 SERVER_PID=$!
 echo "$SERVER_PID" > "$PID_FILE"
 
