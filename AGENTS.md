@@ -12,8 +12,6 @@ Use the following list as the imported skill registry for this repository.
 - `review`: 对改动做结构化评审，关注正确性、风险和测试缺口。 (file: `/mnt/d/MyWork/midas/dev_skills/review/SKILL.md`)
 - `doc`: 维护 README/API 契约/计划/交接等文档。 (file: `/mnt/d/MyWork/midas/dev_skills/doc/SKILL.md`)
 - `issue`: GitHub Issue 新建、更新、去重与关闭流程。 (file: `/mnt/d/MyWork/midas/dev_skills/issue/SKILL.md`)
-- `run_main`: 本地闭环运行（测试/启动/接口验证 -> 修复 -> 重跑）。 (file: `/mnt/d/MyWork/midas/dev_skills/run_main/SKILL.md`)
-- `cache-sync`: 开发缓存清理与环境一致性恢复。 (file: `/mnt/d/MyWork/midas/dev_skills/cache-sync/SKILL.md`)
 
 ### Reference
 - 工程参考指南：`/mnt/d/MyWork/midas/dev_skills/engineering_guidelines.md`

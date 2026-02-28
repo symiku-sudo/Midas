@@ -16,6 +16,17 @@ description: Midas 文档编写与维护规范。用于 README、API 契约等�
 1. `server/API_CONTRACT.md`
 2. `server/README.md`
 3. `README.md`
+4. `dev_skills/doc/incidents/*.md`（事故复盘）
+
+## 事故复盘文档规范
+- 文件路径：`dev_skills/doc/incidents/YYYY-MM-DD-<topic>.md`
+- 最小结构：
+1. 背景与影响
+2. 时间线（必须使用绝对日期时间）
+3. 根因链路
+4. 证据
+5. 处置与回滚
+6. 防再发动作（Owner + 截止日期）
 
 ## 交付要求
 - 变更文件列表

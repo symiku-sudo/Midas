@@ -12,8 +12,6 @@ description: Midas 标准作业流程（SOP）。用于功能开发、缺陷修�
 - 代码评审：`dev_skills/review/SKILL.md`
 - 文档维护：`dev_skills/doc/SKILL.md`
 - Issue 管理：`dev_skills/issue/SKILL.md`
-- 运行闭环：`dev_skills/run_main/SKILL.md`
-- 缓存同步：`dev_skills/cache-sync/SKILL.md`
 
 ## 标准流程（6 步）
 1. 明确目标、范围和 DoD。
@@ -22,6 +20,13 @@ description: Midas 标准作业流程（SOP）。用于功能开发、缺陷修�
 4. 运行验证（测试/启动/接口验证）。
 5. 自查边界、安全、错误处理和文档一致性。
 6. 输出变更摘要并提交。
+
+## 有状态数据变更附加检查
+- 当改动涉及数据库路径、缓存目录、进程启动目录（cwd）、配置重置或清理脚本时，必须额外完成：
+1. 在改动前后打印并记录“实际生效路径”（例如 `xiaohongshu.db_path` 解析后的绝对路径）。
+2. 验证重启后仍读取同一份数据文件（至少对比路径 + 记录条数）。
+3. 若存在 `DELETE/clear/reset` 能力，默认增加显式确认（双确认文案或参数）。
+4. 在交付说明中附“数据影响评估”：是否可能导致“看起来像被清空”。
 
 ## Midas 项目约束
 - 统一响应协议不可破坏：`ok/code/message/data/request_id`。
