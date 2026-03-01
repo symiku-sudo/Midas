@@ -44,6 +44,9 @@ _MERGE_SOURCE_SECTION_PATTERN = re.compile(
 )
 _TITLE_TOKEN_MIN_ANCHOR = 0.06
 _TITLE_SURFACE_MIN_ANCHOR = 0.55
+_TITLE_TOKEN_SOFT_ANCHOR = 0.03
+_SUMMARY_OVERRIDE_MIN = 0.82
+_KEYWORD_OVERRIDE_MIN = 0.10
 _ASCII_TOKEN_PATTERN = re.compile(r"[0-9a-z]+")
 _CJK_BLOCK_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
 _ASCII_STOPWORDS = {
@@ -711,7 +714,20 @@ class NoteLibraryService:
                 + 0.15 * keyword_overlap
             )
         else:
-            score = 0.0
+            allow_summary_override = (
+                title_token_similarity >= _TITLE_TOKEN_SOFT_ANCHOR
+                and summary_similarity >= _SUMMARY_OVERRIDE_MIN
+                and keyword_overlap >= _KEYWORD_OVERRIDE_MIN
+            )
+            if allow_summary_override:
+                # Keep non-anchor pairs lower than anchor-backed pairs, but avoid hard-zero false negatives.
+                score = (
+                    0.35 * title_token_similarity
+                    + 0.40 * summary_similarity
+                    + 0.25 * keyword_overlap
+                )
+            else:
+                score = 0.0
 
         reason_codes: list[str] = []
         if keyword_overlap >= 0.12:

@@ -542,6 +542,59 @@ def test_notes_merge_suggest_default_threshold_rejects_no_title_anchor_pair() ->
     assert body["data"]["total"] == 0
 
 
+def test_notes_merge_suggest_allows_soft_title_anchor_with_high_summary_similarity() -> None:
+    _reset_xiaohongshu_state()
+    first_save = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": "https://www.bilibili.com/video/BV1xx411c7mK",
+            "summary_markdown": (
+                "# Skill 设计\n\n"
+                "企业在引入 Skill 时，需要先定义边界、鉴权和审计闭环。"
+            ),
+            "elapsed_ms": 10,
+            "transcript_chars": 20,
+            "title": "AI工程师必看：企业级Skill到底怎么设计",
+        },
+    )
+    assert first_save.status_code == 200
+    first_note_id = first_save.json()["data"]["note_id"]
+
+    second_save = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": "https://www.bilibili.com/video/BV1xx411c7mL",
+            "summary_markdown": (
+                "# Skill 落地\n\n"
+                "企业在引入 Skill 时，需要先定义边界、鉴权和审计闭环，并明确交付标准。"
+            ),
+            "elapsed_ms": 11,
+            "transcript_chars": 22,
+            "title": "Skills爆火，但企业为什么不敢用？",
+        },
+    )
+    assert second_save.status_code == 200
+    second_note_id = second_save.json()["data"]["note_id"]
+
+    suggest_resp = client.post(
+        "/api/notes/merge/suggest",
+        json={"source": "bilibili", "limit": 20},
+    )
+    assert suggest_resp.status_code == 200
+    body = suggest_resp.json()
+    assert body["ok"] is True
+
+    pair_found = False
+    for item in body["data"]["items"]:
+        note_ids = set(item["note_ids"])
+        if {first_note_id, second_note_id} == note_ids:
+            pair_found = True
+            assert item["score"] >= 0.35
+            assert "SUMMARY_SIMILAR" in item["reason_codes"]
+            break
+    assert pair_found is True
+
+
 def test_notes_merge_suggest_hides_stale_pairs_after_commit_until_refresh() -> None:
     _reset_xiaohongshu_state()
 
