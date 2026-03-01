@@ -277,7 +277,7 @@ async def preview_notes_merge(
     payload: NotesMergePreviewRequest, request: Request
 ) -> dict:
     service = _get_note_library_service()
-    result = service.preview_merge(source=payload.source, note_ids=payload.note_ids)
+    result = await service.preview_merge(source=payload.source, note_ids=payload.note_ids)
     data = NotesMergePreviewData(
         source=result.source,
         note_ids=result.note_ids,
@@ -292,7 +292,7 @@ async def preview_notes_merge(
 @router.post("/api/notes/merge/commit")
 async def commit_notes_merge(payload: NotesMergeCommitRequest, request: Request) -> dict:
     service = _get_note_library_service()
-    result = service.commit_merge(
+    result = await service.commit_merge(
         source=payload.source,
         note_ids=payload.note_ids,
         merged_title=payload.merged_title,

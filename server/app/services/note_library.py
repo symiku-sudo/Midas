@@ -27,6 +27,7 @@ from app.models.schemas import (
     XiaohongshuSummaryItem,
 )
 from app.repositories.note_repo import NoteLibraryRepository
+from app.services.llm import LLMService
 
 logger = logging.getLogger(__name__)
 
@@ -36,6 +37,7 @@ _SUPPORTED_MERGE_SOURCES = {_MERGE_SOURCE_BILIBILI, _MERGE_SOURCE_XIAOHONGSHU}
 _MERGE_STATUS_PENDING_CONFIRM = "MERGED_PENDING_CONFIRM"
 _MERGE_STATUS_ROLLED_BACK = "ROLLED_BACK"
 _MERGE_STATUS_FINALIZED_DESTRUCTIVE = "FINALIZED_DESTRUCTIVE"
+_SOURCE_INDEX_STATE_ACTIVE = "ACTIVE"
 _ASCII_TOKEN_PATTERN = re.compile(r"[0-9a-z]+")
 _CJK_BLOCK_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
 _ASCII_STOPWORDS = {
@@ -79,6 +81,7 @@ class NoteLibraryService:
         self._repository = repository or NoteLibraryRepository(
             settings.xiaohongshu.db_path
         )
+        self._llm = LLMService(settings)
 
     def save_bilibili_note(
         self,
@@ -102,6 +105,16 @@ class NoteLibraryService:
             summary_markdown=summary_markdown,
             elapsed_ms=elapsed_ms,
             transcript_chars=transcript_chars,
+        )
+        self._repository.upsert_source_index_links(
+            platform=_MERGE_SOURCE_BILIBILI,
+            mappings={
+                note_id: {
+                    "canonical_note_id": note_id,
+                    "merge_id": "",
+                    "state": _SOURCE_INDEX_STATE_ACTIVE,
+                }
+            },
         )
         self._backup_database_after_note_save()
         items = self._repository.list_bilibili_notes()
@@ -140,6 +153,18 @@ class NoteLibraryService:
         ]
         saved_count = self._repository.save_xiaohongshu_notes(payload)
         if saved_count > 0:
+            mappings = {
+                item["note_id"]: {
+                    "canonical_note_id": item["note_id"],
+                    "merge_id": "",
+                    "state": _SOURCE_INDEX_STATE_ACTIVE,
+                }
+                for item in payload
+            }
+            self._repository.upsert_source_index_links(
+                platform=_MERGE_SOURCE_XIAOHONGSHU,
+                mappings=mappings,
+            )
             self._backup_database_after_note_save()
         return saved_count
 
@@ -215,7 +240,7 @@ class NoteLibraryService:
             candidates = candidates[:limit]
         return NotesMergeSuggestData(total=len(candidates), items=candidates)
 
-    def preview_merge(
+    async def preview_merge(
         self,
         *,
         source: str,
@@ -227,7 +252,10 @@ class NoteLibraryService:
             source=normalized_source,
             note_ids=normalized_note_ids,
         )
-        merged_title, merged_summary, conflict_markers = self._build_merged_content(notes)
+        merged_title, merged_summary, conflict_markers = await self._build_merged_content(
+            source=normalized_source,
+            notes=notes,
+        )
         source_refs = [str(item.get("source_ref", "")).strip() for item in notes]
         return NotesMergePreviewData(
             source=normalized_source,
@@ -238,7 +266,7 @@ class NoteLibraryService:
             conflict_markers=conflict_markers,
         )
 
-    def commit_merge(
+    async def commit_merge(
         self,
         *,
         source: str,
@@ -246,7 +274,7 @@ class NoteLibraryService:
         merged_title: str = "",
         merged_summary_markdown: str = "",
     ) -> NotesMergeCommitData:
-        preview = self.preview_merge(source=source, note_ids=note_ids)
+        preview = await self.preview_merge(source=source, note_ids=note_ids)
         notes = self._load_source_notes_by_ids(
             source=preview.source,
             note_ids=preview.note_ids,
@@ -255,6 +283,19 @@ class NoteLibraryService:
         final_summary = merged_summary_markdown.strip() or preview.merged_summary_markdown
         merge_id = f"merge_{uuid.uuid4().hex}"
         merged_note_id = f"merged_note_{uuid.uuid4().hex}"
+        lineage_source_ids = self._expand_source_note_ids(
+            source=preview.source,
+            note_ids=preview.note_ids,
+        )
+        source_links_snapshot = self._repository.get_source_index_links(
+            platform=preview.source,
+            source_note_ids=lineage_source_ids,
+        )
+        normalized_snapshot: dict[str, str] = {}
+        for source_note_id in lineage_source_ids:
+            current = source_links_snapshot.get(source_note_id, {})
+            canonical = str(current.get("canonical_note_id", "")).strip() or source_note_id
+            normalized_snapshot[source_note_id] = canonical
 
         if preview.source == _MERGE_SOURCE_BILIBILI:
             primary = notes[0]
@@ -283,12 +324,25 @@ class NoteLibraryService:
                     }
                 ]
             )
+        self._repository.upsert_source_index_links(
+            platform=preview.source,
+            mappings={
+                source_note_id: {
+                    "canonical_note_id": merged_note_id,
+                    "merge_id": merge_id,
+                    "state": _MERGE_STATUS_PENDING_CONFIRM,
+                }
+                for source_note_id in lineage_source_ids
+            },
+        )
 
         field_decisions = {
             "merged_title": final_title,
             "merged_summary_markdown": final_summary,
             "source_refs": preview.source_refs,
             "conflict_markers": preview.conflict_markers,
+            "lineage_source_ids": lineage_source_ids,
+            "source_link_snapshot": normalized_snapshot,
         }
         self._repository.save_merge_history(
             merge_id=merge_id,
@@ -328,10 +382,26 @@ class NoteLibraryService:
         source = str(history["source"])
         merged_note_id = str(history["merged_note_id"])
         source_note_ids = self._decode_json_note_ids(history["source_note_ids"])
+        lineage_source_ids = self._read_lineage_source_ids(history)
+        source_link_snapshot = self._read_source_link_snapshot(
+            history=history,
+            lineage_source_ids=lineage_source_ids,
+        )
         if source == _MERGE_SOURCE_BILIBILI:
             deleted_merged_count = self._repository.delete_bilibili_note(merged_note_id)
         else:
             deleted_merged_count = self._repository.delete_xiaohongshu_note(merged_note_id)
+        self._repository.upsert_source_index_links(
+            platform=source,
+            mappings={
+                source_note_id: {
+                    "canonical_note_id": source_link_snapshot.get(source_note_id, source_note_id),
+                    "merge_id": "",
+                    "state": _SOURCE_INDEX_STATE_ACTIVE,
+                }
+                for source_note_id in lineage_source_ids
+            },
+        )
 
         self._repository.update_merge_history_status(
             merge_id=merge_id,
@@ -383,11 +453,24 @@ class NoteLibraryService:
 
         source = str(history["source"])
         source_note_ids = self._decode_json_note_ids(history["source_note_ids"])
+        merged_note_id = str(history["merged_note_id"])
+        lineage_source_ids = self._read_lineage_source_ids(history)
         deleted_source_count = 0
         if source == _MERGE_SOURCE_BILIBILI:
             deleted_source_count = self._repository.delete_bilibili_notes(source_note_ids)
         else:
             deleted_source_count = self._repository.delete_xiaohongshu_notes(source_note_ids)
+        self._repository.upsert_source_index_links(
+            platform=source,
+            mappings={
+                source_note_id: {
+                    "canonical_note_id": merged_note_id,
+                    "merge_id": merge_id,
+                    "state": _MERGE_STATUS_FINALIZED_DESTRUCTIVE,
+                }
+                for source_note_id in lineage_source_ids
+            },
+        )
 
         self._repository.update_merge_history_status(
             merge_id=merge_id,
@@ -398,7 +481,7 @@ class NoteLibraryService:
             merge_id=merge_id,
             status=_MERGE_STATUS_FINALIZED_DESTRUCTIVE,
             deleted_source_count=deleted_source_count,
-            kept_merged_note_id=str(history["merged_note_id"]),
+            kept_merged_note_id=merged_note_id,
         )
 
     def _normalize_bilibili_title(
@@ -536,8 +619,10 @@ class NoteLibraryService:
             reason_codes.append("LOW_CONFIDENCE")
         return {"score": score, "reason_codes": reason_codes}
 
-    def _build_merged_content(
+    async def _build_merged_content(
         self,
+        *,
+        source: str,
         notes: list[dict[str, Any]],
     ) -> tuple[str, str, list[str]]:
         first = notes[0]
@@ -546,53 +631,114 @@ class NoteLibraryService:
         second_title = str(second.get("title", "")).strip()
         first_summary = str(first.get("summary_markdown", "")).strip()
         second_summary = str(second.get("summary_markdown", "")).strip()
+        first_ref = str(first.get("source_ref", "")).strip()
+        second_ref = str(second.get("source_ref", "")).strip()
 
-        title_similarity = self._token_jaccard(first_title, second_title)
+        title_similarity = max(
+            self._token_jaccard(first_title, second_title),
+            SequenceMatcher(None, first_title.lower(), second_title.lower()).ratio(),
+        )
         summary_similarity = SequenceMatcher(None, first_summary, second_summary).ratio()
 
         conflict_markers: list[str] = []
-        if title_similarity < 0.70:
+        if title_similarity < 0.45:
             conflict_markers.append("TITLE_CONFLICT")
-        if summary_similarity < 0.70:
+        if summary_similarity < 0.35:
             conflict_markers.append("CONTENT_CONFLICT")
 
         merged_title = first_title if len(first_title) >= len(second_title) else second_title
         if not merged_title:
             merged_title = "合并笔记"
+        try:
+            merged_summary = await self._llm.merge_notes(
+                source=source,
+                first_title=first_title,
+                first_content=first_summary,
+                first_ref=first_ref,
+                second_title=second_title,
+                second_content=second_summary,
+                second_ref=second_ref,
+            )
+        except AppError as exc:
+            if exc.code not in {ErrorCode.UPSTREAM_ERROR, ErrorCode.RATE_LIMITED}:
+                raise
+            logger.warning(
+                "Merge LLM failed, fallback to deterministic structured merge: code=%s message=%s",
+                exc.code.value,
+                exc.message,
+            )
+            merged_summary = self._build_structured_fallback_merge(
+                merged_title=merged_title,
+                first_summary=first_summary,
+                second_summary=second_summary,
+                first_ref=first_ref,
+                second_ref=second_ref,
+                conflict_markers=conflict_markers,
+            )
 
-        merged_summary = self._merge_markdown_blocks(
-            first_summary,
-            second_summary,
-            str(first.get("source_ref", "")).strip(),
-            str(second.get("source_ref", "")).strip(),
-        )
+        merged_title = self._extract_h1_title(merged_summary, fallback=merged_title)
         return merged_title[:200], merged_summary, conflict_markers
 
-    def _merge_markdown_blocks(
+    def _build_structured_fallback_merge(
         self,
+        *,
+        merged_title: str,
         first_summary: str,
         second_summary: str,
         first_ref: str,
         second_ref: str,
+        conflict_markers: list[str],
     ) -> str:
-        lines: list[str] = []
+        unique_lines: list[str] = []
         seen: set[str] = set()
         for raw in (first_summary.splitlines() + second_summary.splitlines()):
-            key = raw.strip()
-            if not key:
+            line = raw.strip().lstrip("#").strip()
+            if len(line) < 8:
                 continue
-            if key in seen:
+            if line in seen:
                 continue
-            seen.add(key)
-            lines.append(raw)
-        merged_body = "\n".join(lines).strip()
-        refs = [item for item in [first_ref, second_ref] if item]
-        if not refs:
-            return merged_body
-        refs_text = "\n".join(f"- {item}" for item in dict.fromkeys(refs))
-        if merged_body:
-            return f"{merged_body}\n\n## 来源\n{refs_text}"
-        return f"## 来源\n{refs_text}"
+            seen.add(line)
+            unique_lines.append(line)
+            if len(unique_lines) >= 8:
+                break
+
+        summary_text = (
+            "基于两条笔记做了结构化融合，重复信息已去重并保留冲突提示。"
+            if unique_lines
+            else "信息不足，建议补充原始笔记内容后重试。"
+        )
+        key_points = "\n".join(f"- {line}" for line in unique_lines) if unique_lines else "- 信息不足"
+        conflict_text = (
+            "\n".join(f"- {marker}" for marker in conflict_markers)
+            if conflict_markers
+            else "- 未发现明显冲突。"
+        )
+        source_lines = "\n".join(
+            f"- {ref}" for ref in [first_ref, second_ref] if ref
+        ) or "- 无来源链接"
+        return (
+            f"# {merged_title[:22]}\n\n"
+            "## 摘要\n\n"
+            f"{summary_text}\n\n"
+            "## 关键信息\n\n"
+            f"{key_points}\n\n"
+            "## 差异与冲突\n\n"
+            f"{conflict_text}\n\n"
+            "## 来源\n\n"
+            f"{source_lines}"
+        )
+
+    def _extract_h1_title(self, markdown: str, *, fallback: str) -> str:
+        for raw in markdown.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if line.startswith("# "):
+                title = line[2:].strip()
+                if title:
+                    return title
+                break
+        return fallback
 
     def _token_jaccard(self, left: str, right: str) -> float:
         left_tokens = set(self._tokenize(left))
@@ -723,3 +869,71 @@ class NoteLibraryService:
         if not isinstance(parsed, list):
             return []
         return [str(item).strip() for item in parsed if str(item).strip()]
+
+    def _decode_field_decisions(self, raw: Any) -> dict[str, Any]:
+        if isinstance(raw, dict):
+            return raw
+        if not isinstance(raw, str):
+            return {}
+        if not raw.strip():
+            return {}
+        try:
+            parsed = json.loads(raw)
+        except ValueError:
+            return {}
+        if not isinstance(parsed, dict):
+            return {}
+        return parsed
+
+    def _expand_source_note_ids(self, *, source: str, note_ids: list[str]) -> list[str]:
+        expanded: list[str] = []
+        seen: set[str] = set()
+        for note_id in note_ids:
+            canonical = note_id.strip()
+            if not canonical:
+                continue
+            linked_source_ids = self._repository.list_source_note_ids_by_canonical(
+                platform=source,
+                canonical_note_id=canonical,
+            )
+            if not linked_source_ids:
+                linked_source_ids = [canonical]
+            for source_id in linked_source_ids:
+                candidate = source_id.strip()
+                if not candidate or candidate in seen:
+                    continue
+                seen.add(candidate)
+                expanded.append(candidate)
+        return expanded
+
+    def _read_lineage_source_ids(self, history: dict[str, Any]) -> list[str]:
+        field_decisions = self._decode_field_decisions(history.get("field_decisions"))
+        raw = field_decisions.get("lineage_source_ids")
+        if isinstance(raw, list):
+            values = [str(item).strip() for item in raw if str(item).strip()]
+            if values:
+                return values
+        source = str(history.get("source", "")).strip()
+        return self._expand_source_note_ids(
+            source=source,
+            note_ids=self._decode_json_note_ids(history.get("source_note_ids")),
+        )
+
+    def _read_source_link_snapshot(
+        self,
+        *,
+        history: dict[str, Any],
+        lineage_source_ids: list[str],
+    ) -> dict[str, str]:
+        field_decisions = self._decode_field_decisions(history.get("field_decisions"))
+        raw_snapshot = field_decisions.get("source_link_snapshot")
+        snapshot: dict[str, str] = {}
+        if isinstance(raw_snapshot, dict):
+            for key, value in raw_snapshot.items():
+                source_id = str(key).strip()
+                canonical = str(value).strip()
+                if source_id and canonical:
+                    snapshot[source_id] = canonical
+        for source_id in lineage_source_ids:
+            snapshot.setdefault(source_id, source_id)
+        return snapshot

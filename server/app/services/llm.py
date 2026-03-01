@@ -35,6 +35,16 @@ _XHS_VIDEO_PROMPT = (
     "如果信息不足，请明确写出“信息不足”，不要编造细节。"
 )
 
+_MERGE_PROMPT = (
+    "你是中文知识库编辑。"
+    "任务是把两条笔记融合为一条高质量 Markdown，而不是简单拼接。"
+    "输出要求："
+    "1) 首行必须是一级标题（# 标题），标题不超过22字；"
+    "2) 必须包含“## 摘要”“## 关键信息”“## 差异与冲突”“## 来源”；"
+    "3) 对重复信息要去重，对冲突观点要显式标注；"
+    "4) 严格基于输入内容，不得编造事实。"
+)
+
 
 class LLMService:
     def __init__(self, settings: Settings) -> None:
@@ -281,6 +291,136 @@ class LLMService:
             ],
         }
         return await self._request_chat_completion(payload, api_key=api_key)
+
+    async def merge_notes(
+        self,
+        *,
+        source: str,
+        first_title: str,
+        first_content: str,
+        first_ref: str,
+        second_title: str,
+        second_content: str,
+        second_ref: str,
+    ) -> str:
+        if not self._settings.llm.enabled:
+            return self._local_merge_fallback(
+                source=source,
+                first_title=first_title,
+                first_content=first_content,
+                first_ref=first_ref,
+                second_title=second_title,
+                second_content=second_content,
+                second_ref=second_ref,
+            )
+
+        api_key = self._require_api_key()
+        first_trimmed = first_content.strip()[:6000]
+        second_trimmed = second_content.strip()[:6000]
+        payload = {
+            "model": self._settings.llm.model,
+            "temperature": 0.2,
+            "messages": [
+                {"role": "system", "content": _MERGE_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        f"来源类型: {source}\n\n"
+                        "笔记A:\n"
+                        f"- 标题: {first_title}\n"
+                        f"- 来源: {first_ref}\n"
+                        f"- 正文:\n{first_trimmed}\n\n"
+                        "笔记B:\n"
+                        f"- 标题: {second_title}\n"
+                        f"- 来源: {second_ref}\n"
+                        f"- 正文:\n{second_trimmed}\n"
+                    ),
+                },
+            ],
+        }
+        result = await self._request_chat_completion(
+            payload,
+            api_key=api_key,
+            server_error_message="LLM 合并生成失败。",
+        )
+        if not result.startswith("# "):
+            fallback_title = (first_title.strip() or second_title.strip() or "合并笔记")[:22]
+            return f"# {fallback_title}\n\n{result}".strip()
+        return result.strip()
+
+    def _local_merge_fallback(
+        self,
+        *,
+        source: str,
+        first_title: str,
+        first_content: str,
+        first_ref: str,
+        second_title: str,
+        second_content: str,
+        second_ref: str,
+    ) -> str:
+        title = first_title.strip() if len(first_title.strip()) >= len(second_title.strip()) else second_title.strip()
+        if not title:
+            title = f"{source} 合并笔记"
+        shared_lines = self._collect_unique_lines(first_content, second_content, max_lines=8)
+        conflict_lines = self._collect_conflicts(first_content, second_content)
+        source_lines = "\n".join(
+            f"- {item}"
+            for item in [first_ref.strip(), second_ref.strip()]
+            if item.strip()
+        )
+        shared_text = "\n".join(f"- {line}" for line in shared_lines) if shared_lines else "- 信息不足"
+        conflict_text = (
+            "\n".join(f"- {line}" for line in conflict_lines)
+            if conflict_lines
+            else "- 未发现明显冲突，建议人工复核。"
+        )
+        return (
+            f"# {title[:22]}\n\n"
+            "## 摘要\n\n"
+            "当前为本地结构化合并结果（LLM 未启用或不可用）。\n\n"
+            "## 关键信息\n\n"
+            f"{shared_text}\n\n"
+            "## 差异与冲突\n\n"
+            f"{conflict_text}\n\n"
+            "## 来源\n\n"
+            f"{source_lines if source_lines else '- 无来源链接'}"
+        )
+
+    def _collect_unique_lines(self, first: str, second: str, *, max_lines: int) -> list[str]:
+        seen: set[str] = set()
+        output: list[str] = []
+        for raw in (first.splitlines() + second.splitlines()):
+            line = raw.strip().lstrip("#").strip()
+            if len(line) < 8:
+                continue
+            if line in seen:
+                continue
+            seen.add(line)
+            output.append(line)
+            if len(output) >= max_lines:
+                break
+        return output
+
+    def _collect_conflicts(self, first: str, second: str) -> list[str]:
+        first_set = {
+            line.strip().lstrip("#").strip()
+            for line in first.splitlines()
+            if len(line.strip()) >= 8
+        }
+        second_set = {
+            line.strip().lstrip("#").strip()
+            for line in second.splitlines()
+            if len(line.strip()) >= 8
+        }
+        only_first = sorted(first_set - second_set)[:2]
+        only_second = sorted(second_set - first_set)[:2]
+        conflicts: list[str] = []
+        for line in only_first:
+            conflicts.append(f"A独有: {line}")
+        for line in only_second:
+            conflicts.append(f"B独有: {line}")
+        return conflicts
 
     def _extract_response_text(self, payload: dict[str, Any]) -> str:
         try:

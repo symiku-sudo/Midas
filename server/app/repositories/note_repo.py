@@ -74,6 +74,19 @@ class NoteLibraryRepository:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS note_source_index (
+                    platform TEXT NOT NULL,
+                    source_note_id TEXT NOT NULL,
+                    canonical_note_id TEXT NOT NULL,
+                    merge_id TEXT NOT NULL DEFAULT '',
+                    state TEXT NOT NULL DEFAULT 'ACTIVE',
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (platform, source_note_id)
+                )
+                """
+            )
             conn.commit()
 
     def save_bilibili_note(
@@ -338,6 +351,92 @@ class NoteLibraryRepository:
             )
             conn.commit()
             return int(cursor.rowcount)
+
+    def upsert_source_index_links(
+        self,
+        *,
+        platform: str,
+        mappings: dict[str, dict[str, str]],
+    ) -> None:
+        if not mappings:
+            return
+        rows: list[tuple[str, str, str, str, str]] = []
+        for source_note_id, payload in mappings.items():
+            source_value = str(source_note_id).strip()
+            if not source_value:
+                continue
+            canonical = str(payload.get("canonical_note_id", "")).strip()
+            if not canonical:
+                continue
+            merge_id = str(payload.get("merge_id", "")).strip()
+            state = str(payload.get("state", "ACTIVE")).strip() or "ACTIVE"
+            rows.append((platform, source_value, canonical, merge_id, state))
+        if not rows:
+            return
+        with self._connect() as conn:
+            conn.executemany(
+                """
+                INSERT INTO note_source_index (
+                    platform, source_note_id, canonical_note_id, merge_id, state
+                )
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(platform, source_note_id) DO UPDATE SET
+                    canonical_note_id = excluded.canonical_note_id,
+                    merge_id = excluded.merge_id,
+                    state = excluded.state,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                rows,
+            )
+            conn.commit()
+
+    def get_source_index_links(
+        self,
+        *,
+        platform: str,
+        source_note_ids: list[str],
+    ) -> dict[str, dict[str, Any]]:
+        normalized = [item.strip() for item in source_note_ids if item.strip()]
+        if not normalized:
+            return {}
+        placeholders = ",".join("?" for _ in normalized)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT platform, source_note_id, canonical_note_id, merge_id, state, updated_at
+                FROM note_source_index
+                WHERE platform = ?
+                  AND source_note_id IN ({placeholders})
+                """,
+                tuple([platform, *normalized]),
+            ).fetchall()
+        output: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            data = dict(row)
+            output[str(data["source_note_id"])] = data
+        return output
+
+    def list_source_note_ids_by_canonical(
+        self,
+        *,
+        platform: str,
+        canonical_note_id: str,
+    ) -> list[str]:
+        canonical = canonical_note_id.strip()
+        if not canonical:
+            return []
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT source_note_id
+                FROM note_source_index
+                WHERE platform = ?
+                  AND canonical_note_id = ?
+                ORDER BY source_note_id ASC
+                """,
+                (platform, canonical),
+            ).fetchall()
+        return [str(row["source_note_id"]).strip() for row in rows if str(row["source_note_id"]).strip()]
 
     def prune_unsaved_xiaohongshu_synced_notes(self) -> tuple[int, int]:
         with self._connect() as conn:
