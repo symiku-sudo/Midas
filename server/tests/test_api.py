@@ -256,8 +256,14 @@ def test_notes_merge_lifecycle_commit_rollback_and_finalize() -> None:
     assert preview_body["data"]["source"] == "bilibili"
     assert preview_body["data"]["merged_title"]
     assert preview_body["data"]["merged_summary_markdown"]
-    assert "## 关键信息" in preview_body["data"]["merged_summary_markdown"]
-    assert "## 来源" in preview_body["data"]["merged_summary_markdown"]
+    merged_markdown = preview_body["data"]["merged_summary_markdown"]
+    assert "## 差异与冲突" in merged_markdown
+    last_h2 = ""
+    for raw in merged_markdown.strip().splitlines():
+        line = raw.strip()
+        if line.startswith("## "):
+            last_h2 = line
+    assert last_h2 == "## 差异与冲突"
 
     commit_resp = client.post(
         "/api/notes/merge/commit",
@@ -476,7 +482,7 @@ def test_xiaohongshu_summarize_url_dedup_uses_merge_canonical_after_finalize() -
     dedup_body = dedup_resp.json()
     assert dedup_body["ok"] is True
     assert dedup_body["data"]["note_id"] == first_summary["note_id"]
-    assert "## 来源" in dedup_body["data"]["summary_markdown"]
+    assert "## 差异与冲突" in dedup_body["data"]["summary_markdown"]
 
     list_again_resp = client.get("/api/notes/xiaohongshu")
     assert list_again_resp.status_code == 200

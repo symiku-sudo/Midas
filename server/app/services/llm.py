@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 
 import httpx
@@ -38,11 +39,12 @@ _XHS_VIDEO_PROMPT = (
 _MERGE_PROMPT = (
     "你是中文知识库编辑。"
     "任务是把两条笔记融合为一条高质量 Markdown，而不是简单拼接。"
-    "输出要求："
-    "1) 首行必须是一级标题（# 标题），标题不超过22字；"
-    "2) 必须包含“## 摘要”“## 关键信息”“## 差异与冲突”“## 来源”；"
-    "3) 对重复信息要去重，对冲突观点要显式标注；"
-    "4) 严格基于输入内容，不得编造事实。"
+    "格式硬约束："
+    "1) 输出必须沿用“笔记A”的 Markdown 结构和标题层级；"
+    "2) 除“## 差异与冲突”外，不得新增或改名其它二级标题；"
+    "3) “## 差异与冲突”必须是最后一个二级标题；"
+    "4) 首行必须是一级标题（# 标题），标题不超过22字；"
+    "5) 严格基于输入内容，不得编造事实。"
 )
 
 
@@ -317,6 +319,7 @@ class LLMService:
         api_key = self._require_api_key()
         first_trimmed = first_content.strip()[:6000]
         second_trimmed = second_content.strip()[:6000]
+        heading_template = self._extract_h2_headings(first_trimmed)
         payload = {
             "model": self._settings.llm.model,
             "temperature": 0.2,
@@ -326,6 +329,7 @@ class LLMService:
                     "role": "user",
                     "content": (
                         f"来源类型: {source}\n\n"
+                        f"笔记A二级标题顺序: {heading_template if heading_template else '（无显式二级标题）'}\n\n"
                         "笔记A:\n"
                         f"- 标题: {first_title}\n"
                         f"- 来源: {first_ref}\n"
@@ -343,10 +347,18 @@ class LLMService:
             api_key=api_key,
             server_error_message="LLM 合并生成失败。",
         )
-        if not result.startswith("# "):
-            fallback_title = (first_title.strip() or second_title.strip() or "合并笔记")[:22]
-            return f"# {fallback_title}\n\n{result}".strip()
-        return result.strip()
+        fallback_title = (first_title.strip() or second_title.strip() or "合并笔记")[:22]
+        normalized = self._normalize_markdown_title(
+            markdown=result,
+            fallback_title=fallback_title,
+        )
+        return self._enforce_conflict_section_last(
+            markdown=normalized,
+            fallback_conflict_lines=self._collect_conflicts(
+                first_content,
+                second_content,
+            ),
+        )
 
     def _local_merge_fallback(
         self,
@@ -362,29 +374,20 @@ class LLMService:
         title = first_title.strip() if len(first_title.strip()) >= len(second_title.strip()) else second_title.strip()
         if not title:
             title = f"{source} 合并笔记"
-        shared_lines = self._collect_unique_lines(first_content, second_content, max_lines=8)
-        conflict_lines = self._collect_conflicts(first_content, second_content)
-        source_lines = "\n".join(
-            f"- {item}"
-            for item in [first_ref.strip(), second_ref.strip()]
-            if item.strip()
+        base_markdown = (first_content.strip() or second_content.strip() or "").strip()
+        if not base_markdown:
+            base_markdown = "# 合并笔记\n\n- 信息不足。"
+        normalized = self._normalize_markdown_title(
+            markdown=base_markdown,
+            fallback_title=title[:22],
         )
-        shared_text = "\n".join(f"- {line}" for line in shared_lines) if shared_lines else "- 信息不足"
-        conflict_text = (
-            "\n".join(f"- {line}" for line in conflict_lines)
-            if conflict_lines
-            else "- 未发现明显冲突，建议人工复核。"
-        )
-        return (
-            f"# {title[:22]}\n\n"
-            "## 摘要\n\n"
-            "当前为本地结构化合并结果（LLM 未启用或不可用）。\n\n"
-            "## 关键信息\n\n"
-            f"{shared_text}\n\n"
-            "## 差异与冲突\n\n"
-            f"{conflict_text}\n\n"
-            "## 来源\n\n"
-            f"{source_lines if source_lines else '- 无来源链接'}"
+        fallback_conflicts = self._collect_conflicts(first_content, second_content)
+        refs = [item for item in [first_ref.strip(), second_ref.strip()] if item.strip()]
+        for index, ref in enumerate(refs, start=1):
+            fallback_conflicts.append(f"来源{index}: {ref}")
+        return self._enforce_conflict_section_last(
+            markdown=normalized,
+            fallback_conflict_lines=fallback_conflicts,
         )
 
     def _collect_unique_lines(self, first: str, second: str, *, max_lines: int) -> list[str]:
@@ -421,6 +424,54 @@ class LLMService:
         for line in only_second:
             conflicts.append(f"B独有: {line}")
         return conflicts
+
+    def _extract_h2_headings(self, markdown: str) -> str:
+        headings: list[str] = []
+        for raw in markdown.splitlines():
+            line = raw.strip()
+            if not line.startswith("## "):
+                continue
+            title = line[3:].strip()
+            if title:
+                headings.append(title)
+        return " -> ".join(headings)
+
+    def _normalize_markdown_title(self, *, markdown: str, fallback_title: str) -> str:
+        cleaned = markdown.strip()
+        if cleaned.startswith("# "):
+            return cleaned
+        if cleaned:
+            return f"# {fallback_title}\n\n{cleaned}".strip()
+        return f"# {fallback_title}\n\n- 信息不足。"
+
+    def _enforce_conflict_section_last(
+        self,
+        *,
+        markdown: str,
+        fallback_conflict_lines: list[str],
+    ) -> str:
+        section_pattern = re.compile(
+            r"(?ms)^##\s*差异与冲突\s*\n(.*?)(?=^##\s|\Z)"
+        )
+        existing_blocks = [
+            match.group(1).strip()
+            for match in section_pattern.finditer(markdown)
+            if match.group(1).strip()
+        ]
+        cleaned = section_pattern.sub("", markdown).strip()
+        if existing_blocks:
+            conflict_body = existing_blocks[0]
+        else:
+            normalized_lines = [
+                line.strip() for line in fallback_conflict_lines if line.strip()
+            ]
+            if normalized_lines:
+                conflict_body = "\n".join(f"- {line}" for line in normalized_lines)
+            else:
+                conflict_body = "- 未发现明显冲突。"
+        if cleaned:
+            return f"{cleaned}\n\n## 差异与冲突\n\n{conflict_body}"
+        return f"## 差异与冲突\n\n{conflict_body}"
 
     def _extract_response_text(self, payload: dict[str, Any]) -> str:
         try:

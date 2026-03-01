@@ -675,6 +675,11 @@ class NoteLibraryService:
                 second_ref=second_ref,
                 conflict_markers=conflict_markers,
             )
+        merged_summary = self._enforce_merge_format_contract(
+            markdown=merged_summary,
+            fallback_title=merged_title[:22] or "合并笔记",
+            conflict_markers=conflict_markers,
+        )
 
         merged_title = self._extract_h1_title(merged_summary, fallback=merged_title)
         return merged_title[:200], merged_summary, conflict_markers
@@ -689,43 +694,20 @@ class NoteLibraryService:
         second_ref: str,
         conflict_markers: list[str],
     ) -> str:
-        unique_lines: list[str] = []
-        seen: set[str] = set()
-        for raw in (first_summary.splitlines() + second_summary.splitlines()):
-            line = raw.strip().lstrip("#").strip()
-            if len(line) < 8:
-                continue
-            if line in seen:
-                continue
-            seen.add(line)
-            unique_lines.append(line)
-            if len(unique_lines) >= 8:
-                break
+        base = first_summary.strip() or second_summary.strip()
+        if not base:
+            base = f"# {merged_title[:22]}\n\n- 信息不足。"
+        if not base.startswith("# "):
+            base = f"# {merged_title[:22]}\n\n{base}".strip()
 
-        summary_text = (
-            "基于两条笔记做了结构化融合，重复信息已去重并保留冲突提示。"
-            if unique_lines
-            else "信息不足，建议补充原始笔记内容后重试。"
-        )
-        key_points = "\n".join(f"- {line}" for line in unique_lines) if unique_lines else "- 信息不足"
-        conflict_text = (
-            "\n".join(f"- {marker}" for marker in conflict_markers)
-            if conflict_markers
-            else "- 未发现明显冲突。"
-        )
-        source_lines = "\n".join(
-            f"- {ref}" for ref in [first_ref, second_ref] if ref
-        ) or "- 无来源链接"
-        return (
-            f"# {merged_title[:22]}\n\n"
-            "## 摘要\n\n"
-            f"{summary_text}\n\n"
-            "## 关键信息\n\n"
-            f"{key_points}\n\n"
-            "## 差异与冲突\n\n"
-            f"{conflict_text}\n\n"
-            "## 来源\n\n"
-            f"{source_lines}"
+        fallback_conflicts = [marker for marker in conflict_markers if marker]
+        refs = [item for item in [first_ref, second_ref] if item]
+        for index, ref in enumerate(refs, start=1):
+            fallback_conflicts.append(f"来源{index}: {ref}")
+        return self._enforce_merge_format_contract(
+            markdown=base,
+            fallback_title=merged_title[:22] or "合并笔记",
+            conflict_markers=fallback_conflicts,
         )
 
     def _extract_h1_title(self, markdown: str, *, fallback: str) -> str:
@@ -937,3 +919,40 @@ class NoteLibraryService:
         for source_id in lineage_source_ids:
             snapshot.setdefault(source_id, source_id)
         return snapshot
+
+    def _enforce_merge_format_contract(
+        self,
+        *,
+        markdown: str,
+        fallback_title: str,
+        conflict_markers: list[str],
+    ) -> str:
+        content = markdown.strip()
+        if not content.startswith("# "):
+            if content:
+                content = f"# {fallback_title}\n\n{content}".strip()
+            else:
+                content = f"# {fallback_title}\n\n- 信息不足。"
+
+        section_pattern = re.compile(
+            r"(?ms)^##\s*差异与冲突\s*\n(.*?)(?=^##\s|\Z)"
+        )
+        existing_blocks = [
+            match.group(1).strip()
+            for match in section_pattern.finditer(content)
+            if match.group(1).strip()
+        ]
+        cleaned = section_pattern.sub("", content).strip()
+        if existing_blocks:
+            conflict_body = existing_blocks[0]
+        else:
+            normalized_markers = [
+                marker.strip() for marker in conflict_markers if marker.strip()
+            ]
+            if normalized_markers:
+                conflict_body = "\n".join(f"- {marker}" for marker in normalized_markers)
+            else:
+                conflict_body = "- 未发现明显冲突。"
+        if cleaned:
+            return f"{cleaned}\n\n## 差异与冲突\n\n{conflict_body}"
+        return f"## 差异与冲突\n\n{conflict_body}"
