@@ -1,8 +1,10 @@
 package com.midas.client.ui.screen
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -293,5 +295,65 @@ class MainScreenContentRobolectricSmokeTest {
         composeRule.onNodeWithText("笔记库").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithText("B站笔记（1/1）").assertIsDisplayed()
+    }
+
+    @Test
+    fun mergeNoteDetail_shouldShowMergeMarkerInsteadOfSourceUrl() {
+        val mergedUrl = "https://www.bilibili.com/video/BV1xx411c7mD"
+        composeRule.setContent {
+            MaterialTheme {
+                MainScreenContent(
+                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
+                    bilibili = BilibiliUiState(),
+                    xiaohongshu = XiaohongshuUiState(),
+                    notes = NotesUiState(
+                        bilibiliNotes = listOf(
+                            BilibiliSavedNote(
+                                noteId = "merged_note_abc123",
+                                title = "合并笔记",
+                                videoUrl = mergedUrl,
+                                summaryMarkdown = "# 合并内容",
+                                elapsedMs = 1000,
+                                transcriptChars = 66,
+                                savedAt = "2026-02-27 00:00:00",
+                            ),
+                        ),
+                    ),
+                    onAppForeground = {},
+                    onBaseUrlChange = {},
+                    onSaveBaseUrl = {},
+                    onTestConnection = {},
+                    onConfigTextChange = { _, _ -> },
+                    onConfigBooleanChange = { _, _ -> },
+                    onResetConfig = {},
+                    onBilibiliVideoUrlChange = {},
+                    onSubmitBilibiliSummary = {},
+                    onSaveBilibiliNote = {},
+                    onXiaohongshuUrlChange = {},
+                    onSummarizeXiaohongshuUrl = {},
+                    onRefreshXiaohongshuAuthConfig = {},
+                    onSaveSingleXiaohongshuNote = {},
+                    onNotesKeywordChange = {},
+                    onRefreshNotes = {},
+                    onDeleteBilibiliNote = {},
+                    onDeleteXiaohongshuNote = {},
+                    onSuggestMergeCandidates = {},
+                    onPreviewMergeCandidate = { _ -> },
+                    onCommitCurrentMerge = {},
+                    onRollbackLastMerge = {},
+                    onFinalizeLastMerge = {},
+                    enableLifecycleAutoRefresh = false,
+                    enableCyclicTabs = false,
+                    animateTabSwitch = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("笔记库").performClick()
+        composeRule.waitForIdle()
+        composeRule.onAllNodesWithText("合并笔记")[1].performClick()
+
+        composeRule.onNodeWithText("Merge Note · 来源请见正文末尾链接").assertIsDisplayed()
+        composeRule.onAllNodesWithText(mergedUrl).assertCountEquals(0)
     }
 }

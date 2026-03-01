@@ -361,6 +361,8 @@ Success `data`:
 
 说明：
 - 此状态下可执行“回退”或“确认合并结果（破坏性）”。
+- 创建 merged 笔记时，`merged_summary_markdown` 末尾会追加 `## 原始笔记来源`，
+  按“原始标题 + 可点击链接”列出来源笔记。
 
 ## `POST /api/notes/merge/rollback`
 

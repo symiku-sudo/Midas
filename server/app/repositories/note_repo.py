@@ -136,7 +136,8 @@ class NoteLibraryRepository:
             rows = conn.execute(
                 """
                 SELECT note_id, title, video_url, summary_markdown, elapsed_ms,
-                       transcript_chars, saved_at
+                       transcript_chars,
+                       strftime('%Y-%m-%d %H:%M:%S', datetime(saved_at, '+8 hours')) AS saved_at
                 FROM saved_bilibili_notes
                 ORDER BY saved_at DESC, rowid DESC
                 """
@@ -151,7 +152,8 @@ class NoteLibraryRepository:
             rows = conn.execute(
                 f"""
                 SELECT note_id, title, video_url, summary_markdown, elapsed_ms,
-                       transcript_chars, saved_at
+                       transcript_chars,
+                       strftime('%Y-%m-%d %H:%M:%S', datetime(saved_at, '+8 hours')) AS saved_at
                 FROM saved_bilibili_notes
                 WHERE note_id IN ({placeholders})
                 """,
@@ -171,6 +173,19 @@ class NoteLibraryRepository:
     def clear_bilibili_notes(self) -> int:
         with self._connect() as conn:
             cursor = conn.execute("DELETE FROM saved_bilibili_notes")
+            conn.commit()
+            return int(cursor.rowcount)
+
+    def update_bilibili_note_summary(self, *, note_id: str, summary_markdown: str) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE saved_bilibili_notes
+                SET summary_markdown = ?
+                WHERE note_id = ?
+                """,
+                (summary_markdown, note_id),
+            )
             conn.commit()
             return int(cursor.rowcount)
 
@@ -201,7 +216,8 @@ class NoteLibraryRepository:
         with self._connect() as conn:
             rows = conn.execute(
                 """
-                SELECT note_id, title, source_url, summary_markdown, saved_at
+                SELECT note_id, title, source_url, summary_markdown,
+                       strftime('%Y-%m-%d %H:%M:%S', datetime(saved_at, '+8 hours')) AS saved_at
                 FROM saved_xiaohongshu_notes
                 ORDER BY saved_at DESC, rowid DESC
                 """
@@ -215,7 +231,8 @@ class NoteLibraryRepository:
         with self._connect() as conn:
             rows = conn.execute(
                 f"""
-                SELECT note_id, title, source_url, summary_markdown, saved_at
+                SELECT note_id, title, source_url, summary_markdown,
+                       strftime('%Y-%m-%d %H:%M:%S', datetime(saved_at, '+8 hours')) AS saved_at
                 FROM saved_xiaohongshu_notes
                 WHERE note_id IN ({placeholders})
                 """,
@@ -235,6 +252,19 @@ class NoteLibraryRepository:
     def clear_xiaohongshu_notes(self) -> int:
         with self._connect() as conn:
             cursor = conn.execute("DELETE FROM saved_xiaohongshu_notes")
+            conn.commit()
+            return int(cursor.rowcount)
+
+    def update_xiaohongshu_note_summary(self, *, note_id: str, summary_markdown: str) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE saved_xiaohongshu_notes
+                SET summary_markdown = ?
+                WHERE note_id = ?
+                """,
+                (summary_markdown, note_id),
+            )
             conn.commit()
             return int(cursor.rowcount)
 
@@ -326,6 +356,28 @@ class NoteLibraryRepository:
                 (source,),
             ).fetchall()
         return [dict(row) for row in rows]
+
+    def get_latest_merge_history_by_merged_note_id(
+        self,
+        *,
+        source: str,
+        merged_note_id: str,
+    ) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT merge_id, source, status, source_note_ids, merged_note_id,
+                       field_decisions, fallback_reason, rollback_of, operator,
+                       created_at, updated_at
+                FROM note_merge_history
+                WHERE source = ?
+                  AND merged_note_id = ?
+                ORDER BY created_at DESC, rowid DESC
+                LIMIT 1
+                """,
+                (source, merged_note_id),
+            ).fetchone()
+        return dict(row) if row is not None else None
 
     def update_merge_history_status(
         self,

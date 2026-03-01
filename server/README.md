@@ -254,6 +254,8 @@ curl -X POST http://127.0.0.1:8000/api/config/editable/reset
 - 每次新增 B 站或小红书已保存笔记后，服务会自动备份一次数据库到 `.tmp/backups/`。
 - 智能合并默认非破坏，`finalize` 后会做破坏性清理（仅保留 merged 笔记）。
 - 合并候选评分支持本地 embedding 语义相似（配置见 `notes_merge.*`，可关闭后回退词面相似）。
+- merged 笔记正文末尾会自动追加 `原始笔记来源` 小节（原始标题 + 可点击来源链接）。
+- 笔记库返回的 `saved_at` 统一按东八区（UTC+08:00）显示。
 - `web_readonly` 模式仍属于非官方接口回放，务必低频、低并发、只读请求，优先保护账号安全。
 
 ## Tests

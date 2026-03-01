@@ -37,6 +37,11 @@ _MERGE_STATUS_PENDING_CONFIRM = "MERGED_PENDING_CONFIRM"
 _MERGE_STATUS_ROLLED_BACK = "ROLLED_BACK"
 _MERGE_STATUS_FINALIZED_DESTRUCTIVE = "FINALIZED_DESTRUCTIVE"
 _SOURCE_INDEX_STATE_ACTIVE = "ACTIVE"
+_MERGED_NOTE_ID_PREFIX = "merged_note_"
+_MERGE_SOURCE_SECTION_TITLE = "原始笔记来源"
+_MERGE_SOURCE_SECTION_PATTERN = re.compile(
+    rf"(?ms)\n?##\s*{re.escape(_MERGE_SOURCE_SECTION_TITLE)}\s*\n.*\Z"
+)
 _TITLE_TOKEN_MIN_ANCHOR = 0.06
 _TITLE_SURFACE_MIN_ANCHOR = 0.55
 _ASCII_TOKEN_PATTERN = re.compile(r"[0-9a-z]+")
@@ -75,6 +80,12 @@ class NoteLibraryService:
         self._semantic_model: Any | None = None
         self._semantic_model_failed = False
         self._semantic_embeddings_cache: dict[str, list[float]] = {}
+        try:
+            refreshed = self.refresh_merge_note_formats()
+            if refreshed > 0:
+                logger.info("Refreshed %s existing merge note(s).", refreshed)
+        except Exception:
+            logger.exception("Failed to refresh existing merge note formats on startup.")
 
     def save_bilibili_note(
         self,
@@ -173,6 +184,14 @@ class NoteLibraryService:
 
     def clear_xiaohongshu_notes(self) -> int:
         return self._repository.clear_xiaohongshu_notes()
+
+    def refresh_merge_note_formats(self) -> int:
+        updated = 0
+        updated += self._refresh_merge_note_formats_for_source(_MERGE_SOURCE_BILIBILI)
+        updated += self._refresh_merge_note_formats_for_source(_MERGE_SOURCE_XIAOHONGSHU)
+        if updated > 0:
+            self._backup_database_after_note_save()
+        return updated
 
     def prune_unsaved_xiaohongshu_synced_notes(self) -> XiaohongshuSyncedNotesPruneData:
         candidate_count, deleted_count = (
@@ -289,6 +308,31 @@ class NoteLibraryService:
             current = source_links_snapshot.get(source_note_id, {})
             canonical = str(current.get("canonical_note_id", "")).strip() or source_note_id
             normalized_snapshot[source_note_id] = canonical
+        selected_source_refs = {
+            str(item.get("note_id", "")).strip(): str(item.get("source_ref", "")).strip()
+            for item in notes
+            if str(item.get("note_id", "")).strip()
+        }
+        selected_sources = {
+            str(item.get("note_id", "")).strip(): {
+                "title": str(item.get("title", "")).strip(),
+                "source_ref": str(item.get("source_ref", "")).strip(),
+            }
+            for item in notes
+            if str(item.get("note_id", "")).strip()
+        }
+        lineage_sources = self._collect_lineage_sources(
+            source=preview.source,
+            lineage_source_ids=lineage_source_ids,
+            source_link_snapshot=normalized_snapshot,
+            source_refs_by_id=selected_source_refs,
+            preferred_sources=selected_sources,
+            visited={merged_note_id},
+        )
+        final_summary = self._append_merge_sources_section(
+            markdown=final_summary,
+            lineage_sources=lineage_sources,
+        )
 
         if preview.source == _MERGE_SOURCE_BILIBILI:
             primary = notes[0]
@@ -339,8 +383,10 @@ class NoteLibraryService:
             "merged_title": final_title,
             "merged_summary_markdown": final_summary,
             "source_refs": preview.source_refs,
+            "source_ref_by_note_id": selected_source_refs,
             "conflict_markers": preview.conflict_markers,
             "lineage_source_ids": lineage_source_ids,
+            "lineage_sources": lineage_sources,
             "source_link_snapshot": normalized_snapshot,
         }
         self._repository.save_merge_history(
@@ -494,6 +540,41 @@ class NoteLibraryService:
             deleted_source_count=deleted_source_count,
             kept_merged_note_id=merged_note_id,
         )
+
+    def _refresh_merge_note_formats_for_source(self, source: str) -> int:
+        if source == _MERGE_SOURCE_BILIBILI:
+            rows = self._repository.list_bilibili_notes()
+            update_fn = self._repository.update_bilibili_note_summary
+        else:
+            rows = self._repository.list_xiaohongshu_notes()
+            update_fn = self._repository.update_xiaohongshu_note_summary
+
+        updated = 0
+        for row in rows:
+            note_id = str(row.get("note_id", "")).strip()
+            if not self._is_merge_note_id(note_id):
+                continue
+            history = self._repository.get_latest_merge_history_by_merged_note_id(
+                source=source,
+                merged_note_id=note_id,
+            )
+            if history is None:
+                continue
+            lineage_sources = self._read_lineage_sources_from_history(
+                source=source,
+                history=history,
+                visited={note_id},
+            )
+            current_markdown = str(row.get("summary_markdown", ""))
+            refreshed_markdown = self._append_merge_sources_section(
+                markdown=current_markdown,
+                lineage_sources=lineage_sources,
+            )
+            if refreshed_markdown == current_markdown:
+                continue
+            count = update_fn(note_id=note_id, summary_markdown=refreshed_markdown)
+            updated += count
+        return updated
 
     def _normalize_bilibili_title(
         self,
@@ -1002,6 +1083,307 @@ class NoteLibraryService:
         for source_id in lineage_source_ids:
             snapshot.setdefault(source_id, source_id)
         return snapshot
+
+    def _is_merge_note_id(self, note_id: str) -> bool:
+        return note_id.strip().startswith(_MERGED_NOTE_ID_PREFIX)
+
+    def _load_source_note_map(
+        self,
+        *,
+        source: str,
+        note_ids: list[str],
+    ) -> dict[str, dict[str, str]]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for item in note_ids:
+            candidate = str(item).strip()
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            normalized.append(candidate)
+        if not normalized:
+            return {}
+
+        if source == _MERGE_SOURCE_BILIBILI:
+            rows = self._repository.get_bilibili_notes_by_ids(normalized)
+            return {
+                str(row.get("note_id", "")).strip(): {
+                    "title": str(row.get("title", "")).strip(),
+                    "source_ref": str(row.get("video_url", "")).strip(),
+                }
+                for row in rows
+                if str(row.get("note_id", "")).strip()
+            }
+
+        rows = self._repository.get_xiaohongshu_notes_by_ids(normalized)
+        return {
+            str(row.get("note_id", "")).strip(): {
+                "title": str(row.get("title", "")).strip(),
+                "source_ref": str(row.get("source_url", "")).strip(),
+            }
+            for row in rows
+            if str(row.get("note_id", "")).strip()
+        }
+
+    def _read_source_refs_from_history(
+        self,
+        *,
+        history: dict[str, Any],
+        field_decisions: dict[str, Any] | None = None,
+    ) -> dict[str, str]:
+        decisions = field_decisions or self._decode_field_decisions(history.get("field_decisions"))
+        output: dict[str, str] = {}
+
+        raw_mapping = decisions.get("source_ref_by_note_id")
+        if isinstance(raw_mapping, dict):
+            for note_id, source_ref in raw_mapping.items():
+                key = str(note_id).strip()
+                value = str(source_ref).strip()
+                if key and value:
+                    output[key] = value
+            if output:
+                return output
+
+        source_note_ids = self._decode_json_note_ids(history.get("source_note_ids"))
+        raw_refs = decisions.get("source_refs")
+        if isinstance(raw_refs, list):
+            for index, note_id in enumerate(source_note_ids):
+                if index >= len(raw_refs):
+                    break
+                source_ref = str(raw_refs[index]).strip()
+                if source_ref:
+                    output[note_id] = source_ref
+        return output
+
+    def _parse_lineage_sources(self, raw: Any) -> list[dict[str, str]]:
+        if not isinstance(raw, list):
+            return []
+        parsed: list[dict[str, str]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            note_id = str(item.get("note_id", "")).strip()
+            if not note_id:
+                continue
+            title = str(item.get("title", "")).strip() or note_id
+            source_ref = str(item.get("source_ref", "")).strip()
+            parsed.append(
+                {
+                    "note_id": note_id,
+                    "title": title,
+                    "source_ref": source_ref,
+                }
+            )
+        return self._dedupe_lineage_sources(parsed)
+
+    def _dedupe_lineage_sources(
+        self,
+        sources: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        deduped: list[dict[str, str]] = []
+        index_by_note_id: dict[str, int] = {}
+        for item in sources:
+            note_id = str(item.get("note_id", "")).strip()
+            if not note_id:
+                continue
+            title = str(item.get("title", "")).strip() or note_id
+            source_ref = str(item.get("source_ref", "")).strip()
+            existing_index = index_by_note_id.get(note_id)
+            if existing_index is None:
+                index_by_note_id[note_id] = len(deduped)
+                deduped.append(
+                    {
+                        "note_id": note_id,
+                        "title": title,
+                        "source_ref": source_ref,
+                    }
+                )
+                continue
+            current = deduped[existing_index]
+            if not str(current.get("title", "")).strip() and title:
+                current["title"] = title
+            if not str(current.get("source_ref", "")).strip() and source_ref:
+                current["source_ref"] = source_ref
+        return deduped
+
+    def _load_lineage_sources_for_merged_note(
+        self,
+        *,
+        source: str,
+        merged_note_id: str,
+        visited: set[str] | None = None,
+    ) -> list[dict[str, str]]:
+        normalized = merged_note_id.strip()
+        if not normalized:
+            return []
+        visited_set = set(visited or set())
+        if normalized in visited_set:
+            return []
+        visited_set.add(normalized)
+        history = self._repository.get_latest_merge_history_by_merged_note_id(
+            source=source,
+            merged_note_id=normalized,
+        )
+        if history is None:
+            return []
+        return self._read_lineage_sources_from_history(
+            source=source,
+            history=history,
+            visited=visited_set,
+        )
+
+    def _collect_lineage_sources(
+        self,
+        *,
+        source: str,
+        lineage_source_ids: list[str],
+        source_link_snapshot: dict[str, str],
+        source_refs_by_id: dict[str, str] | None = None,
+        preferred_sources: dict[str, dict[str, str]] | None = None,
+        visited: set[str] | None = None,
+    ) -> list[dict[str, str]]:
+        normalized_ids: list[str] = []
+        seen: set[str] = set()
+        for item in lineage_source_ids:
+            candidate = str(item).strip()
+            if not candidate or candidate in seen:
+                continue
+            seen.add(candidate)
+            normalized_ids.append(candidate)
+        if not normalized_ids:
+            return []
+
+        canonical_ids = [
+            str(source_link_snapshot.get(note_id, note_id)).strip()
+            for note_id in normalized_ids
+        ]
+        note_map = self._load_source_note_map(
+            source=source,
+            note_ids=[*normalized_ids, *canonical_ids],
+        )
+        ref_mapping = dict(source_refs_by_id or {})
+        preferred_mapping = dict(preferred_sources or {})
+        output: list[dict[str, str]] = []
+
+        for source_note_id in normalized_ids:
+            if self._is_merge_note_id(source_note_id):
+                nested_sources = self._load_lineage_sources_for_merged_note(
+                    source=source,
+                    merged_note_id=source_note_id,
+                    visited=visited,
+                )
+                if nested_sources:
+                    output.extend(nested_sources)
+                    continue
+
+            preferred = preferred_mapping.get(source_note_id, {})
+            title = str(preferred.get("title", "")).strip()
+            source_ref = str(preferred.get("source_ref", "")).strip()
+
+            current = note_map.get(source_note_id, {})
+            if not title:
+                title = str(current.get("title", "")).strip()
+            if not source_ref:
+                source_ref = str(current.get("source_ref", "")).strip()
+            if not source_ref:
+                source_ref = str(ref_mapping.get(source_note_id, "")).strip()
+
+            canonical_id = str(
+                source_link_snapshot.get(source_note_id, source_note_id)
+            ).strip() or source_note_id
+            canonical_note = note_map.get(canonical_id, {})
+            if not title:
+                title = str(canonical_note.get("title", "")).strip()
+            if not source_ref:
+                source_ref = str(canonical_note.get("source_ref", "")).strip()
+
+            output.append(
+                {
+                    "note_id": source_note_id,
+                    "title": title or source_note_id,
+                    "source_ref": source_ref,
+                }
+            )
+        return self._dedupe_lineage_sources(output)
+
+    def _read_lineage_sources_from_history(
+        self,
+        *,
+        source: str,
+        history: dict[str, Any],
+        visited: set[str] | None = None,
+    ) -> list[dict[str, str]]:
+        field_decisions = self._decode_field_decisions(history.get("field_decisions"))
+        parsed = self._parse_lineage_sources(field_decisions.get("lineage_sources"))
+        if parsed:
+            return parsed
+        lineage_source_ids = self._read_lineage_source_ids(history)
+        source_link_snapshot = self._read_source_link_snapshot(
+            history=history,
+            lineage_source_ids=lineage_source_ids,
+        )
+        source_refs_by_id = self._read_source_refs_from_history(
+            history=history,
+            field_decisions=field_decisions,
+        )
+        return self._collect_lineage_sources(
+            source=source,
+            lineage_source_ids=lineage_source_ids,
+            source_link_snapshot=source_link_snapshot,
+            source_refs_by_id=source_refs_by_id,
+            preferred_sources={},
+            visited=visited,
+        )
+
+    def _escape_markdown_link_text(self, text: str) -> str:
+        normalized = text.replace("\n", " ").strip()
+        return (
+            normalized.replace("\\", "\\\\")
+            .replace("[", "\\[")
+            .replace("]", "\\]")
+            .replace("(", "\\(")
+            .replace(")", "\\)")
+        )
+
+    def _render_merge_sources_section(
+        self,
+        *,
+        lineage_sources: list[dict[str, str]],
+    ) -> str:
+        lines = [f"## {_MERGE_SOURCE_SECTION_TITLE}"]
+        sources = self._dedupe_lineage_sources(lineage_sources)
+        if not sources:
+            lines.append("- 无可用来源信息。")
+            return "\n".join(lines)
+
+        for item in sources:
+            note_id = str(item.get("note_id", "")).strip()
+            title = str(item.get("title", "")).strip() or note_id or "未命名笔记"
+            source_ref = str(item.get("source_ref", "")).strip().replace("\n", "")
+            if source_ref:
+                escaped_title = self._escape_markdown_link_text(title)
+                lines.append(f"- [{escaped_title}](<{source_ref}>)")
+                continue
+            if note_id and title != note_id:
+                lines.append(f"- {title}（note_id: {note_id}）")
+                continue
+            lines.append(f"- {title}")
+        return "\n".join(lines)
+
+    def _append_merge_sources_section(
+        self,
+        *,
+        markdown: str,
+        lineage_sources: list[dict[str, str]],
+    ) -> str:
+        content = str(markdown).strip()
+        if not content:
+            content = "# 合并笔记\n\n- 信息不足。"
+        cleaned = _MERGE_SOURCE_SECTION_PATTERN.sub("", content).strip()
+        section = self._render_merge_sources_section(lineage_sources=lineage_sources)
+        if cleaned:
+            return f"{cleaned}\n\n{section}".strip()
+        return section
 
     def _enforce_merge_format_contract(
         self,

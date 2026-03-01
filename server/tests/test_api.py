@@ -14,6 +14,7 @@ from app.api.routes import (
 )
 from app.core.config import get_settings
 from app.main import app
+from app.repositories.note_repo import NoteLibraryRepository
 
 client = TestClient(app)
 
@@ -280,7 +281,18 @@ def test_notes_merge_lifecycle_commit_rollback_and_finalize() -> None:
 
     list_after_commit = client.get("/api/notes/bilibili")
     assert list_after_commit.status_code == 200
-    assert list_after_commit.json()["data"]["total"] == 3
+    list_after_commit_body = list_after_commit.json()
+    assert list_after_commit_body["data"]["total"] == 3
+    merged_items = [
+        item
+        for item in list_after_commit_body["data"]["items"]
+        if str(item.get("note_id", "")).startswith("merged_note_")
+    ]
+    assert len(merged_items) == 1
+    merged_summary = str(merged_items[0]["summary_markdown"])
+    assert "## 原始笔记来源" in merged_summary
+    assert "[AI 合并测试](<https://www.bilibili.com/video/BV1xx411c7mD>)" in merged_summary
+    assert "[AI 合并测试 进阶](<https://www.bilibili.com/video/BV1xx411c7mE>)" in merged_summary
 
     rollback_resp = client.post(
         "/api/notes/merge/rollback",
@@ -376,6 +388,69 @@ def test_notes_merge_finalize_requires_destructive_confirmation() -> None:
     body = finalize_resp.json()
     assert body["ok"] is False
     assert body["code"] == "INVALID_INPUT"
+
+
+def test_existing_merge_note_format_is_refreshed_for_legacy_markdown() -> None:
+    _reset_xiaohongshu_state()
+    first_save = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": "https://www.bilibili.com/video/BV1xx411c7mD",
+            "summary_markdown": "# 测试一",
+            "elapsed_ms": 10,
+            "transcript_chars": 20,
+            "title": "历史标题一",
+        },
+    )
+    assert first_save.status_code == 200
+    first_note_id = first_save.json()["data"]["note_id"]
+
+    second_save = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": "https://www.bilibili.com/video/BV1xx411c7mE",
+            "summary_markdown": "# 测试二",
+            "elapsed_ms": 11,
+            "transcript_chars": 22,
+            "title": "历史标题二",
+        },
+    )
+    assert second_save.status_code == 200
+    second_note_id = second_save.json()["data"]["note_id"]
+
+    commit_resp = client.post(
+        "/api/notes/merge/commit",
+        json={
+            "source": "bilibili",
+            "note_ids": [first_note_id, second_note_id],
+        },
+    )
+    assert commit_resp.status_code == 200
+    merged_note_id = commit_resp.json()["data"]["merged_note_id"]
+
+    legacy_markdown = "# 旧版合并笔记\n\n## 差异与冲突\n\n- 旧格式内容"
+    repo = NoteLibraryRepository(get_settings().xiaohongshu.db_path)
+    updated_count = repo.update_bilibili_note_summary(
+        note_id=merged_note_id,
+        summary_markdown=legacy_markdown,
+    )
+    assert updated_count == 1
+
+    routes_module._get_note_library_service.cache_clear()
+
+    list_resp = client.get("/api/notes/bilibili")
+    assert list_resp.status_code == 200
+    list_body = list_resp.json()
+    merged_items = [
+        item
+        for item in list_body["data"]["items"]
+        if item["note_id"] == merged_note_id
+    ]
+    assert len(merged_items) == 1
+    refreshed_summary = merged_items[0]["summary_markdown"]
+    assert "## 原始笔记来源" in refreshed_summary
+    assert "[历史标题一](<https://www.bilibili.com/video/BV1xx411c7mD>)" in refreshed_summary
+    assert "[历史标题二](<https://www.bilibili.com/video/BV1xx411c7mE>)" in refreshed_summary
 
 
 def test_notes_merge_suggest_default_threshold_hits_title_and_summary_similarity() -> None:

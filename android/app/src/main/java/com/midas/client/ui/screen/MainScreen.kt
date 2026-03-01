@@ -1274,6 +1274,10 @@ private sealed interface NoteDetailViewState {
     data class Xiaohongshu(val note: XiaohongshuSavedNote) : NoteDetailViewState
 }
 
+private fun isMergeNoteId(noteId: String): Boolean {
+    return noteId.trim().startsWith("merged_note_")
+}
+
 @Composable
 private fun NoteDetailPanel(
     detail: NoteDetailViewState,
@@ -1299,15 +1303,24 @@ private fun BilibiliNoteDetail(
     note: BilibiliSavedNote,
     onOpenSourceUrl: (String) -> Unit,
 ) {
+    val isMergeNote = isMergeNoteId(note.noteId)
     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(note.title, style = MaterialTheme.typography.titleSmall)
         Text("保存时间：${note.savedAt}", style = MaterialTheme.typography.bodySmall)
-        Text(
-            note.videoUrl,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.clickable { onOpenSourceUrl(note.videoUrl) },
-        )
+        if (isMergeNote) {
+            Text(
+                "Merge Note · 来源请见正文末尾链接",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF1565C0),
+            )
+        } else {
+            Text(
+                note.videoUrl,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clickable { onOpenSourceUrl(note.videoUrl) },
+            )
+        }
         HorizontalDivider()
         MarkdownText(markdown = note.summaryMarkdown, modifier = Modifier.fillMaxWidth())
     }
@@ -1318,15 +1331,24 @@ private fun XiaohongshuNoteDetail(
     note: XiaohongshuSavedNote,
     onOpenSourceUrl: (String) -> Unit,
 ) {
+    val isMergeNote = isMergeNoteId(note.noteId)
     Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(note.title, style = MaterialTheme.typography.titleSmall)
         Text("保存时间：${note.savedAt}", style = MaterialTheme.typography.bodySmall)
-        Text(
-            note.sourceUrl,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier.clickable { onOpenSourceUrl(note.sourceUrl) },
-        )
+        if (isMergeNote) {
+            Text(
+                "Merge Note · 来源请见正文末尾链接",
+                style = MaterialTheme.typography.bodySmall,
+                color = Color(0xFF1565C0),
+            )
+        } else {
+            Text(
+                note.sourceUrl,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier.clickable { onOpenSourceUrl(note.sourceUrl) },
+            )
+        }
         HorizontalDivider()
         MarkdownText(markdown = note.summaryMarkdown, modifier = Modifier.fillMaxWidth())
     }
