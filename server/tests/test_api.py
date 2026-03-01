@@ -467,6 +467,76 @@ def test_notes_merge_suggest_default_threshold_rejects_no_title_anchor_pair() ->
     assert body["data"]["total"] == 0
 
 
+def test_notes_merge_suggest_hides_stale_pairs_after_commit_until_refresh() -> None:
+    _reset_xiaohongshu_state()
+
+    save_a = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": "https://www.bilibili.com/video/BV1xx411c7mH",
+            "summary_markdown": "# Claude Code\n\nHook 流程与团队协作实践。",
+            "elapsed_ms": 10,
+            "transcript_chars": 20,
+            "title": "Claude Code 实战一",
+        },
+    )
+    assert save_a.status_code == 200
+    note_a = save_a.json()["data"]["note_id"]
+
+    save_b = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": "https://www.bilibili.com/video/BV1xx411c7mI",
+            "summary_markdown": "# Claude Code\n\nHook 流程与团队协作实践（二）。",
+            "elapsed_ms": 11,
+            "transcript_chars": 22,
+            "title": "Claude Code 实战二",
+        },
+    )
+    assert save_b.status_code == 200
+    note_b = save_b.json()["data"]["note_id"]
+
+    save_c = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": "https://www.bilibili.com/video/BV1xx411c7mJ",
+            "summary_markdown": "# Claude Code\n\nHook 流程与团队协作实践（三）。",
+            "elapsed_ms": 12,
+            "transcript_chars": 24,
+            "title": "Claude Code 实战三",
+        },
+    )
+    assert save_c.status_code == 200
+    note_c = save_c.json()["data"]["note_id"]
+
+    before_suggest = client.post(
+        "/api/notes/merge/suggest",
+        json={"source": "bilibili", "limit": 20, "min_score": 0.1},
+    )
+    assert before_suggest.status_code == 200
+    before_items = before_suggest.json()["data"]["items"]
+    before_pairs = {frozenset(item["note_ids"]) for item in before_items}
+    assert frozenset([note_a, note_b]) in before_pairs
+    assert frozenset([note_b, note_c]) in before_pairs
+
+    commit_resp = client.post(
+        "/api/notes/merge/commit",
+        json={"source": "bilibili", "note_ids": [note_a, note_b]},
+    )
+    assert commit_resp.status_code == 200
+
+    after_suggest = client.post(
+        "/api/notes/merge/suggest",
+        json={"source": "bilibili", "limit": 20, "min_score": 0.1},
+    )
+    assert after_suggest.status_code == 200
+    after_items = after_suggest.json()["data"]["items"]
+    assert after_items == []
+    for item in after_items:
+        assert note_a not in item["note_ids"]
+        assert note_b not in item["note_ids"]
+
+
 def test_xiaohongshu_summarize_url_dedup_uses_merge_canonical_after_finalize() -> None:
     _reset_xiaohongshu_state()
 

@@ -317,16 +317,22 @@ class NoteLibraryService:
                     }
                 ]
             )
+        pending_mappings = {
+            source_note_id: {
+                "canonical_note_id": merged_note_id,
+                "merge_id": merge_id,
+                "state": _MERGE_STATUS_PENDING_CONFIRM,
+            }
+            for source_note_id in lineage_source_ids
+        }
+        pending_mappings[merged_note_id] = {
+            "canonical_note_id": merged_note_id,
+            "merge_id": merge_id,
+            "state": _MERGE_STATUS_PENDING_CONFIRM,
+        }
         self._repository.upsert_source_index_links(
             platform=preview.source,
-            mappings={
-                source_note_id: {
-                    "canonical_note_id": merged_note_id,
-                    "merge_id": merge_id,
-                    "state": _MERGE_STATUS_PENDING_CONFIRM,
-                }
-                for source_note_id in lineage_source_ids
-            },
+            mappings=pending_mappings,
         )
 
         field_decisions = {
@@ -384,16 +390,22 @@ class NoteLibraryService:
             deleted_merged_count = self._repository.delete_bilibili_note(merged_note_id)
         else:
             deleted_merged_count = self._repository.delete_xiaohongshu_note(merged_note_id)
+        rollback_mappings = {
+            source_note_id: {
+                "canonical_note_id": source_link_snapshot.get(source_note_id, source_note_id),
+                "merge_id": "",
+                "state": _SOURCE_INDEX_STATE_ACTIVE,
+            }
+            for source_note_id in lineage_source_ids
+        }
+        rollback_mappings[merged_note_id] = {
+            "canonical_note_id": merged_note_id,
+            "merge_id": "",
+            "state": _MERGE_STATUS_ROLLED_BACK,
+        }
         self._repository.upsert_source_index_links(
             platform=source,
-            mappings={
-                source_note_id: {
-                    "canonical_note_id": source_link_snapshot.get(source_note_id, source_note_id),
-                    "merge_id": "",
-                    "state": _SOURCE_INDEX_STATE_ACTIVE,
-                }
-                for source_note_id in lineage_source_ids
-            },
+            mappings=rollback_mappings,
         )
 
         self._repository.update_merge_history_status(
@@ -453,16 +465,22 @@ class NoteLibraryService:
             deleted_source_count = self._repository.delete_bilibili_notes(source_note_ids)
         else:
             deleted_source_count = self._repository.delete_xiaohongshu_notes(source_note_ids)
+        finalized_mappings = {
+            source_note_id: {
+                "canonical_note_id": merged_note_id,
+                "merge_id": merge_id,
+                "state": _MERGE_STATUS_FINALIZED_DESTRUCTIVE,
+            }
+            for source_note_id in lineage_source_ids
+        }
+        finalized_mappings[merged_note_id] = {
+            "canonical_note_id": merged_note_id,
+            "merge_id": "",
+            "state": _SOURCE_INDEX_STATE_ACTIVE,
+        }
         self._repository.upsert_source_index_links(
             platform=source,
-            mappings={
-                source_note_id: {
-                    "canonical_note_id": merged_note_id,
-                    "merge_id": merge_id,
-                    "state": _MERGE_STATUS_FINALIZED_DESTRUCTIVE,
-                }
-                for source_note_id in lineage_source_ids
-            },
+            mappings=finalized_mappings,
         )
 
         self._repository.update_merge_history_status(
@@ -523,21 +541,37 @@ class NoteLibraryService:
     def _list_notes_for_merge_source(self, source: str) -> list[dict[str, Any]]:
         if source == _MERGE_SOURCE_BILIBILI:
             rows = self._repository.list_bilibili_notes()
-            return [
+            source_ref_key = "video_url"
+        else:
+            rows = self._repository.list_xiaohongshu_notes()
+            source_ref_key = "source_url"
+
+        note_ids = [
+            str(item.get("note_id", "")).strip()
+            for item in rows
+            if str(item.get("note_id", "")).strip()
+        ]
+        source_links = self._repository.get_source_index_links(
+            platform=source,
+            source_note_ids=note_ids,
+        )
+
+        filtered: list[dict[str, Any]] = []
+        for item in rows:
+            note_id = str(item.get("note_id", "")).strip()
+            if not note_id:
+                continue
+            link = source_links.get(note_id)
+            # Hide notes already participating in an unfinished/finished merge state.
+            if link is not None and str(link.get("state", "")).strip() != _SOURCE_INDEX_STATE_ACTIVE:
+                continue
+            filtered.append(
                 {
                     **item,
-                    "source_ref": item.get("video_url", ""),
+                    "source_ref": item.get(source_ref_key, ""),
                 }
-                for item in rows
-            ]
-        rows = self._repository.list_xiaohongshu_notes()
-        return [
-            {
-                **item,
-                "source_ref": item.get("source_url", ""),
-            }
-            for item in rows
-        ]
+            )
+        return filtered
 
     def _load_source_notes_by_ids(
         self,

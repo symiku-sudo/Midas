@@ -899,25 +899,63 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
             when (val finalizeResult = apiRepository.finalizeMerge(baseUrl = baseUrl, mergeId = commitData.mergeId)) {
                 is AppResult.Success -> {
-                    val targetNoteIds = preview.noteIds.toSet()
-                    val targetPreviewKey = buildMergeCandidateKey(
-                        source = preview.source,
-                        noteIds = preview.noteIds,
-                    )
+                    val affectedNoteIds = commitData.sourceNoteIds
+                        .map { it.trim() }
+                        .filter { it.isNotEmpty() }
+                        .ifEmpty { preview.noteIds }
+                        .toSet()
                     _notesState.update {
                         it.copy(
                             isMergeFinalizing = false,
+                            isMergeSuggesting = true,
                             lastMergeCommit = null,
                             mergePreview = null,
                             mergePreviewKey = "",
-                            mergePreviewCache = it.mergePreviewCache - targetPreviewKey,
+                            mergePreviewCache = emptyMap(),
                             mergeCandidates = it.mergeCandidates.filterNot { candidate ->
-                                candidate.source == preview.source && candidate.noteIds.toSet() == targetNoteIds
+                                candidate.source == preview.source &&
+                                    candidate.noteIds.any { noteId -> noteId in affectedNoteIds }
                             },
-                            mergeStatus = "已确认合并结果，原笔记已清理。",
+                            mergeStatus = "已确认合并结果，正在刷新建议列表...",
                             actionStatus = "已确认 merge_id=${finalizeResult.data.mergeId}，删除原笔记 ${finalizeResult.data.deletedSourceCount} 条。",
                             errorMessage = "",
                         )
+                    }
+                    when (
+                        val suggestResult = apiRepository.suggestMergeCandidates(
+                            baseUrl = baseUrl,
+                            source = preview.source,
+                        )
+                    ) {
+                        is AppResult.Success -> {
+                            val message = if (suggestResult.data.items.isEmpty()) {
+                                "已确认合并结果，当前无可合并候选。"
+                            } else {
+                                "已确认合并结果，剩余 ${suggestResult.data.total} 组候选。"
+                            }
+                            _notesState.update {
+                                it.copy(
+                                    isMergeSuggesting = false,
+                                    mergeCandidates = suggestResult.data.items,
+                                    mergeStatus = message,
+                                    errorMessage = "",
+                                )
+                            }
+                        }
+
+                        is AppResult.Error -> {
+                            _notesState.update {
+                                it.copy(
+                                    isMergeSuggesting = false,
+                                    mergeStatus = "已确认合并结果，但刷新建议失败。",
+                                    errorMessage = ErrorMessageMapper.format(
+                                        code = suggestResult.code,
+                                        message = suggestResult.message,
+                                        context = ErrorContext.NOTES_MERGE,
+                                    ),
+                                )
+                            }
+                        }
                     }
                     loadSavedNotes()
                 }
