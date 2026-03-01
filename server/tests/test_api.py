@@ -378,7 +378,7 @@ def test_notes_merge_finalize_requires_destructive_confirmation() -> None:
     assert body["code"] == "INVALID_INPUT"
 
 
-def test_notes_merge_suggest_default_threshold_hits_topic_overlap() -> None:
+def test_notes_merge_suggest_default_threshold_hits_title_and_summary_similarity() -> None:
     _reset_xiaohongshu_state()
     first_save = client.post(
         "/api/notes/bilibili/save",
@@ -419,9 +419,52 @@ def test_notes_merge_suggest_default_threshold_hits_topic_overlap() -> None:
         note_ids = set(item["note_ids"])
         if {first_note_id, second_note_id} == note_ids:
             pair_found = True
-            assert "TOPIC_OVERLAP" in item["reason_codes"]
+            assert "TITLE_SIMILAR" in item["reason_codes"]
+            assert "SUMMARY_SIMILAR" in item["reason_codes"]
             break
     assert pair_found is True
+
+
+def test_notes_merge_suggest_default_threshold_rejects_no_title_anchor_pair() -> None:
+    _reset_xiaohongshu_state()
+    first_save = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": "https://www.bilibili.com/video/BV1xx411c7mF",
+            "summary_markdown": (
+                "# Agent 时代\n\n"
+                "Skills 已经爆火，但企业落地仍受合规、审计与成本控制约束。"
+            ),
+            "elapsed_ms": 10,
+            "transcript_chars": 20,
+            "title": "再次感叹：请不要再做 App、网站、小程序了",
+        },
+    )
+    assert first_save.status_code == 200
+
+    second_save = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": "https://www.bilibili.com/video/BV1xx411c7mG",
+            "summary_markdown": (
+                "# 企业为何不用 Skills\n\n"
+                "Skills 已经爆火，但企业落地仍受合规、审计与成本控制约束。"
+            ),
+            "elapsed_ms": 11,
+            "transcript_chars": 22,
+            "title": "Skills爆火，但企业为什么不敢用？",
+        },
+    )
+    assert second_save.status_code == 200
+
+    suggest_resp = client.post(
+        "/api/notes/merge/suggest",
+        json={"source": "bilibili", "limit": 20},
+    )
+    assert suggest_resp.status_code == 200
+    body = suggest_resp.json()
+    assert body["ok"] is True
+    assert body["data"]["total"] == 0
 
 
 def test_xiaohongshu_summarize_url_dedup_uses_merge_canonical_after_finalize() -> None:

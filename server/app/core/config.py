@@ -120,6 +120,14 @@ class RuntimeConfig(BaseModel):
     log_level: str = "INFO"
 
 
+class NotesMergeConfig(BaseModel):
+    semantic_similarity_enabled: bool = True
+    semantic_model_name: str = "BAAI/bge-small-zh-v1.5"
+    semantic_device: str = "cpu"
+    semantic_max_chars: int = 2000
+    semantic_cache_size: int = 512
+
+
 class Settings(BaseModel):
     server: ServerConfig = Field(default_factory=ServerConfig)
     llm: LLMConfig = Field(default_factory=LLMConfig)
@@ -127,6 +135,7 @@ class Settings(BaseModel):
     bilibili: BilibiliConfig = Field(default_factory=BilibiliConfig)
     xiaohongshu: XiaohongshuConfig = Field(default_factory=XiaohongshuConfig)
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
+    notes_merge: NotesMergeConfig = Field(default_factory=NotesMergeConfig)
 
 
 _ENV_VAR_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")

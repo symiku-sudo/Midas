@@ -4,7 +4,6 @@ import json
 import logging
 import re
 import uuid
-from datetime import datetime
 from difflib import SequenceMatcher
 from itertools import combinations
 from typing import Any
@@ -38,6 +37,8 @@ _MERGE_STATUS_PENDING_CONFIRM = "MERGED_PENDING_CONFIRM"
 _MERGE_STATUS_ROLLED_BACK = "ROLLED_BACK"
 _MERGE_STATUS_FINALIZED_DESTRUCTIVE = "FINALIZED_DESTRUCTIVE"
 _SOURCE_INDEX_STATE_ACTIVE = "ACTIVE"
+_TITLE_TOKEN_MIN_ANCHOR = 0.06
+_TITLE_SURFACE_MIN_ANCHOR = 0.55
 _ASCII_TOKEN_PATTERN = re.compile(r"[0-9a-z]+")
 _CJK_BLOCK_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
 _ASCII_STOPWORDS = {
@@ -58,17 +59,6 @@ _ASCII_STOPWORDS = {
     "will",
 }
 _CJK_STOPWORDS = {"的", "了", "和", "是", "在", "与", "及", "并", "对", "将"}
-_TOPIC_SIGNAL_PATTERNS: dict[str, tuple[str, ...]] = {
-    "claude": (r"claude",),
-    "code": (r"code", r"编码", r"编程", r"hook"),
-    "anthropic": (r"anthropic",),
-    "gemini": (r"gemini", r"notebooklm"),
-    "skill": (r"skill", r"skills", r"插件"),
-    "agent": (r"agent", r"智能体", r"代理"),
-    "finance": (r"金融", r"投资", r"分析师", r"财务"),
-    "military": (r"军事", r"武器", r"五角大楼", r"国防"),
-    "fpga": (r"fpga",),
-}
 
 
 class NoteLibraryService:
@@ -82,6 +72,9 @@ class NoteLibraryService:
             settings.xiaohongshu.db_path
         )
         self._llm = LLMService(settings)
+        self._semantic_model: Any | None = None
+        self._semantic_model_failed = False
+        self._semantic_embeddings_cache: dict[str, list[float]] = {}
 
     def save_bilibili_note(
         self,
@@ -582,39 +575,36 @@ class NoteLibraryService:
             f"{first_title}\n{first_summary}",
             f"{second_title}\n{second_summary}",
         )
-        title_similarity = max(
-            self._token_jaccard(first_title, second_title),
-            SequenceMatcher(None, first_title.lower(), second_title.lower()).ratio(),
+        title_token_similarity = self._token_jaccard(first_title, second_title)
+        title_surface_similarity = SequenceMatcher(
+            None,
+            first_title.lower(),
+            second_title.lower(),
+        ).ratio()
+        has_title_anchor = (
+            title_token_similarity >= _TITLE_TOKEN_MIN_ANCHOR
+            or title_surface_similarity >= _TITLE_SURFACE_MIN_ANCHOR
         )
-        summary_similarity = SequenceMatcher(None, first_summary, second_summary).ratio()
-        time_proximity = self._time_proximity(
-            str(first.get("saved_at", "")),
-            str(second.get("saved_at", "")),
-        )
-        topic_similarity = self._topic_similarity(
-            first_title=first_title,
+        summary_similarity, _ = self._summary_similarity_with_mode(
             first_summary=first_summary,
-            second_title=second_title,
             second_summary=second_summary,
         )
-        score = (
-            0.45 * topic_similarity
-            + 0.25 * title_similarity
-            + 0.20 * summary_similarity
-            + 0.10 * time_proximity
-        )
+        if has_title_anchor:
+            score = (
+                0.35 * title_token_similarity
+                + 0.50 * summary_similarity
+                + 0.15 * keyword_overlap
+            )
+        else:
+            score = 0.0
 
         reason_codes: list[str] = []
-        if topic_similarity >= 0.30:
-            reason_codes.append("TOPIC_OVERLAP")
         if keyword_overlap >= 0.12:
             reason_codes.append("KEYWORD_OVERLAP")
-        if title_similarity >= 0.35:
+        if title_token_similarity >= 0.08 or title_surface_similarity >= _TITLE_SURFACE_MIN_ANCHOR:
             reason_codes.append("TITLE_SIMILAR")
-        if summary_similarity >= 0.28:
+        if summary_similarity >= 0.62:
             reason_codes.append("SUMMARY_SIMILAR")
-        if time_proximity >= 0.35:
-            reason_codes.append("TIME_NEARBY")
         if not reason_codes:
             reason_codes.append("LOW_CONFIDENCE")
         return {"score": score, "reason_codes": reason_codes}
@@ -763,55 +753,114 @@ class NoteLibraryService:
 
         return tokens
 
-    def _time_proximity(self, first_saved_at: str, second_saved_at: str) -> float:
-        first = self._parse_saved_at(first_saved_at)
-        second = self._parse_saved_at(second_saved_at)
-        if first is None or second is None:
-            return 0.0
-        diff_days = abs((first - second).total_seconds()) / 86400.0
-        if diff_days >= 7:
-            return 0.0
-        return max(0.0, 1.0 - diff_days / 7.0)
+    def _summary_similarity(self, first_summary: str, second_summary: str) -> float:
+        score, _ = self._summary_similarity_with_mode(
+            first_summary=first_summary,
+            second_summary=second_summary,
+        )
+        return score
 
-    def _topic_similarity(
+    def _summary_similarity_with_mode(
         self,
         *,
-        first_title: str,
         first_summary: str,
-        second_title: str,
         second_summary: str,
-    ) -> float:
-        first_topics = self._extract_topic_signals(
-            title=first_title,
-            summary=first_summary,
+    ) -> tuple[float, bool]:
+        semantic_similarity = self._semantic_summary_similarity(
+            left=first_summary,
+            right=second_summary,
         )
-        second_topics = self._extract_topic_signals(
-            title=second_title,
-            summary=second_summary,
-        )
-        if not first_topics or not second_topics:
-            return 0.0
-        intersection = len(first_topics & second_topics)
-        union = len(first_topics | second_topics)
-        if union <= 0:
-            return 0.0
-        return intersection / union
+        if semantic_similarity is not None:
+            return semantic_similarity, True
+        lexical_similarity = SequenceMatcher(None, first_summary, second_summary).ratio()
+        # Keep fallback lexical scores on a comparable scale with embedding similarity.
+        calibrated = max(0.0, min(1.0, float(lexical_similarity) * 2.0))
+        return calibrated, False
 
-    def _extract_topic_signals(self, *, title: str, summary: str) -> set[str]:
-        text = f"{title}\n{summary[:500]}".lower()
-        topics: set[str] = set()
-        for topic, patterns in _TOPIC_SIGNAL_PATTERNS.items():
-            for pattern in patterns:
-                if re.search(pattern, text):
-                    topics.add(topic)
-                    break
-        return topics
-
-    def _parse_saved_at(self, raw: str) -> datetime | None:
-        try:
-            return datetime.fromisoformat(raw.strip())
-        except ValueError:
+    def _semantic_summary_similarity(self, *, left: str, right: str) -> float | None:
+        settings = self._settings.notes_merge
+        if not settings.semantic_similarity_enabled:
             return None
+        left_text = left.strip()[: settings.semantic_max_chars]
+        right_text = right.strip()[: settings.semantic_max_chars]
+        if not left_text or not right_text:
+            return 0.0
+        model = self._load_semantic_model()
+        if model is None:
+            return None
+        left_embedding = self._encode_semantic_text(left_text)
+        right_embedding = self._encode_semantic_text(right_text)
+        if left_embedding is None or right_embedding is None:
+            return None
+        if len(left_embedding) != len(right_embedding):
+            return None
+        dot = sum(a * b for a, b in zip(left_embedding, right_embedding))
+        return max(0.0, min(1.0, float(dot)))
+
+    def _load_semantic_model(self) -> Any | None:
+        if self._semantic_model is not None:
+            return self._semantic_model
+        if self._semantic_model_failed:
+            return None
+        settings = self._settings.notes_merge
+        try:
+            from sentence_transformers import SentenceTransformer  # type: ignore
+        except Exception as exc:
+            logger.warning(
+                "Local semantic similarity disabled: sentence-transformers unavailable: %s",
+                exc,
+            )
+            self._semantic_model_failed = True
+            return None
+        try:
+            self._semantic_model = SentenceTransformer(
+                settings.semantic_model_name,
+                device=settings.semantic_device,
+            )
+            logger.info(
+                "Local semantic model loaded for notes merge: model=%s device=%s",
+                settings.semantic_model_name,
+                settings.semantic_device,
+            )
+        except Exception as exc:
+            logger.warning(
+                "Failed to load local semantic model (%s), fallback to lexical summary similarity: %s",
+                settings.semantic_model_name,
+                exc,
+            )
+            self._semantic_model_failed = True
+            return None
+        return self._semantic_model
+
+    def _encode_semantic_text(self, text: str) -> list[float] | None:
+        cached = self._semantic_embeddings_cache.get(text)
+        if cached is not None:
+            return cached
+        model = self._load_semantic_model()
+        if model is None:
+            return None
+        settings = self._settings.notes_merge
+        try:
+            raw_vector = model.encode(text, normalize_embeddings=True)
+        except Exception as exc:
+            logger.warning(
+                "Local semantic encoding failed, fallback to lexical summary similarity: %s",
+                exc,
+            )
+            self._semantic_model_failed = True
+            self._semantic_model = None
+            return None
+        if hasattr(raw_vector, "tolist"):
+            raw_vector = raw_vector.tolist()
+        if not isinstance(raw_vector, list):
+            return None
+        vector = [float(item) for item in raw_vector]
+        cache_size = max(64, int(settings.semantic_cache_size))
+        if len(self._semantic_embeddings_cache) >= cache_size:
+            oldest_key = next(iter(self._semantic_embeddings_cache))
+            self._semantic_embeddings_cache.pop(oldest_key, None)
+        self._semantic_embeddings_cache[text] = vector
+        return vector
 
     def _must_get_merge_history(self, merge_id: str) -> dict[str, Any]:
         history = self._repository.get_merge_history(merge_id)

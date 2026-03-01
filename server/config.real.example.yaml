@@ -24,6 +24,13 @@ runtime:
   temp_dir: .tmp
   log_level: INFO
 
+notes_merge:
+  semantic_similarity_enabled: true
+  semantic_model_name: BAAI/bge-small-zh-v1.5
+  semantic_device: cpu
+  semantic_max_chars: 2000
+  semantic_cache_size: 512
+
 xiaohongshu:
   # 可选：mock / web_readonly
   # - mock: 使用本地示例数据（最安全）

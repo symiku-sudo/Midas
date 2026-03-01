@@ -112,4 +112,5 @@ tools/release.sh
 - 每次新增已保存笔记（B站/小红书）后，服务端会自动备份一次数据库（位于 `server/.tmp/backups/`）。
 - Android 端可通过内置 WebView 登录并上传 Cookie/UA 到服务端（`/api/xiaohongshu/auth/update`），减少手工 HAR/cURL 更新频率。
 - 当前默认 `llm.enabled=true`、`asr.mode=faster_whisper`、`asr.model_size=base`。
+- 智能合并候选可启用本地 embedding 语义相似（`server/config.yaml` 的 `notes_merge.*`）。
 - 真实小红书网页端接口回放仍有平台风控风险，建议低频、小批量执行。

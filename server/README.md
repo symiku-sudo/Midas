@@ -123,6 +123,14 @@ Then fill:
 - `llm.api_key`
 - Ensure `yt-dlp` and `ffmpeg` are installed on system
 - Install `faster-whisper` if `asr.mode=faster_whisper`
+- Install `sentence-transformers` if you enable local semantic merge scoring (`notes_merge.semantic_similarity_enabled=true`)
+
+可选：若要在 CPU 环境启用本地 embedding 语义相似，建议先装 CPU 版 torch 再装 sentence-transformers：
+
+```bash
+pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1+cpu
+pip install sentence-transformers
+```
 
 ## Safe live mode (Xiaohongshu, read-only)
 
@@ -245,6 +253,7 @@ curl -X POST http://127.0.0.1:8000/api/config/editable/reset
 - 删除“已保存小红书笔记”不会删除去重表中的 `note_id`，后续按 URL 总结仍会复用已处理状态。
 - 每次新增 B 站或小红书已保存笔记后，服务会自动备份一次数据库到 `.tmp/backups/`。
 - 智能合并默认非破坏，`finalize` 后会做破坏性清理（仅保留 merged 笔记）。
+- 合并候选评分支持本地 embedding 语义相似（配置见 `notes_merge.*`，可关闭后回退词面相似）。
 - `web_readonly` 模式仍属于非官方接口回放，务必低频、低并发、只读请求，优先保护账号安全。
 
 ## Tests
