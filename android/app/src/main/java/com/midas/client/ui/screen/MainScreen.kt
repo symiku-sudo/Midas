@@ -18,7 +18,6 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -34,7 +33,6 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -56,6 +54,7 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSummaryData
 import com.midas.client.data.model.NotesMergeCandidateItem
+import com.midas.client.data.model.NotesMergePreviewData
 import com.midas.client.data.model.XiaohongshuSavedNote
 import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.ui.components.MarkdownText
@@ -1004,7 +1003,7 @@ private fun NotesPanel(
     modifier: Modifier = Modifier,
 ) {
     var selectedDetail by remember { mutableStateOf<NoteDetailViewState?>(null) }
-    var showFinalizeConfirmDialog by remember { mutableStateOf(false) }
+    var selectedMergeCandidate by remember { mutableStateOf<NotesMergeCandidateItem?>(null) }
     val context = LocalContext.current
     val keyword = state.keywordInput.trim()
     val filteredBilibili = state.bilibiliNotes.filter { item ->
@@ -1025,6 +1024,9 @@ private fun NotesPanel(
         BackHandler(enabled = selectedDetail != null) {
             selectedDetail = null
         }
+        BackHandler(enabled = selectedMergeCandidate != null) {
+            selectedMergeCandidate = null
+        }
 
         if (selectedDetail != null) {
             NoteDetailPanel(
@@ -1032,6 +1034,21 @@ private fun NotesPanel(
                 onOpenSourceUrl = { sourceUrl ->
                     val intent = Intent(Intent.ACTION_VIEW, Uri.parse(sourceUrl))
                     context.startActivity(intent)
+                },
+            )
+            return@Column
+        }
+
+        if (selectedMergeCandidate != null) {
+            MergePreviewPanel(
+                candidate = selectedMergeCandidate!!,
+                preview = state.mergePreview,
+                isPreviewLoading = state.isMergePreviewLoading,
+                isConfirmingMerge = state.isMergeCommitting || state.isMergeFinalizing,
+                onBack = { selectedMergeCandidate = null },
+                onConfirmMerge = {
+                    onCommitCurrentMerge()
+                    selectedMergeCandidate = null
                 },
             )
             return@Column
@@ -1090,7 +1107,10 @@ private fun NotesPanel(
                             )
                         }
                         Button(
-                            onClick = { onPreviewMergeCandidate(item) },
+                            onClick = {
+                                selectedMergeCandidate = item
+                                onPreviewMergeCandidate(item)
+                            },
                             enabled = !state.isMergePreviewLoading,
                         ) {
                             SingleLineActionText(if (state.isMergePreviewLoading) "预览中..." else "预览合并")
@@ -1098,96 +1118,6 @@ private fun NotesPanel(
                     }
                 }
             }
-        }
-
-        if (state.mergePreview != null) {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text("合并预览", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        text = "标题：${state.mergePreview.mergedTitle}",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    if (state.mergePreview.conflictMarkers.isNotEmpty()) {
-                        Text(
-                            text = "冲突标记：${state.mergePreview.conflictMarkers.joinToString("、")}",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = Color(0xFFB26A00),
-                        )
-                    }
-                    MarkdownText(
-                        markdown = state.mergePreview.mergedSummaryMarkdown,
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Button(
-                            onClick = onCommitCurrentMerge,
-                            enabled = !state.isMergeCommitting && state.lastMergeCommit == null,
-                        ) {
-                            SingleLineActionText(if (state.isMergeCommitting) "提交中..." else "确认合并")
-                        }
-                    }
-                }
-            }
-        }
-
-        if (state.lastMergeCommit != null) {
-            Card(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(
-                        text = "已完成合并：${state.lastMergeCommit.mergedNoteId}",
-                        style = MaterialTheme.typography.bodySmall,
-                    )
-                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                        Button(
-                            onClick = onRollbackLastMerge,
-                            enabled = !state.isMergeRollingBack && !state.isMergeFinalizing,
-                        ) {
-                            SingleLineActionText(if (state.isMergeRollingBack) "回退中..." else "回退此次合并")
-                        }
-                        Button(
-                            onClick = { showFinalizeConfirmDialog = true },
-                            enabled = !state.isMergeRollingBack && !state.isMergeFinalizing,
-                        ) {
-                            SingleLineActionText(
-                                if (state.isMergeFinalizing) "确认中..." else "确认合并结果",
-                            )
-                        }
-                    }
-                    Text(
-                        text = "点击“确认合并结果”后将删除原笔记（破坏性，不可回退）。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = Color(0xFFB26A00),
-                    )
-                }
-            }
-        }
-
-        if (showFinalizeConfirmDialog) {
-            AlertDialog(
-                onDismissRequest = { showFinalizeConfirmDialog = false },
-                title = { Text("确认破坏性操作") },
-                text = { Text("确认后将不再保留原笔记，且此合并不可回退。") },
-                confirmButton = {
-                    TextButton(
-                        onClick = {
-                            showFinalizeConfirmDialog = false
-                            onFinalizeLastMerge()
-                        },
-                    ) { Text("确认执行") }
-                },
-                dismissButton = {
-                    TextButton(onClick = { showFinalizeConfirmDialog = false }) {
-                        Text("取消")
-                    }
-                },
-            )
         }
 
         Text(
@@ -1222,6 +1152,77 @@ private fun NotesPanel(
                 onOpen = { selectedDetail = NoteDetailViewState.Xiaohongshu(item) },
                 onDelete = { onDeleteXiaohongshu(item.noteId) },
             )
+        }
+    }
+}
+
+@Composable
+private fun MergePreviewPanel(
+    candidate: NotesMergeCandidateItem,
+    preview: NotesMergePreviewData?,
+    isPreviewLoading: Boolean,
+    isConfirmingMerge: Boolean,
+    onBack: () -> Unit,
+    onConfirmMerge: () -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(onClick = onBack) {
+                SingleLineActionText("返回")
+            }
+        }
+        Card(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("合并预览", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    text = "来源：${if (candidate.source == "bilibili") "B站" else "小红书"}  相似度：${"%.2f".format(candidate.score)}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                candidate.notes.forEach { note ->
+                    Text(
+                        text = "• ${note.title} (${note.noteId})",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                HorizontalDivider()
+                when {
+                    isPreviewLoading -> {
+                        Text("正在生成合并预览...", style = MaterialTheme.typography.bodySmall)
+                    }
+
+                    preview != null -> {
+                        Text("标题：${preview.mergedTitle}", style = MaterialTheme.typography.bodySmall)
+                        if (preview.conflictMarkers.isNotEmpty()) {
+                            Text(
+                                text = "冲突标记：${preview.conflictMarkers.joinToString("、")}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = Color(0xFFB26A00),
+                            )
+                        }
+                        MarkdownText(
+                            markdown = preview.mergedSummaryMarkdown,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                            Button(
+                                onClick = onConfirmMerge,
+                                enabled = !isConfirmingMerge,
+                            ) {
+                                SingleLineActionText(
+                                    if (isConfirmingMerge) "处理中..." else "确认合并并删除原笔记",
+                                )
+                            }
+                        }
+                    }
+
+                    else -> {
+                        Text("预览加载失败，请返回重试。", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
         }
     }
 }

@@ -785,7 +785,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         it.copy(
                             isMergePreviewLoading = false,
                             mergePreview = result.data,
-                            mergeStatus = "预览已生成，确认后将创建新合并笔记（默认保留原笔记）。",
+                            mergeStatus = "预览已生成，请在预览页确认是否合并。",
                             errorMessage = "",
                         )
                     }
@@ -830,26 +830,59 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _notesState.update {
                 it.copy(
                     isMergeCommitting = true,
+                    isMergeFinalizing = false,
                     errorMessage = "",
                     mergeStatus = "正在提交合并...",
                 )
             }
-            when (
-                val result = apiRepository.commitMerge(
-                    baseUrl = baseUrl,
-                    source = preview.source,
-                    noteIds = preview.noteIds,
-                    mergedTitle = preview.mergedTitle,
-                    mergedSummaryMarkdown = preview.mergedSummaryMarkdown,
+            val commitResult = apiRepository.commitMerge(
+                baseUrl = baseUrl,
+                source = preview.source,
+                noteIds = preview.noteIds,
+                mergedTitle = preview.mergedTitle,
+                mergedSummaryMarkdown = preview.mergedSummaryMarkdown,
+            )
+            if (commitResult is AppResult.Error) {
+                _notesState.update {
+                    it.copy(
+                        isMergeCommitting = false,
+                        isMergeFinalizing = false,
+                        mergeStatus = "",
+                        errorMessage = ErrorMessageMapper.format(
+                            code = commitResult.code,
+                            message = commitResult.message,
+                            context = ErrorContext.NOTES_MERGE,
+                        ),
+                    )
+                }
+                return@launch
+            }
+
+            val commitData = (commitResult as AppResult.Success).data
+            _notesState.update {
+                it.copy(
+                    isMergeCommitting = false,
+                    isMergeFinalizing = true,
+                    lastMergeCommit = commitData,
+                    mergeStatus = "已创建合并笔记，正在确认并清理原笔记...",
+                    actionStatus = "已创建合并笔记：${commitData.mergedNoteId}",
+                    errorMessage = "",
                 )
-            ) {
+            }
+
+            when (val finalizeResult = apiRepository.finalizeMerge(baseUrl = baseUrl, mergeId = commitData.mergeId)) {
                 is AppResult.Success -> {
+                    val targetNoteIds = preview.noteIds.toSet()
                     _notesState.update {
                         it.copy(
-                            isMergeCommitting = false,
-                            lastMergeCommit = result.data,
-                            mergeStatus = "合并成功，可“回退此次合并”或“确认合并结果”。",
-                            actionStatus = "已创建合并笔记：${result.data.mergedNoteId}",
+                            isMergeFinalizing = false,
+                            lastMergeCommit = null,
+                            mergePreview = null,
+                            mergeCandidates = it.mergeCandidates.filterNot { candidate ->
+                                candidate.source == preview.source && candidate.noteIds.toSet() == targetNoteIds
+                            },
+                            mergeStatus = "已确认合并结果，原笔记已清理。",
+                            actionStatus = "已确认 merge_id=${finalizeResult.data.mergeId}，删除原笔记 ${finalizeResult.data.deletedSourceCount} 条。",
                             errorMessage = "",
                         )
                     }
@@ -857,17 +890,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
 
                 is AppResult.Error -> {
+                    val rollbackHint = when (
+                        apiRepository.rollbackMerge(
+                            baseUrl = baseUrl,
+                            mergeId = commitData.mergeId,
+                        )
+                    ) {
+                        is AppResult.Success -> "已自动回退此次未完成合并，请重试。"
+                        is AppResult.Error -> "自动回退失败，请手动处理 merge_id=${commitData.mergeId}。"
+                    }
                     _notesState.update {
                         it.copy(
-                            isMergeCommitting = false,
+                            isMergeFinalizing = false,
+                            lastMergeCommit = null,
                             mergeStatus = "",
-                            errorMessage = ErrorMessageMapper.format(
-                                code = result.code,
-                                message = result.message,
+                            errorMessage = "${ErrorMessageMapper.format(
+                                code = finalizeResult.code,
+                                message = finalizeResult.message,
                                 context = ErrorContext.NOTES_MERGE,
-                            ),
+                            )} $rollbackHint",
                         )
                     }
+                    loadSavedNotes()
                 }
             }
         }
