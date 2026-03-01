@@ -36,7 +36,37 @@ _SUPPORTED_MERGE_SOURCES = {_MERGE_SOURCE_BILIBILI, _MERGE_SOURCE_XIAOHONGSHU}
 _MERGE_STATUS_PENDING_CONFIRM = "MERGED_PENDING_CONFIRM"
 _MERGE_STATUS_ROLLED_BACK = "ROLLED_BACK"
 _MERGE_STATUS_FINALIZED_DESTRUCTIVE = "FINALIZED_DESTRUCTIVE"
-_TOKEN_PATTERN = re.compile(r"[0-9a-z\u4e00-\u9fff]+")
+_ASCII_TOKEN_PATTERN = re.compile(r"[0-9a-z]+")
+_CJK_BLOCK_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
+_ASCII_STOPWORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "that",
+    "this",
+    "from",
+    "into",
+    "your",
+    "you",
+    "are",
+    "was",
+    "were",
+    "can",
+    "will",
+}
+_CJK_STOPWORDS = {"的", "了", "和", "是", "在", "与", "及", "并", "对", "将"}
+_TOPIC_SIGNAL_PATTERNS: dict[str, tuple[str, ...]] = {
+    "claude": (r"claude",),
+    "code": (r"code", r"编码", r"编程", r"hook"),
+    "anthropic": (r"anthropic",),
+    "gemini": (r"gemini", r"notebooklm"),
+    "skill": (r"skill", r"skills", r"插件"),
+    "agent": (r"agent", r"智能体", r"代理"),
+    "finance": (r"金融", r"投资", r"分析师", r"财务"),
+    "military": (r"军事", r"武器", r"五角大楼", r"国防"),
+    "fpga": (r"fpga",),
+}
 
 
 class NoteLibraryService:
@@ -140,7 +170,7 @@ class NoteLibraryService:
         *,
         source: str = "",
         limit: int = 20,
-        min_score: float = 0.55,
+        min_score: float = 0.35,
     ) -> NotesMergeSuggestData:
         source_value = source.strip().lower()
         if source_value and source_value not in _SUPPORTED_MERGE_SOURCES:
@@ -465,28 +495,42 @@ class NoteLibraryService:
         first_summary = str(first.get("summary_markdown", ""))
         second_summary = str(second.get("summary_markdown", ""))
 
-        keyword_overlap = self._token_jaccard(first_summary, second_summary)
-        title_similarity = self._token_jaccard(first_title, second_title)
+        keyword_overlap = self._token_jaccard(
+            f"{first_title}\n{first_summary}",
+            f"{second_title}\n{second_summary}",
+        )
+        title_similarity = max(
+            self._token_jaccard(first_title, second_title),
+            SequenceMatcher(None, first_title.lower(), second_title.lower()).ratio(),
+        )
         summary_similarity = SequenceMatcher(None, first_summary, second_summary).ratio()
         time_proximity = self._time_proximity(
             str(first.get("saved_at", "")),
             str(second.get("saved_at", "")),
         )
+        topic_similarity = self._topic_similarity(
+            first_title=first_title,
+            first_summary=first_summary,
+            second_title=second_title,
+            second_summary=second_summary,
+        )
         score = (
-            0.35 * keyword_overlap
+            0.45 * topic_similarity
             + 0.25 * title_similarity
-            + 0.20 * time_proximity
             + 0.20 * summary_similarity
+            + 0.10 * time_proximity
         )
 
         reason_codes: list[str] = []
-        if keyword_overlap >= 0.35:
+        if topic_similarity >= 0.30:
+            reason_codes.append("TOPIC_OVERLAP")
+        if keyword_overlap >= 0.12:
             reason_codes.append("KEYWORD_OVERLAP")
-        if title_similarity >= 0.6:
+        if title_similarity >= 0.35:
             reason_codes.append("TITLE_SIMILAR")
-        if summary_similarity >= 0.55:
+        if summary_similarity >= 0.28:
             reason_codes.append("SUMMARY_SIMILAR")
-        if time_proximity >= 0.5:
+        if time_proximity >= 0.35:
             reason_codes.append("TIME_NEARBY")
         if not reason_codes:
             reason_codes.append("LOW_CONFIDENCE")
@@ -562,7 +606,34 @@ class NoteLibraryService:
         return intersection / union
 
     def _tokenize(self, text: str) -> list[str]:
-        return _TOKEN_PATTERN.findall(text.lower())
+        normalized = text.lower().strip()
+        if not normalized:
+            return []
+
+        tokens: list[str] = []
+
+        for token in _ASCII_TOKEN_PATTERN.findall(normalized):
+            if len(token) <= 1:
+                continue
+            if token in _ASCII_STOPWORDS:
+                continue
+            tokens.append(token)
+
+        for block in _CJK_BLOCK_PATTERN.findall(normalized):
+            if not block:
+                continue
+            if len(block) == 1:
+                if block not in _CJK_STOPWORDS:
+                    tokens.append(block)
+                continue
+            # Use CJK bi-grams to improve recall on Chinese text similarity.
+            for index in range(len(block) - 1):
+                grams = block[index : index + 2]
+                if any(ch in _CJK_STOPWORDS for ch in grams):
+                    continue
+                tokens.append(grams)
+
+        return tokens
 
     def _time_proximity(self, first_saved_at: str, second_saved_at: str) -> float:
         first = self._parse_saved_at(first_saved_at)
@@ -573,6 +644,40 @@ class NoteLibraryService:
         if diff_days >= 7:
             return 0.0
         return max(0.0, 1.0 - diff_days / 7.0)
+
+    def _topic_similarity(
+        self,
+        *,
+        first_title: str,
+        first_summary: str,
+        second_title: str,
+        second_summary: str,
+    ) -> float:
+        first_topics = self._extract_topic_signals(
+            title=first_title,
+            summary=first_summary,
+        )
+        second_topics = self._extract_topic_signals(
+            title=second_title,
+            summary=second_summary,
+        )
+        if not first_topics or not second_topics:
+            return 0.0
+        intersection = len(first_topics & second_topics)
+        union = len(first_topics | second_topics)
+        if union <= 0:
+            return 0.0
+        return intersection / union
+
+    def _extract_topic_signals(self, *, title: str, summary: str) -> set[str]:
+        text = f"{title}\n{summary[:500]}".lower()
+        topics: set[str] = set()
+        for topic, patterns in _TOPIC_SIGNAL_PATTERNS.items():
+            for pattern in patterns:
+                if re.search(pattern, text):
+                    topics.add(topic)
+                    break
+        return topics
 
     def _parse_saved_at(self, raw: str) -> datetime | None:
         try:

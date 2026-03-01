@@ -199,7 +199,7 @@ curl http://127.0.0.1:8000/api/notes/xiaohongshu
 # 获取智能合并候选
 curl -X POST http://127.0.0.1:8000/api/notes/merge/suggest \
   -H 'Content-Type: application/json' \
-  -d '{"source":"bilibili","limit":20,"min_score":0.55}'
+  -d '{"source":"bilibili","limit":20,"min_score":0.35}'
 
 # 生成合并预览
 curl -X POST http://127.0.0.1:8000/api/notes/merge/preview \

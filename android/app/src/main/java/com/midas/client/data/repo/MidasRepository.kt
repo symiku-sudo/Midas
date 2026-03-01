@@ -121,7 +121,7 @@ class MidasRepository {
         baseUrl: String,
         source: String = "",
         limit: Int = 20,
-        minScore: Double = 0.55,
+        minScore: Double = 0.35,
     ): AppResult<NotesMergeSuggestData> {
         return request(baseUrl) {
             suggestMergeCandidates(

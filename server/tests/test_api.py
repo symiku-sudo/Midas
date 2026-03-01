@@ -370,6 +370,52 @@ def test_notes_merge_finalize_requires_destructive_confirmation() -> None:
     assert body["code"] == "INVALID_INPUT"
 
 
+def test_notes_merge_suggest_default_threshold_hits_topic_overlap() -> None:
+    _reset_xiaohongshu_state()
+    first_save = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": "https://www.bilibili.com/video/BV1xx411c7mD",
+            "summary_markdown": "# Claude Code\n\nHook 使用与自动化实践。",
+            "elapsed_ms": 10,
+            "transcript_chars": 20,
+            "title": "Claude Code 实战一",
+        },
+    )
+    assert first_save.status_code == 200
+    first_note_id = first_save.json()["data"]["note_id"]
+
+    second_save = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": "https://www.bilibili.com/video/BV1xx411c7mE",
+            "summary_markdown": "# Claude Code\n\n团队工作流与 Hook 设计。",
+            "elapsed_ms": 11,
+            "transcript_chars": 22,
+            "title": "Claude Code 实战二",
+        },
+    )
+    assert second_save.status_code == 200
+    second_note_id = second_save.json()["data"]["note_id"]
+
+    suggest_resp = client.post(
+        "/api/notes/merge/suggest",
+        json={"source": "bilibili", "limit": 20},
+    )
+    assert suggest_resp.status_code == 200
+    body = suggest_resp.json()
+    assert body["ok"] is True
+    assert body["data"]["total"] >= 1
+    pair_found = False
+    for item in body["data"]["items"]:
+        note_ids = set(item["note_ids"])
+        if {first_note_id, second_note_id} == note_ids:
+            pair_found = True
+            assert "TOPIC_OVERLAP" in item["reason_codes"]
+            break
+    assert pair_found is True
+
+
 def test_xiaohongshu_capture_refresh_from_default_har(monkeypatch) -> None:
     _reset_xiaohongshu_state()
 

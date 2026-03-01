@@ -95,7 +95,7 @@ data class NotesSaveBatchData(
 data class NotesMergeSuggestRequest(
     val source: String = "",
     val limit: Int = 20,
-    @Json(name = "min_score") val minScore: Double = 0.55,
+    @Json(name = "min_score") val minScore: Double = 0.35,
 )
 
 data class NotesMergeCandidateNote(

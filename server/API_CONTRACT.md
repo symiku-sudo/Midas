@@ -276,7 +276,7 @@ Request:
 {
   "source": "bilibili",
   "limit": 20,
-  "min_score": 0.55
+  "min_score": 0.35
 }
 ```
 
