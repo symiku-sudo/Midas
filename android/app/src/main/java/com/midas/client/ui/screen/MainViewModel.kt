@@ -5,6 +5,9 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSummaryData
+import com.midas.client.data.model.NotesMergeCandidateItem
+import com.midas.client.data.model.NotesMergeCommitData
+import com.midas.client.data.model.NotesMergePreviewData
 import com.midas.client.data.model.XiaohongshuSavedNote
 import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.data.repo.MidasRepository
@@ -63,6 +66,15 @@ data class NotesUiState(
     val isLoading: Boolean = false,
     val errorMessage: String = "",
     val actionStatus: String = "",
+    val mergeStatus: String = "",
+    val isMergeSuggesting: Boolean = false,
+    val mergeCandidates: List<NotesMergeCandidateItem> = emptyList(),
+    val isMergePreviewLoading: Boolean = false,
+    val mergePreview: NotesMergePreviewData? = null,
+    val isMergeCommitting: Boolean = false,
+    val isMergeRollingBack: Boolean = false,
+    val isMergeFinalizing: Boolean = false,
+    val lastMergeCommit: NotesMergeCommitData? = null,
     val bilibiliNotes: List<BilibiliSavedNote> = emptyList(),
     val xiaohongshuNotes: List<XiaohongshuSavedNote> = emptyList(),
 )
@@ -683,6 +695,291 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onNotesKeywordInputChange(newValue: String) {
         _notesState.update { it.copy(keywordInput = newValue) }
+    }
+
+    fun suggestMergeCandidates() {
+        val baseUrl = requireBaseUrl {
+            _notesState.update {
+                it.copy(
+                    isMergeSuggesting = false,
+                    errorMessage = "请先填写服务端地址。",
+                )
+            }
+        } ?: return
+        viewModelScope.launch {
+            _notesState.update {
+                it.copy(
+                    isMergeSuggesting = true,
+                    isMergePreviewLoading = false,
+                    isMergeCommitting = false,
+                    isMergeRollingBack = false,
+                    isMergeFinalizing = false,
+                    mergePreview = null,
+                    lastMergeCommit = null,
+                    errorMessage = "",
+                    mergeStatus = "正在分析可合并候选...",
+                )
+            }
+            when (val result = apiRepository.suggestMergeCandidates(baseUrl = baseUrl)) {
+                is AppResult.Success -> {
+                    val message = if (result.data.items.isEmpty()) {
+                        "未发现可合并候选。"
+                    } else {
+                        "已发现 ${result.data.total} 组候选，请先预览后再确认合并。"
+                    }
+                    _notesState.update {
+                        it.copy(
+                            isMergeSuggesting = false,
+                            mergeCandidates = result.data.items,
+                            mergeStatus = message,
+                            errorMessage = "",
+                        )
+                    }
+                }
+
+                is AppResult.Error -> {
+                    _notesState.update {
+                        it.copy(
+                            isMergeSuggesting = false,
+                            mergeStatus = "",
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.NOTES_MERGE,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun previewMergeCandidate(candidate: NotesMergeCandidateItem) {
+        val baseUrl = requireBaseUrl {
+            _notesState.update {
+                it.copy(
+                    isMergePreviewLoading = false,
+                    errorMessage = "请先填写服务端地址。",
+                )
+            }
+        } ?: return
+        viewModelScope.launch {
+            _notesState.update {
+                it.copy(
+                    isMergePreviewLoading = true,
+                    mergePreview = null,
+                    lastMergeCommit = null,
+                    errorMessage = "",
+                    mergeStatus = "正在生成合并预览...",
+                )
+            }
+            when (
+                val result = apiRepository.previewMerge(
+                    baseUrl = baseUrl,
+                    source = candidate.source,
+                    noteIds = candidate.noteIds,
+                )
+            ) {
+                is AppResult.Success -> {
+                    _notesState.update {
+                        it.copy(
+                            isMergePreviewLoading = false,
+                            mergePreview = result.data,
+                            mergeStatus = "预览已生成，确认后将创建新合并笔记（默认保留原笔记）。",
+                            errorMessage = "",
+                        )
+                    }
+                }
+
+                is AppResult.Error -> {
+                    _notesState.update {
+                        it.copy(
+                            isMergePreviewLoading = false,
+                            mergeStatus = "",
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.NOTES_MERGE,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun commitCurrentMerge() {
+        val baseUrl = requireBaseUrl {
+            _notesState.update {
+                it.copy(
+                    isMergeCommitting = false,
+                    errorMessage = "请先填写服务端地址。",
+                )
+            }
+        } ?: return
+        val preview = _notesState.value.mergePreview
+        if (preview == null) {
+            _notesState.update {
+                it.copy(
+                    mergeStatus = "请先选择候选并生成预览。",
+                )
+            }
+            return
+        }
+        viewModelScope.launch {
+            _notesState.update {
+                it.copy(
+                    isMergeCommitting = true,
+                    errorMessage = "",
+                    mergeStatus = "正在提交合并...",
+                )
+            }
+            when (
+                val result = apiRepository.commitMerge(
+                    baseUrl = baseUrl,
+                    source = preview.source,
+                    noteIds = preview.noteIds,
+                    mergedTitle = preview.mergedTitle,
+                    mergedSummaryMarkdown = preview.mergedSummaryMarkdown,
+                )
+            ) {
+                is AppResult.Success -> {
+                    _notesState.update {
+                        it.copy(
+                            isMergeCommitting = false,
+                            lastMergeCommit = result.data,
+                            mergeStatus = "合并成功，可“回退此次合并”或“确认合并结果”。",
+                            actionStatus = "已创建合并笔记：${result.data.mergedNoteId}",
+                            errorMessage = "",
+                        )
+                    }
+                    loadSavedNotes()
+                }
+
+                is AppResult.Error -> {
+                    _notesState.update {
+                        it.copy(
+                            isMergeCommitting = false,
+                            mergeStatus = "",
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.NOTES_MERGE,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun rollbackLastMerge() {
+        val baseUrl = requireBaseUrl {
+            _notesState.update {
+                it.copy(
+                    isMergeRollingBack = false,
+                    errorMessage = "请先填写服务端地址。",
+                )
+            }
+        } ?: return
+        val mergeId = _notesState.value.lastMergeCommit?.mergeId
+        if (mergeId.isNullOrBlank()) {
+            _notesState.update { it.copy(mergeStatus = "当前没有可回退的合并记录。") }
+            return
+        }
+        viewModelScope.launch {
+            _notesState.update {
+                it.copy(
+                    isMergeRollingBack = true,
+                    errorMessage = "",
+                    mergeStatus = "正在回退此次合并...",
+                )
+            }
+            when (val result = apiRepository.rollbackMerge(baseUrl = baseUrl, mergeId = mergeId)) {
+                is AppResult.Success -> {
+                    _notesState.update {
+                        it.copy(
+                            isMergeRollingBack = false,
+                            lastMergeCommit = null,
+                            mergePreview = null,
+                            mergeStatus = "回退成功，已恢复为合并前状态。",
+                            actionStatus = "已回退 merge_id=${result.data.mergeId}",
+                            errorMessage = "",
+                        )
+                    }
+                    loadSavedNotes()
+                }
+
+                is AppResult.Error -> {
+                    _notesState.update {
+                        it.copy(
+                            isMergeRollingBack = false,
+                            mergeStatus = "",
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.NOTES_MERGE,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun finalizeLastMerge() {
+        val baseUrl = requireBaseUrl {
+            _notesState.update {
+                it.copy(
+                    isMergeFinalizing = false,
+                    errorMessage = "请先填写服务端地址。",
+                )
+            }
+        } ?: return
+        val mergeId = _notesState.value.lastMergeCommit?.mergeId
+        if (mergeId.isNullOrBlank()) {
+            _notesState.update { it.copy(mergeStatus = "当前没有可确认的合并记录。") }
+            return
+        }
+        viewModelScope.launch {
+            _notesState.update {
+                it.copy(
+                    isMergeFinalizing = true,
+                    errorMessage = "",
+                    mergeStatus = "正在确认合并结果（破坏性）...",
+                )
+            }
+            when (val result = apiRepository.finalizeMerge(baseUrl = baseUrl, mergeId = mergeId)) {
+                is AppResult.Success -> {
+                    _notesState.update {
+                        it.copy(
+                            isMergeFinalizing = false,
+                            lastMergeCommit = null,
+                            mergePreview = null,
+                            mergeCandidates = emptyList(),
+                            mergeStatus = "已确认合并结果，原笔记已执行破坏性清理。",
+                            actionStatus = "已确认 merge_id=${result.data.mergeId}，删除原笔记 ${result.data.deletedSourceCount} 条。",
+                            errorMessage = "",
+                        )
+                    }
+                    loadSavedNotes()
+                }
+
+                is AppResult.Error -> {
+                    _notesState.update {
+                        it.copy(
+                            isMergeFinalizing = false,
+                            mergeStatus = "",
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.NOTES_MERGE,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
     }
 
     fun loadSavedNotes() {

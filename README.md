@@ -9,11 +9,13 @@
   - `POST /api/bilibili/summarize`（`video_url` 支持完整链接或直接传 `BV` 号）
   - `POST /api/xiaohongshu/summarize-url`
   - `POST /api/xiaohongshu/auth/update`
+  - `POST /api/notes/merge/suggest|preview|commit|rollback|finalize`
 - Android 客户端（Compose）：已完成最小可用版本
   - 服务端地址配置与持久化
   - 连接测试
   - B 站总结请求与 Markdown 展示
   - 小红书按 URL 单篇总结与结果展示
+  - 笔记库智能合并（候选、预览、回退、确认破坏性收尾）
 
 ## 目录
 

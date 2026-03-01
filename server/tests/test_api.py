@@ -201,6 +201,175 @@ def test_prune_unsaved_xiaohongshu_synced_notes() -> None:
     assert prune_again_body["data"]["deleted_count"] == 0
 
 
+def test_notes_merge_lifecycle_commit_rollback_and_finalize() -> None:
+    _reset_xiaohongshu_state()
+
+    first_save = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": "https://www.bilibili.com/video/BV1xx411c7mD",
+            "summary_markdown": "# AI 总结\n\n这是第一条合并测试内容。",
+            "elapsed_ms": 100,
+            "transcript_chars": 1000,
+            "title": "AI 合并测试",
+        },
+    )
+    assert first_save.status_code == 200
+    first_note_id = first_save.json()["data"]["note_id"]
+
+    second_save = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": "https://www.bilibili.com/video/BV1xx411c7mE",
+            "summary_markdown": "# AI 总结\n\n这是第二条合并测试内容。",
+            "elapsed_ms": 200,
+            "transcript_chars": 2000,
+            "title": "AI 合并测试 进阶",
+        },
+    )
+    assert second_save.status_code == 200
+    second_note_id = second_save.json()["data"]["note_id"]
+
+    suggest_resp = client.post(
+        "/api/notes/merge/suggest",
+        json={"source": "bilibili", "limit": 20, "min_score": 0.1},
+    )
+    assert suggest_resp.status_code == 200
+    suggest_body = suggest_resp.json()
+    assert suggest_body["ok"] is True
+    assert suggest_body["data"]["total"] >= 1
+    candidate = suggest_body["data"]["items"][0]
+    assert candidate["source"] == "bilibili"
+    candidate_note_ids = set(candidate["note_ids"])
+    assert {first_note_id, second_note_id}.issubset(candidate_note_ids)
+
+    preview_resp = client.post(
+        "/api/notes/merge/preview",
+        json={
+            "source": "bilibili",
+            "note_ids": [first_note_id, second_note_id],
+        },
+    )
+    assert preview_resp.status_code == 200
+    preview_body = preview_resp.json()
+    assert preview_body["ok"] is True
+    assert preview_body["data"]["source"] == "bilibili"
+    assert preview_body["data"]["merged_title"]
+    assert preview_body["data"]["merged_summary_markdown"]
+
+    commit_resp = client.post(
+        "/api/notes/merge/commit",
+        json={
+            "source": "bilibili",
+            "note_ids": [first_note_id, second_note_id],
+        },
+    )
+    assert commit_resp.status_code == 200
+    commit_body = commit_resp.json()
+    assert commit_body["ok"] is True
+    assert commit_body["data"]["status"] == "MERGED_PENDING_CONFIRM"
+    merge_id = commit_body["data"]["merge_id"]
+
+    list_after_commit = client.get("/api/notes/bilibili")
+    assert list_after_commit.status_code == 200
+    assert list_after_commit.json()["data"]["total"] == 3
+
+    rollback_resp = client.post(
+        "/api/notes/merge/rollback",
+        json={"merge_id": merge_id},
+    )
+    assert rollback_resp.status_code == 200
+    rollback_body = rollback_resp.json()
+    assert rollback_body["ok"] is True
+    assert rollback_body["data"]["status"] == "ROLLED_BACK"
+    assert rollback_body["data"]["deleted_merged_count"] == 1
+
+    list_after_rollback = client.get("/api/notes/bilibili")
+    assert list_after_rollback.status_code == 200
+    assert list_after_rollback.json()["data"]["total"] == 2
+
+    second_commit_resp = client.post(
+        "/api/notes/merge/commit",
+        json={
+            "source": "bilibili",
+            "note_ids": [first_note_id, second_note_id],
+        },
+    )
+    assert second_commit_resp.status_code == 200
+    second_merge_id = second_commit_resp.json()["data"]["merge_id"]
+
+    finalize_resp = client.post(
+        "/api/notes/merge/finalize",
+        json={"merge_id": second_merge_id, "confirm_destructive": True},
+    )
+    assert finalize_resp.status_code == 200
+    finalize_body = finalize_resp.json()
+    assert finalize_body["ok"] is True
+    assert finalize_body["data"]["status"] == "FINALIZED_DESTRUCTIVE"
+    assert finalize_body["data"]["deleted_source_count"] == 2
+
+    list_after_finalize = client.get("/api/notes/bilibili")
+    assert list_after_finalize.status_code == 200
+    assert list_after_finalize.json()["data"]["total"] == 1
+
+    rollback_after_finalize = client.post(
+        "/api/notes/merge/rollback",
+        json={"merge_id": second_merge_id},
+    )
+    assert rollback_after_finalize.status_code == 409
+    rollback_after_finalize_body = rollback_after_finalize.json()
+    assert rollback_after_finalize_body["ok"] is False
+    assert rollback_after_finalize_body["code"] == "MERGE_NOT_ALLOWED"
+
+
+def test_notes_merge_finalize_requires_destructive_confirmation() -> None:
+    _reset_xiaohongshu_state()
+    save_resp = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": "https://www.bilibili.com/video/BV1xx411c7mD",
+            "summary_markdown": "# 测试",
+            "elapsed_ms": 10,
+            "transcript_chars": 20,
+            "title": "测试标题",
+        },
+    )
+    assert save_resp.status_code == 200
+    first_note_id = save_resp.json()["data"]["note_id"]
+
+    save_resp2 = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": "https://www.bilibili.com/video/BV1xx411c7mE",
+            "summary_markdown": "# 测试",
+            "elapsed_ms": 11,
+            "transcript_chars": 22,
+            "title": "测试标题2",
+        },
+    )
+    assert save_resp2.status_code == 200
+    second_note_id = save_resp2.json()["data"]["note_id"]
+
+    commit_resp = client.post(
+        "/api/notes/merge/commit",
+        json={
+            "source": "bilibili",
+            "note_ids": [first_note_id, second_note_id],
+        },
+    )
+    assert commit_resp.status_code == 200
+    merge_id = commit_resp.json()["data"]["merge_id"]
+
+    finalize_resp = client.post(
+        "/api/notes/merge/finalize",
+        json={"merge_id": merge_id, "confirm_destructive": False},
+    )
+    assert finalize_resp.status_code == 400
+    body = finalize_resp.json()
+    assert body["ok"] is False
+    assert body["code"] == "INVALID_INPUT"
+
+
 def test_xiaohongshu_capture_refresh_from_default_har(monkeypatch) -> None:
     _reset_xiaohongshu_state()
 

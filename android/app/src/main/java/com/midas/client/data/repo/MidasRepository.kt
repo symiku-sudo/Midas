@@ -9,6 +9,16 @@ import com.midas.client.data.model.BilibiliSummaryRequest
 import com.midas.client.data.model.EditableConfigData
 import com.midas.client.data.model.EditableConfigUpdateRequest
 import com.midas.client.data.model.HealthData
+import com.midas.client.data.model.NotesMergeCommitData
+import com.midas.client.data.model.NotesMergeCommitRequest
+import com.midas.client.data.model.NotesMergeFinalizeData
+import com.midas.client.data.model.NotesMergeFinalizeRequest
+import com.midas.client.data.model.NotesMergePreviewData
+import com.midas.client.data.model.NotesMergePreviewRequest
+import com.midas.client.data.model.NotesMergeRollbackData
+import com.midas.client.data.model.NotesMergeRollbackRequest
+import com.midas.client.data.model.NotesMergeSuggestData
+import com.midas.client.data.model.NotesMergeSuggestRequest
 import com.midas.client.data.model.NotesDeleteData
 import com.midas.client.data.model.NotesSaveBatchData
 import com.midas.client.data.model.XiaohongshuAuthUpdateData
@@ -105,6 +115,74 @@ class MidasRepository {
 
     suspend fun clearXiaohongshuNotes(baseUrl: String): AppResult<NotesDeleteData> {
         return request(baseUrl) { clearXiaohongshuNotes() }
+    }
+
+    suspend fun suggestMergeCandidates(
+        baseUrl: String,
+        source: String = "",
+        limit: Int = 20,
+        minScore: Double = 0.55,
+    ): AppResult<NotesMergeSuggestData> {
+        return request(baseUrl) {
+            suggestMergeCandidates(
+                NotesMergeSuggestRequest(
+                    source = source,
+                    limit = limit,
+                    minScore = minScore,
+                )
+            )
+        }
+    }
+
+    suspend fun previewMerge(
+        baseUrl: String,
+        source: String,
+        noteIds: List<String>,
+    ): AppResult<NotesMergePreviewData> {
+        return request(baseUrl) {
+            previewMerge(
+                NotesMergePreviewRequest(
+                    source = source,
+                    noteIds = noteIds,
+                )
+            )
+        }
+    }
+
+    suspend fun commitMerge(
+        baseUrl: String,
+        source: String,
+        noteIds: List<String>,
+        mergedTitle: String = "",
+        mergedSummaryMarkdown: String = "",
+    ): AppResult<NotesMergeCommitData> {
+        return request(baseUrl) {
+            commitMerge(
+                NotesMergeCommitRequest(
+                    source = source,
+                    noteIds = noteIds,
+                    mergedTitle = mergedTitle,
+                    mergedSummaryMarkdown = mergedSummaryMarkdown,
+                )
+            )
+        }
+    }
+
+    suspend fun rollbackMerge(baseUrl: String, mergeId: String): AppResult<NotesMergeRollbackData> {
+        return request(baseUrl) {
+            rollbackMerge(NotesMergeRollbackRequest(mergeId = mergeId))
+        }
+    }
+
+    suspend fun finalizeMerge(baseUrl: String, mergeId: String): AppResult<NotesMergeFinalizeData> {
+        return request(baseUrl) {
+            finalizeMerge(
+                NotesMergeFinalizeRequest(
+                    mergeId = mergeId,
+                    confirmDestructive = true,
+                )
+            )
+        }
     }
 
     suspend fun refreshXiaohongshuCapture(baseUrl: String): AppResult<XiaohongshuCaptureRefreshData> {

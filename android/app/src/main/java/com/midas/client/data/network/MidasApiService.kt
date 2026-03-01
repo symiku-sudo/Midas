@@ -9,6 +9,16 @@ import com.midas.client.data.model.BilibiliSummaryRequest
 import com.midas.client.data.model.EditableConfigData
 import com.midas.client.data.model.EditableConfigUpdateRequest
 import com.midas.client.data.model.HealthData
+import com.midas.client.data.model.NotesMergeCommitData
+import com.midas.client.data.model.NotesMergeCommitRequest
+import com.midas.client.data.model.NotesMergeFinalizeData
+import com.midas.client.data.model.NotesMergeFinalizeRequest
+import com.midas.client.data.model.NotesMergePreviewData
+import com.midas.client.data.model.NotesMergePreviewRequest
+import com.midas.client.data.model.NotesMergeRollbackData
+import com.midas.client.data.model.NotesMergeRollbackRequest
+import com.midas.client.data.model.NotesMergeSuggestData
+import com.midas.client.data.model.NotesMergeSuggestRequest
 import com.midas.client.data.model.NotesDeleteData
 import com.midas.client.data.model.NotesSaveBatchData
 import com.midas.client.data.model.XiaohongshuAuthUpdateData
@@ -71,6 +81,31 @@ interface MidasApiService {
 
     @DELETE("api/notes/xiaohongshu")
     suspend fun clearXiaohongshuNotes(): Response<ApiEnvelope<NotesDeleteData>>
+
+    @POST("api/notes/merge/suggest")
+    suspend fun suggestMergeCandidates(
+        @Body request: NotesMergeSuggestRequest
+    ): Response<ApiEnvelope<NotesMergeSuggestData>>
+
+    @POST("api/notes/merge/preview")
+    suspend fun previewMerge(
+        @Body request: NotesMergePreviewRequest
+    ): Response<ApiEnvelope<NotesMergePreviewData>>
+
+    @POST("api/notes/merge/commit")
+    suspend fun commitMerge(
+        @Body request: NotesMergeCommitRequest
+    ): Response<ApiEnvelope<NotesMergeCommitData>>
+
+    @POST("api/notes/merge/rollback")
+    suspend fun rollbackMerge(
+        @Body request: NotesMergeRollbackRequest
+    ): Response<ApiEnvelope<NotesMergeRollbackData>>
+
+    @POST("api/notes/merge/finalize")
+    suspend fun finalizeMerge(
+        @Body request: NotesMergeFinalizeRequest
+    ): Response<ApiEnvelope<NotesMergeFinalizeData>>
 
     @POST("api/xiaohongshu/capture/refresh")
     suspend fun refreshXiaohongshuCapture():

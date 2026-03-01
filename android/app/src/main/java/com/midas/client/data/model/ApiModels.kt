@@ -92,6 +92,85 @@ data class NotesSaveBatchData(
     @Json(name = "saved_count") val savedCount: Int
 )
 
+data class NotesMergeSuggestRequest(
+    val source: String = "",
+    val limit: Int = 20,
+    @Json(name = "min_score") val minScore: Double = 0.55,
+)
+
+data class NotesMergeCandidateNote(
+    @Json(name = "note_id") val noteId: String,
+    val title: String,
+    @Json(name = "saved_at") val savedAt: String,
+)
+
+data class NotesMergeCandidateItem(
+    val source: String,
+    @Json(name = "note_ids") val noteIds: List<String>,
+    val score: Double,
+    @Json(name = "reason_codes") val reasonCodes: List<String>,
+    val notes: List<NotesMergeCandidateNote>,
+)
+
+data class NotesMergeSuggestData(
+    val total: Int,
+    val items: List<NotesMergeCandidateItem>,
+)
+
+data class NotesMergePreviewRequest(
+    val source: String,
+    @Json(name = "note_ids") val noteIds: List<String>,
+)
+
+data class NotesMergePreviewData(
+    val source: String,
+    @Json(name = "note_ids") val noteIds: List<String>,
+    @Json(name = "merged_title") val mergedTitle: String,
+    @Json(name = "merged_summary_markdown") val mergedSummaryMarkdown: String,
+    @Json(name = "source_refs") val sourceRefs: List<String>,
+    @Json(name = "conflict_markers") val conflictMarkers: List<String>,
+)
+
+data class NotesMergeCommitRequest(
+    val source: String,
+    @Json(name = "note_ids") val noteIds: List<String>,
+    @Json(name = "merged_title") val mergedTitle: String = "",
+    @Json(name = "merged_summary_markdown") val mergedSummaryMarkdown: String = "",
+)
+
+data class NotesMergeCommitData(
+    @Json(name = "merge_id") val mergeId: String,
+    val status: String,
+    val source: String,
+    @Json(name = "merged_note_id") val mergedNoteId: String,
+    @Json(name = "source_note_ids") val sourceNoteIds: List<String>,
+    @Json(name = "can_rollback") val canRollback: Boolean,
+    @Json(name = "can_finalize") val canFinalize: Boolean,
+)
+
+data class NotesMergeRollbackRequest(
+    @Json(name = "merge_id") val mergeId: String,
+)
+
+data class NotesMergeRollbackData(
+    @Json(name = "merge_id") val mergeId: String,
+    val status: String,
+    @Json(name = "deleted_merged_count") val deletedMergedCount: Int,
+    @Json(name = "restored_source_count") val restoredSourceCount: Int,
+)
+
+data class NotesMergeFinalizeRequest(
+    @Json(name = "merge_id") val mergeId: String,
+    @Json(name = "confirm_destructive") val confirmDestructive: Boolean = true,
+)
+
+data class NotesMergeFinalizeData(
+    @Json(name = "merge_id") val mergeId: String,
+    val status: String,
+    @Json(name = "deleted_source_count") val deletedSourceCount: Int,
+    @Json(name = "kept_merged_note_id") val keptMergedNoteId: String,
+)
+
 data class XiaohongshuCaptureRefreshData(
     @Json(name = "har_path") val harPath: String,
     @Json(name = "request_url_host") val requestUrlHost: String,

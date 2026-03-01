@@ -17,6 +17,16 @@ from app.models.schemas import (
     EditableConfigData,
     EditableConfigUpdateRequest,
     HealthData,
+    NotesMergeCommitData,
+    NotesMergeCommitRequest,
+    NotesMergeFinalizeData,
+    NotesMergeFinalizeRequest,
+    NotesMergePreviewData,
+    NotesMergePreviewRequest,
+    NotesMergeRollbackData,
+    NotesMergeRollbackRequest,
+    NotesMergeSuggestData,
+    NotesMergeSuggestRequest,
     NotesDeleteData,
     NotesSaveBatchData,
     XiaohongshuAuthUpdateData,
@@ -244,6 +254,91 @@ async def prune_unsaved_xiaohongshu_synced_notes(request: Request) -> dict:
     data = XiaohongshuSyncedNotesPruneData(
         candidate_count=result.candidate_count,
         deleted_count=result.deleted_count,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/notes/merge/suggest")
+async def suggest_notes_merge(
+    payload: NotesMergeSuggestRequest, request: Request
+) -> dict:
+    service = _get_note_library_service()
+    result = service.suggest_merge_candidates(
+        source=payload.source,
+        limit=payload.limit,
+        min_score=payload.min_score,
+    )
+    data = NotesMergeSuggestData(total=result.total, items=result.items)
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/notes/merge/preview")
+async def preview_notes_merge(
+    payload: NotesMergePreviewRequest, request: Request
+) -> dict:
+    service = _get_note_library_service()
+    result = service.preview_merge(source=payload.source, note_ids=payload.note_ids)
+    data = NotesMergePreviewData(
+        source=result.source,
+        note_ids=result.note_ids,
+        merged_title=result.merged_title,
+        merged_summary_markdown=result.merged_summary_markdown,
+        source_refs=result.source_refs,
+        conflict_markers=result.conflict_markers,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/notes/merge/commit")
+async def commit_notes_merge(payload: NotesMergeCommitRequest, request: Request) -> dict:
+    service = _get_note_library_service()
+    result = service.commit_merge(
+        source=payload.source,
+        note_ids=payload.note_ids,
+        merged_title=payload.merged_title,
+        merged_summary_markdown=payload.merged_summary_markdown,
+    )
+    data = NotesMergeCommitData(
+        merge_id=result.merge_id,
+        status=result.status,
+        source=result.source,
+        merged_note_id=result.merged_note_id,
+        source_note_ids=result.source_note_ids,
+        can_rollback=result.can_rollback,
+        can_finalize=result.can_finalize,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/notes/merge/rollback")
+async def rollback_notes_merge(
+    payload: NotesMergeRollbackRequest, request: Request
+) -> dict:
+    service = _get_note_library_service()
+    result = service.rollback_merge(merge_id=payload.merge_id)
+    data = NotesMergeRollbackData(
+        merge_id=result.merge_id,
+        status=result.status,
+        deleted_merged_count=result.deleted_merged_count,
+        restored_source_count=result.restored_source_count,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/notes/merge/finalize")
+async def finalize_notes_merge(
+    payload: NotesMergeFinalizeRequest, request: Request
+) -> dict:
+    service = _get_note_library_service()
+    result = service.finalize_merge(
+        merge_id=payload.merge_id,
+        confirm_destructive=payload.confirm_destructive,
+    )
+    data = NotesMergeFinalizeData(
+        merge_id=result.merge_id,
+        status=result.status,
+        deleted_source_count=result.deleted_source_count,
+        kept_merged_note_id=result.kept_merged_note_id,
     )
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 

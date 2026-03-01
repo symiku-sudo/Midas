@@ -99,6 +99,85 @@ class XiaohongshuSyncedNotesPruneData(BaseModel):
     deleted_count: int
 
 
+class NotesMergeSuggestRequest(BaseModel):
+    source: str = Field(default="", max_length=32)
+    limit: int = Field(default=20, ge=1, le=100)
+    min_score: float = Field(default=0.55, ge=0.0, le=1.0)
+
+
+class NotesMergePreviewRequest(BaseModel):
+    source: str = Field(min_length=1, max_length=32)
+    note_ids: list[str] = Field(min_length=2, max_length=2)
+
+
+class NotesMergeCommitRequest(BaseModel):
+    source: str = Field(min_length=1, max_length=32)
+    note_ids: list[str] = Field(min_length=2, max_length=2)
+    merged_title: str = Field(default="", max_length=200)
+    merged_summary_markdown: str = Field(default="", min_length=0)
+
+
+class NotesMergeRollbackRequest(BaseModel):
+    merge_id: str = Field(min_length=1, max_length=128)
+
+
+class NotesMergeFinalizeRequest(BaseModel):
+    merge_id: str = Field(min_length=1, max_length=128)
+    confirm_destructive: bool = False
+
+
+class NotesMergeCandidateNote(BaseModel):
+    note_id: str
+    title: str
+    saved_at: str
+
+
+class NotesMergeCandidateItem(BaseModel):
+    source: str
+    note_ids: list[str]
+    score: float
+    reason_codes: list[str]
+    notes: list[NotesMergeCandidateNote]
+
+
+class NotesMergeSuggestData(BaseModel):
+    total: int
+    items: list[NotesMergeCandidateItem]
+
+
+class NotesMergePreviewData(BaseModel):
+    source: str
+    note_ids: list[str]
+    merged_title: str
+    merged_summary_markdown: str
+    source_refs: list[str]
+    conflict_markers: list[str]
+
+
+class NotesMergeCommitData(BaseModel):
+    merge_id: str
+    status: str
+    source: str
+    merged_note_id: str
+    source_note_ids: list[str]
+    can_rollback: bool
+    can_finalize: bool
+
+
+class NotesMergeRollbackData(BaseModel):
+    merge_id: str
+    status: str
+    deleted_merged_count: int
+    restored_source_count: int
+
+
+class NotesMergeFinalizeData(BaseModel):
+    merge_id: str
+    status: str
+    deleted_source_count: int
+    kept_merged_note_id: str
+
+
 class XiaohongshuCaptureRefreshData(BaseModel):
     har_path: str
     request_url_host: str

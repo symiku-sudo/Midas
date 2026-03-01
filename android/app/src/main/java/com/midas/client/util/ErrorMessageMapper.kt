@@ -6,6 +6,7 @@ enum class ErrorContext {
     BILIBILI,
     XIAOHONGSHU_SYNC,
     XIAOHONGSHU_JOB,
+    NOTES_MERGE,
 }
 
 object ErrorMessageMapper {
@@ -22,11 +23,14 @@ object ErrorMessageMapper {
             "UPSTREAM_ERROR" -> when (context) {
                 ErrorContext.BILIBILI -> "上游处理失败，请检查视频可访问性与服务端日志。"
                 ErrorContext.XIAOHONGSHU_SYNC, ErrorContext.XIAOHONGSHU_JOB -> "小红书上游响应异常，请检查链接可访问性与抓包配置。"
+                ErrorContext.NOTES_MERGE -> "智能合并处理失败，请稍后重试。"
                 ErrorContext.CONFIG -> "配置服务响应异常，请稍后重试。"
                 ErrorContext.CONNECTION -> "服务端响应异常，请稍后重试。"
             }
 
             "INTERNAL_ERROR" -> "服务端发生未预期错误，请查看服务端日志。"
+            "MERGE_NOT_FOUND" -> "未找到该次合并记录，请先刷新候选后重试。"
+            "MERGE_NOT_ALLOWED" -> "当前合并状态不允许此操作，请先刷新页面。"
             "INVALID_INPUT" -> invalidInputHint(context)
             else -> "请求失败，请稍后重试。"
         }
@@ -41,6 +45,7 @@ object ErrorMessageMapper {
             ErrorContext.CONFIG -> "配置内容不合法，请检查字段值。"
             ErrorContext.BILIBILI -> "输入链接无效，请使用 bilibili.com 或 b23.tv 链接。"
             ErrorContext.XIAOHONGSHU_SYNC, ErrorContext.XIAOHONGSHU_JOB -> "小红书链接参数不合法，请检查链接格式和配置。"
+            ErrorContext.NOTES_MERGE -> "合并参数不合法，请重新选择候选笔记。"
         }
     }
 }

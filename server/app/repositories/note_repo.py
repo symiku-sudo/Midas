@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sqlite3
 import shutil
 from datetime import datetime
@@ -53,6 +54,23 @@ class NoteLibraryRepository:
                     title TEXT NOT NULL,
                     source_url TEXT NOT NULL,
                     synced_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS note_merge_history (
+                    merge_id TEXT PRIMARY KEY,
+                    source TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    source_note_ids TEXT NOT NULL,
+                    merged_note_id TEXT NOT NULL,
+                    field_decisions TEXT NOT NULL DEFAULT '{}',
+                    fallback_reason TEXT NOT NULL DEFAULT '',
+                    rollback_of TEXT NOT NULL DEFAULT '',
+                    operator TEXT NOT NULL DEFAULT 'system',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
@@ -112,6 +130,22 @@ class NoteLibraryRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def get_bilibili_notes_by_ids(self, note_ids: list[str]) -> list[dict[str, Any]]:
+        if not note_ids:
+            return []
+        placeholders = ",".join("?" for _ in note_ids)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT note_id, title, video_url, summary_markdown, elapsed_ms,
+                       transcript_chars, saved_at
+                FROM saved_bilibili_notes
+                WHERE note_id IN ({placeholders})
+                """,
+                tuple(note_ids),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def delete_bilibili_note(self, note_id: str) -> int:
         with self._connect() as conn:
             cursor = conn.execute(
@@ -161,6 +195,21 @@ class NoteLibraryRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def get_xiaohongshu_notes_by_ids(self, note_ids: list[str]) -> list[dict[str, Any]]:
+        if not note_ids:
+            return []
+        placeholders = ",".join("?" for _ in note_ids)
+        with self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT note_id, title, source_url, summary_markdown, saved_at
+                FROM saved_xiaohongshu_notes
+                WHERE note_id IN ({placeholders})
+                """,
+                tuple(note_ids),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
     def delete_xiaohongshu_note(self, note_id: str) -> int:
         with self._connect() as conn:
             cursor = conn.execute(
@@ -173,6 +222,120 @@ class NoteLibraryRepository:
     def clear_xiaohongshu_notes(self) -> int:
         with self._connect() as conn:
             cursor = conn.execute("DELETE FROM saved_xiaohongshu_notes")
+            conn.commit()
+            return int(cursor.rowcount)
+
+    def delete_bilibili_notes(self, note_ids: list[str]) -> int:
+        if not note_ids:
+            return 0
+        placeholders = ",".join("?" for _ in note_ids)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"DELETE FROM saved_bilibili_notes WHERE note_id IN ({placeholders})",
+                tuple(note_ids),
+            )
+            conn.commit()
+            return int(cursor.rowcount)
+
+    def delete_xiaohongshu_notes(self, note_ids: list[str]) -> int:
+        if not note_ids:
+            return 0
+        placeholders = ",".join("?" for _ in note_ids)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"DELETE FROM saved_xiaohongshu_notes WHERE note_id IN ({placeholders})",
+                tuple(note_ids),
+            )
+            conn.commit()
+            return int(cursor.rowcount)
+
+    def save_merge_history(
+        self,
+        *,
+        merge_id: str,
+        source: str,
+        status: str,
+        source_note_ids: list[str],
+        merged_note_id: str,
+        field_decisions: dict[str, Any] | None = None,
+        fallback_reason: str = "",
+        rollback_of: str = "",
+        operator: str = "system",
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO note_merge_history (
+                    merge_id, source, status, source_note_ids, merged_note_id,
+                    field_decisions, fallback_reason, rollback_of, operator
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    merge_id,
+                    source,
+                    status,
+                    json.dumps(source_note_ids, ensure_ascii=False),
+                    merged_note_id,
+                    json.dumps(field_decisions or {}, ensure_ascii=False),
+                    fallback_reason,
+                    rollback_of,
+                    operator,
+                ),
+            )
+            conn.commit()
+
+    def get_merge_history(self, merge_id: str) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT merge_id, source, status, source_note_ids, merged_note_id,
+                       field_decisions, fallback_reason, rollback_of, operator,
+                       created_at, updated_at
+                FROM note_merge_history
+                WHERE merge_id = ?
+                """,
+                (merge_id,),
+            ).fetchone()
+        return dict(row) if row is not None else None
+
+    def list_merge_history_by_source(self, source: str) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT merge_id, source, status, source_note_ids, merged_note_id,
+                       field_decisions, fallback_reason, rollback_of, operator,
+                       created_at, updated_at
+                FROM note_merge_history
+                WHERE source = ?
+                ORDER BY created_at DESC, rowid DESC
+                """,
+                (source,),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def update_merge_history_status(
+        self,
+        *,
+        merge_id: str,
+        status: str,
+        rollback_of: str | None = None,
+    ) -> int:
+        set_clause = "status = ?, updated_at = CURRENT_TIMESTAMP"
+        params: list[Any] = [status]
+        if rollback_of is not None:
+            set_clause += ", rollback_of = ?"
+            params.append(rollback_of)
+        params.append(merge_id)
+        with self._connect() as conn:
+            cursor = conn.execute(
+                f"""
+                UPDATE note_merge_history
+                SET {set_clause}
+                WHERE merge_id = ?
+                """,
+                tuple(params),
+            )
             conn.commit()
             return int(cursor.rowcount)
 

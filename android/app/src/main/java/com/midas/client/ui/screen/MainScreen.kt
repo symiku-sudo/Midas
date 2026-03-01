@@ -18,6 +18,7 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -33,6 +34,7 @@ import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -53,6 +55,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSummaryData
+import com.midas.client.data.model.NotesMergeCandidateItem
 import com.midas.client.data.model.XiaohongshuSavedNote
 import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.ui.components.MarkdownText
@@ -259,6 +262,11 @@ fun MainScreen(viewModel: MainViewModel) {
         onRefreshNotes = viewModel::loadSavedNotes,
         onDeleteBilibiliNote = viewModel::deleteBilibiliSavedNote,
         onDeleteXiaohongshuNote = viewModel::deleteXiaohongshuSavedNote,
+        onSuggestMergeCandidates = viewModel::suggestMergeCandidates,
+        onPreviewMergeCandidate = viewModel::previewMergeCandidate,
+        onCommitCurrentMerge = viewModel::commitCurrentMerge,
+        onRollbackLastMerge = viewModel::rollbackLastMerge,
+        onFinalizeLastMerge = viewModel::finalizeLastMerge,
     )
 }
 
@@ -287,6 +295,11 @@ fun MainScreenContent(
     onRefreshNotes: () -> Unit,
     onDeleteBilibiliNote: (String) -> Unit,
     onDeleteXiaohongshuNote: (String) -> Unit,
+    onSuggestMergeCandidates: () -> Unit,
+    onPreviewMergeCandidate: (NotesMergeCandidateItem) -> Unit,
+    onCommitCurrentMerge: () -> Unit,
+    onRollbackLastMerge: () -> Unit,
+    onFinalizeLastMerge: () -> Unit,
     enableLifecycleAutoRefresh: Boolean = true,
     enableCyclicTabs: Boolean = true,
     animateTabSwitch: Boolean = true,
@@ -409,6 +422,11 @@ fun MainScreenContent(
                         onRefresh = onRefreshNotes,
                         onDeleteBilibili = onDeleteBilibiliNote,
                         onDeleteXiaohongshu = onDeleteXiaohongshuNote,
+                        onSuggestMergeCandidates = onSuggestMergeCandidates,
+                        onPreviewMergeCandidate = onPreviewMergeCandidate,
+                        onCommitCurrentMerge = onCommitCurrentMerge,
+                        onRollbackLastMerge = onRollbackLastMerge,
+                        onFinalizeLastMerge = onFinalizeLastMerge,
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(16.dp),
@@ -978,9 +996,15 @@ private fun NotesPanel(
     onRefresh: () -> Unit,
     onDeleteBilibili: (String) -> Unit,
     onDeleteXiaohongshu: (String) -> Unit,
+    onSuggestMergeCandidates: () -> Unit,
+    onPreviewMergeCandidate: (NotesMergeCandidateItem) -> Unit,
+    onCommitCurrentMerge: () -> Unit,
+    onRollbackLastMerge: () -> Unit,
+    onFinalizeLastMerge: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var selectedDetail by remember { mutableStateOf<NoteDetailViewState?>(null) }
+    var showFinalizeConfirmDialog by remember { mutableStateOf(false) }
     val context = LocalContext.current
     val keyword = state.keywordInput.trim()
     val filteredBilibili = state.bilibiliNotes.filter { item ->
@@ -1025,6 +1049,12 @@ private fun NotesPanel(
             Button(onClick = onRefresh, enabled = !state.isLoading) {
                 SingleLineActionText(if (state.isLoading) "刷新中..." else "刷新笔记库")
             }
+            Button(
+                onClick = onSuggestMergeCandidates,
+                enabled = !state.isMergeSuggesting && !state.isMergeCommitting,
+            ) {
+                SingleLineActionText(if (state.isMergeSuggesting) "分析中..." else "合并笔记")
+            }
         }
 
         if (state.errorMessage.isNotBlank()) {
@@ -1032,6 +1062,132 @@ private fun NotesPanel(
         }
         if (state.actionStatus.isNotBlank()) {
             Text(text = state.actionStatus, color = Color(0xFF2E7D32))
+        }
+        if (state.mergeStatus.isNotBlank()) {
+            Text(text = state.mergeStatus, color = Color(0xFF2E7D32))
+        }
+
+        if (state.mergeCandidates.isNotEmpty()) {
+            Text(
+                text = "智能合并候选（${state.mergeCandidates.size}）",
+                style = MaterialTheme.typography.titleSmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            state.mergeCandidates.forEach { item ->
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text(
+                            text = "来源：${if (item.source == "bilibili") "B站" else "小红书"}  相似度：${"%.2f".format(item.score)}",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                        item.notes.forEach { note ->
+                            Text(
+                                text = "• ${note.title} (${note.noteId})",
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                        }
+                        Button(
+                            onClick = { onPreviewMergeCandidate(item) },
+                            enabled = !state.isMergePreviewLoading,
+                        ) {
+                            SingleLineActionText(if (state.isMergePreviewLoading) "预览中..." else "预览合并")
+                        }
+                    }
+                }
+            }
+        }
+
+        if (state.mergePreview != null) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("合并预览", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        text = "标题：${state.mergePreview.mergedTitle}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    if (state.mergePreview.conflictMarkers.isNotEmpty()) {
+                        Text(
+                            text = "冲突标记：${state.mergePreview.conflictMarkers.joinToString("、")}",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = Color(0xFFB26A00),
+                        )
+                    }
+                    MarkdownText(
+                        markdown = state.mergePreview.mergedSummaryMarkdown,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(
+                            onClick = onCommitCurrentMerge,
+                            enabled = !state.isMergeCommitting && state.lastMergeCommit == null,
+                        ) {
+                            SingleLineActionText(if (state.isMergeCommitting) "提交中..." else "确认合并")
+                        }
+                    }
+                }
+            }
+        }
+
+        if (state.lastMergeCommit != null) {
+            Card(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "已完成合并：${state.lastMergeCommit.mergedNoteId}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Button(
+                            onClick = onRollbackLastMerge,
+                            enabled = !state.isMergeRollingBack && !state.isMergeFinalizing,
+                        ) {
+                            SingleLineActionText(if (state.isMergeRollingBack) "回退中..." else "回退此次合并")
+                        }
+                        Button(
+                            onClick = { showFinalizeConfirmDialog = true },
+                            enabled = !state.isMergeRollingBack && !state.isMergeFinalizing,
+                        ) {
+                            SingleLineActionText(
+                                if (state.isMergeFinalizing) "确认中..." else "确认合并结果",
+                            )
+                        }
+                    }
+                    Text(
+                        text = "点击“确认合并结果”后将删除原笔记（破坏性，不可回退）。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = Color(0xFFB26A00),
+                    )
+                }
+            }
+        }
+
+        if (showFinalizeConfirmDialog) {
+            AlertDialog(
+                onDismissRequest = { showFinalizeConfirmDialog = false },
+                title = { Text("确认破坏性操作") },
+                text = { Text("确认后将不再保留原笔记，且此合并不可回退。") },
+                confirmButton = {
+                    TextButton(
+                        onClick = {
+                            showFinalizeConfirmDialog = false
+                            onFinalizeLastMerge()
+                        },
+                    ) { Text("确认执行") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showFinalizeConfirmDialog = false }) {
+                        Text("取消")
+                    }
+                },
+            )
         }
 
         Text(

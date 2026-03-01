@@ -266,6 +266,153 @@ Success `data`:
 }
 ```
 
+## `POST /api/notes/merge/suggest`
+
+用途：发现可合并候选（当前仅同源：B 站 / 小红书）。
+
+Request:
+
+```json
+{
+  "source": "bilibili",
+  "limit": 20,
+  "min_score": 0.55
+}
+```
+
+说明：
+- `source` 可选：`bilibili` / `xiaohongshu`；为空时同时返回两类候选。
+- `min_score` 范围 `0~1`。
+
+Success `data`:
+
+```json
+{
+  "total": 1,
+  "items": [
+    {
+      "source": "bilibili",
+      "note_ids": ["n1", "n2"],
+      "score": 0.91,
+      "reason_codes": ["KEYWORD_OVERLAP", "TITLE_SIMILAR"],
+      "notes": [
+        {"note_id": "n1", "title": "标题A", "saved_at": "2026-03-01 10:00:00"},
+        {"note_id": "n2", "title": "标题B", "saved_at": "2026-03-01 11:00:00"}
+      ]
+    }
+  ]
+}
+```
+
+## `POST /api/notes/merge/preview`
+
+用途：生成候选对的合并预览稿（不落库）。
+
+Request:
+
+```json
+{
+  "source": "bilibili",
+  "note_ids": ["n1", "n2"]
+}
+```
+
+Success `data`:
+
+```json
+{
+  "source": "bilibili",
+  "note_ids": ["n1", "n2"],
+  "merged_title": "合并后标题",
+  "merged_summary_markdown": "# 合并正文...",
+  "source_refs": ["https://...", "https://..."],
+  "conflict_markers": ["TITLE_CONFLICT"]
+}
+```
+
+## `POST /api/notes/merge/commit`
+
+用途：提交合并结果，默认非破坏（保留原笔记，新增 merged 笔记）。
+
+Request:
+
+```json
+{
+  "source": "bilibili",
+  "note_ids": ["n1", "n2"],
+  "merged_title": "可选覆盖标题",
+  "merged_summary_markdown": "可选覆盖正文"
+}
+```
+
+Success `data`:
+
+```json
+{
+  "merge_id": "merge_xxx",
+  "status": "MERGED_PENDING_CONFIRM",
+  "source": "bilibili",
+  "merged_note_id": "merged_note_xxx",
+  "source_note_ids": ["n1", "n2"],
+  "can_rollback": true,
+  "can_finalize": true
+}
+```
+
+说明：
+- 此状态下可执行“回退”或“确认合并结果（破坏性）”。
+
+## `POST /api/notes/merge/rollback`
+
+用途：回退最近一次未 finalize 的合并（恢复到合并前状态）。
+
+Request:
+
+```json
+{
+  "merge_id": "merge_xxx"
+}
+```
+
+Success `data`:
+
+```json
+{
+  "merge_id": "merge_xxx",
+  "status": "ROLLED_BACK",
+  "deleted_merged_count": 1,
+  "restored_source_count": 2
+}
+```
+
+## `POST /api/notes/merge/finalize`
+
+用途：确认合并结果并执行破坏性收尾（删除原笔记，仅保留 merged）。
+
+Request:
+
+```json
+{
+  "merge_id": "merge_xxx",
+  "confirm_destructive": true
+}
+```
+
+Success `data`:
+
+```json
+{
+  "merge_id": "merge_xxx",
+  "status": "FINALIZED_DESTRUCTIVE",
+  "deleted_source_count": 2,
+  "kept_merged_note_id": "merged_note_xxx"
+}
+```
+
+说明：
+- `confirm_destructive` 必须为 `true`，否则返回 `400 INVALID_INPUT`。
+- 一旦 `FINALIZED_DESTRUCTIVE`，该 `merge_id` 不再允许 `rollback`。
+
 ## `POST /api/xiaohongshu/capture/refresh`
 
 用途：自动更新小红书 auth 抓包配置并刷新运行时请求头。
@@ -414,6 +561,8 @@ Success `data`:
 - `AUTH_EXPIRED`: upstream auth expired
 - `RATE_LIMITED`: upstream throttling
 - `CIRCUIT_OPEN`: request blocked by circuit-breaker
+- `MERGE_NOT_FOUND`: merge history not found
+- `MERGE_NOT_ALLOWED`: merge state/action is not allowed
 - `UPSTREAM_ERROR`: third-party/downstream failure
 - `DEPENDENCY_MISSING`: required local dependency missing
 - `INTERNAL_ERROR`: unhandled server error
