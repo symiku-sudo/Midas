@@ -1045,7 +1045,6 @@ private fun NotesPanel(
                 preview = state.mergePreview,
                 isPreviewLoading = state.isMergePreviewLoading,
                 isConfirmingMerge = state.isMergeCommitting || state.isMergeFinalizing,
-                onBack = { selectedMergeCandidate = null },
                 onConfirmMerge = {
                     onCommitCurrentMerge()
                     selectedMergeCandidate = null
@@ -1162,15 +1161,9 @@ private fun MergePreviewPanel(
     preview: NotesMergePreviewData?,
     isPreviewLoading: Boolean,
     isConfirmingMerge: Boolean,
-    onBack: () -> Unit,
     onConfirmMerge: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onBack) {
-                SingleLineActionText("返回")
-            }
-        }
         Card(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(12.dp),

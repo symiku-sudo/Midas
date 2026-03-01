@@ -71,6 +71,8 @@ data class NotesUiState(
     val mergeCandidates: List<NotesMergeCandidateItem> = emptyList(),
     val isMergePreviewLoading: Boolean = false,
     val mergePreview: NotesMergePreviewData? = null,
+    val mergePreviewKey: String = "",
+    val mergePreviewCache: Map<String, NotesMergePreviewData> = emptyMap(),
     val isMergeCommitting: Boolean = false,
     val isMergeRollingBack: Boolean = false,
     val isMergeFinalizing: Boolean = false,
@@ -715,6 +717,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     isMergeRollingBack = false,
                     isMergeFinalizing = false,
                     mergePreview = null,
+                    mergePreviewKey = "",
+                    mergePreviewCache = emptyMap(),
                     lastMergeCommit = null,
                     errorMessage = "",
                     mergeStatus = "正在分析可合并候选...",
@@ -755,6 +759,24 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun previewMergeCandidate(candidate: NotesMergeCandidateItem) {
+        val candidateKey = buildMergeCandidateKey(
+            source = candidate.source,
+            noteIds = candidate.noteIds,
+        )
+        val cachedPreview = _notesState.value.mergePreviewCache[candidateKey]
+        if (cachedPreview != null) {
+            _notesState.update {
+                it.copy(
+                    isMergePreviewLoading = false,
+                    mergePreview = cachedPreview,
+                    mergePreviewKey = candidateKey,
+                    lastMergeCommit = null,
+                    errorMessage = "",
+                    mergeStatus = "已加载缓存预览。",
+                )
+            }
+            return
+        }
         val baseUrl = requireBaseUrl {
             _notesState.update {
                 it.copy(
@@ -768,6 +790,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 it.copy(
                     isMergePreviewLoading = true,
                     mergePreview = null,
+                    mergePreviewKey = "",
                     lastMergeCommit = null,
                     errorMessage = "",
                     mergeStatus = "正在生成合并预览...",
@@ -785,6 +808,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         it.copy(
                             isMergePreviewLoading = false,
                             mergePreview = result.data,
+                            mergePreviewKey = candidateKey,
+                            mergePreviewCache = it.mergePreviewCache + (candidateKey to result.data),
                             mergeStatus = "预览已生成，请在预览页确认是否合并。",
                             errorMessage = "",
                         )
@@ -795,6 +820,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     _notesState.update {
                         it.copy(
                             isMergePreviewLoading = false,
+                            mergePreview = null,
+                            mergePreviewKey = "",
                             mergeStatus = "",
                             errorMessage = ErrorMessageMapper.format(
                                 code = result.code,
@@ -873,11 +900,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             when (val finalizeResult = apiRepository.finalizeMerge(baseUrl = baseUrl, mergeId = commitData.mergeId)) {
                 is AppResult.Success -> {
                     val targetNoteIds = preview.noteIds.toSet()
+                    val targetPreviewKey = buildMergeCandidateKey(
+                        source = preview.source,
+                        noteIds = preview.noteIds,
+                    )
                     _notesState.update {
                         it.copy(
                             isMergeFinalizing = false,
                             lastMergeCommit = null,
                             mergePreview = null,
+                            mergePreviewKey = "",
+                            mergePreviewCache = it.mergePreviewCache - targetPreviewKey,
                             mergeCandidates = it.mergeCandidates.filterNot { candidate ->
                                 candidate.source == preview.source && candidate.noteIds.toSet() == targetNoteIds
                             },
@@ -946,6 +979,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             isMergeRollingBack = false,
                             lastMergeCommit = null,
                             mergePreview = null,
+                            mergePreviewKey = "",
                             mergeStatus = "回退成功，已恢复为合并前状态。",
                             actionStatus = "已回退 merge_id=${result.data.mergeId}",
                             errorMessage = "",
@@ -1000,6 +1034,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             isMergeFinalizing = false,
                             lastMergeCommit = null,
                             mergePreview = null,
+                            mergePreviewKey = "",
                             mergeCandidates = emptyList(),
                             mergeStatus = "已确认合并结果，原笔记已执行破坏性清理。",
                             actionStatus = "已确认 merge_id=${result.data.mergeId}，删除原笔记 ${result.data.deletedSourceCount} 条。",
@@ -1210,6 +1245,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val normalized = UrlNormalizer.normalize(_settingsState.value.baseUrlInput)
         _settingsState.update { it.copy(baseUrlInput = normalized) }
         return normalized
+    }
+
+    private fun buildMergeCandidateKey(source: String, noteIds: List<String>): String {
+        val normalizedIds = noteIds
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .sorted()
+        return "${source.trim().lowercase()}::${normalizedIds.joinToString("|")}"
     }
 
 }
