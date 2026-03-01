@@ -256,6 +256,8 @@ def test_notes_merge_lifecycle_commit_rollback_and_finalize() -> None:
     assert preview_body["data"]["source"] == "bilibili"
     assert preview_body["data"]["merged_title"]
     assert preview_body["data"]["merged_summary_markdown"]
+    assert "## 关键信息" in preview_body["data"]["merged_summary_markdown"]
+    assert "## 来源" in preview_body["data"]["merged_summary_markdown"]
 
     commit_resp = client.post(
         "/api/notes/merge/commit",
@@ -414,6 +416,71 @@ def test_notes_merge_suggest_default_threshold_hits_topic_overlap() -> None:
             assert "TOPIC_OVERLAP" in item["reason_codes"]
             break
     assert pair_found is True
+
+
+def test_xiaohongshu_summarize_url_dedup_uses_merge_canonical_after_finalize() -> None:
+    _reset_xiaohongshu_state()
+
+    first_url = "https://www.xiaohongshu.com/explore/mock-note-001"
+    second_url = "https://www.xiaohongshu.com/explore/mock-note-002"
+
+    first_summary_resp = client.post(
+        "/api/xiaohongshu/summarize-url",
+        json={"url": first_url},
+    )
+    assert first_summary_resp.status_code == 200
+    first_summary = first_summary_resp.json()["data"]
+
+    second_summary_resp = client.post(
+        "/api/xiaohongshu/summarize-url",
+        json={"url": second_url},
+    )
+    assert second_summary_resp.status_code == 200
+    second_summary = second_summary_resp.json()["data"]
+
+    save_batch_resp = client.post(
+        "/api/notes/xiaohongshu/save-batch",
+        json={"notes": [first_summary, second_summary]},
+    )
+    assert save_batch_resp.status_code == 200
+    assert save_batch_resp.json()["data"]["saved_count"] == 2
+
+    commit_resp = client.post(
+        "/api/notes/merge/commit",
+        json={
+            "source": "xiaohongshu",
+            "note_ids": [first_summary["note_id"], second_summary["note_id"]],
+        },
+    )
+    assert commit_resp.status_code == 200
+    merge_id = commit_resp.json()["data"]["merge_id"]
+
+    finalize_resp = client.post(
+        "/api/notes/merge/finalize",
+        json={"merge_id": merge_id, "confirm_destructive": True},
+    )
+    assert finalize_resp.status_code == 200
+    merged_note_id = finalize_resp.json()["data"]["kept_merged_note_id"]
+
+    list_resp = client.get("/api/notes/xiaohongshu")
+    assert list_resp.status_code == 200
+    list_body = list_resp.json()
+    assert list_body["data"]["total"] == 1
+    assert list_body["data"]["items"][0]["note_id"] == merged_note_id
+
+    dedup_resp = client.post(
+        "/api/xiaohongshu/summarize-url",
+        json={"url": first_url},
+    )
+    assert dedup_resp.status_code == 200
+    dedup_body = dedup_resp.json()
+    assert dedup_body["ok"] is True
+    assert dedup_body["data"]["note_id"] == first_summary["note_id"]
+    assert "## 来源" in dedup_body["data"]["summary_markdown"]
+
+    list_again_resp = client.get("/api/notes/xiaohongshu")
+    assert list_again_resp.status_code == 200
+    assert list_again_resp.json()["data"]["total"] == 1
 
 
 def test_xiaohongshu_capture_refresh_from_default_har(monkeypatch) -> None:

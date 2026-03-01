@@ -2747,6 +2747,39 @@ class XiaohongshuSyncService:
             )
 
         note = await self._resolve_note_by_url(mode=mode, note_url=note_url)
+        if await asyncio.to_thread(self._repository.is_synced, note.note_id):
+            canonical_note_id = await asyncio.to_thread(
+                self._repository.resolve_canonical_note_id,
+                note.note_id,
+            )
+            target_note_id = canonical_note_id or note.note_id
+            existing = await asyncio.to_thread(
+                self._repository.get_saved_note_summary,
+                target_note_id,
+            )
+            if existing is not None:
+                summary_text = self._ensure_source_link(
+                    existing["summary_markdown"],
+                    note.source_url,
+                )
+                return XiaohongshuSummaryItem(
+                    note_id=note.note_id,
+                    title=existing["title"] or note.title,
+                    source_url=note.source_url,
+                    summary_markdown=summary_text,
+                )
+            return XiaohongshuSummaryItem(
+                note_id=note.note_id,
+                title=note.title,
+                source_url=note.source_url,
+                summary_markdown=(
+                    "# 已去重跳过\n\n"
+                    f"- note_id: {note.note_id}\n"
+                    "- 该笔记已在去重索引中登记。\n"
+                    "- 若需重新生成，请先清理去重记录后重试。"
+                ),
+            )
+
         if note.is_video:
             summary = await self._summarize_video_note(note)
         else:
