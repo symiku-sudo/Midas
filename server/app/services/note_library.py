@@ -42,6 +42,9 @@ _MERGE_SOURCE_SECTION_TITLE = "原始笔记来源"
 _MERGE_SOURCE_SECTION_PATTERN = re.compile(
     rf"(?ms)\n?##\s*{re.escape(_MERGE_SOURCE_SECTION_TITLE)}\s*\n.*\Z"
 )
+_MERGE_MARKDOWN_LINK_PATTERN = re.compile(
+    r"\[([^\]\n]+)\]\(\s*(?:<)?(https?://[^)\s>]+)(?:>)?\s*\)"
+)
 _TITLE_TOKEN_MIN_ANCHOR = 0.06
 _TITLE_SURFACE_MIN_ANCHOR = 0.55
 _TITLE_TOKEN_SOFT_ANCHOR = 0.03
@@ -332,6 +335,7 @@ class NoteLibraryService:
             preferred_sources=selected_sources,
             visited={merged_note_id},
         )
+        lineage_source_refs = self._lineage_source_refs_by_note_id(lineage_sources)
         final_summary = self._append_merge_sources_section(
             markdown=final_summary,
             lineage_sources=lineage_sources,
@@ -386,7 +390,7 @@ class NoteLibraryService:
             "merged_title": final_title,
             "merged_summary_markdown": final_summary,
             "source_refs": preview.source_refs,
-            "source_ref_by_note_id": selected_source_refs,
+            "source_ref_by_note_id": lineage_source_refs,
             "conflict_markers": preview.conflict_markers,
             "lineage_source_ids": lineage_source_ids,
             "lineage_sources": lineage_sources,
@@ -563,12 +567,17 @@ class NoteLibraryService:
             )
             if history is None:
                 continue
+            current_markdown = str(row.get("summary_markdown", ""))
             lineage_sources = self._read_lineage_sources_from_history(
                 source=source,
                 history=history,
+                markdown_hint=current_markdown,
                 visited={note_id},
             )
-            current_markdown = str(row.get("summary_markdown", ""))
+            self._persist_lineage_sources_to_history_if_needed(
+                history=history,
+                lineage_sources=lineage_sources,
+            )
             refreshed_markdown = self._append_merge_sources_section(
                 markdown=current_markdown,
                 lineage_sources=lineage_sources,
@@ -1146,6 +1155,7 @@ class NoteLibraryService:
         *,
         history: dict[str, Any],
         field_decisions: dict[str, Any] | None = None,
+        lineage_source_ids: list[str] | None = None,
     ) -> dict[str, str]:
         decisions = field_decisions or self._decode_field_decisions(history.get("field_decisions"))
         output: dict[str, str] = {}
@@ -1154,19 +1164,23 @@ class NoteLibraryService:
         if isinstance(raw_mapping, dict):
             for note_id, source_ref in raw_mapping.items():
                 key = str(note_id).strip()
-                value = str(source_ref).strip()
+                value = self._normalize_source_ref(str(source_ref))
                 if key and value:
                     output[key] = value
             if output:
                 return output
 
         source_note_ids = self._decode_json_note_ids(history.get("source_note_ids"))
+        target_note_ids = source_note_ids
+        normalized_lineage_ids = [str(item).strip() for item in (lineage_source_ids or []) if str(item).strip()]
         raw_refs = decisions.get("source_refs")
         if isinstance(raw_refs, list):
-            for index, note_id in enumerate(source_note_ids):
+            if normalized_lineage_ids and len(raw_refs) == len(normalized_lineage_ids):
+                target_note_ids = normalized_lineage_ids
+            for index, note_id in enumerate(target_note_ids):
                 if index >= len(raw_refs):
                     break
-                source_ref = str(raw_refs[index]).strip()
+                source_ref = self._normalize_source_ref(str(raw_refs[index]))
                 if source_ref:
                     output[note_id] = source_ref
         return output
@@ -1182,7 +1196,7 @@ class NoteLibraryService:
             if not note_id:
                 continue
             title = str(item.get("title", "")).strip() or note_id
-            source_ref = str(item.get("source_ref", "")).strip()
+            source_ref = self._normalize_source_ref(str(item.get("source_ref", "")))
             parsed.append(
                 {
                     "note_id": note_id,
@@ -1203,7 +1217,7 @@ class NoteLibraryService:
             if not note_id:
                 continue
             title = str(item.get("title", "")).strip() or note_id
-            source_ref = str(item.get("source_ref", "")).strip()
+            source_ref = self._normalize_source_ref(str(item.get("source_ref", "")))
             existing_index = index_by_note_id.get(note_id)
             if existing_index is None:
                 index_by_note_id[note_id] = len(deduped)
@@ -1221,6 +1235,104 @@ class NoteLibraryService:
             if not str(current.get("source_ref", "")).strip() and source_ref:
                 current["source_ref"] = source_ref
         return deduped
+
+    def _normalize_source_ref(self, source_ref: str) -> str:
+        normalized = source_ref.replace("\n", "").strip()
+        if normalized.startswith("<") and normalized.endswith(">"):
+            normalized = normalized[1:-1].strip()
+        return normalized
+
+    def _extract_merge_source_link_region(self, markdown: str) -> str:
+        content = str(markdown).strip()
+        if not content:
+            return ""
+        markers = (
+            f"## {_MERGE_SOURCE_SECTION_TITLE}",
+            "## 原文链接",
+            "原文链接：",
+            "## 来源",
+        )
+        start = -1
+        for marker in markers:
+            index = content.rfind(marker)
+            if index > start:
+                start = index
+        if start >= 0:
+            return content[start:]
+        lines = content.splitlines()
+        return "\n".join(lines[-120:])
+
+    def _extract_markdown_links(self, markdown: str) -> list[tuple[str, str]]:
+        region = self._extract_merge_source_link_region(markdown)
+        if not region:
+            return []
+        links: list[tuple[str, str]] = []
+        for match in _MERGE_MARKDOWN_LINK_PATTERN.finditer(region):
+            title = str(match.group(1)).strip()
+            source_ref = self._normalize_source_ref(str(match.group(2)))
+            if not title or not source_ref:
+                continue
+            links.append((title, source_ref))
+        return links
+
+    def _hydrate_lineage_sources_from_markdown(
+        self,
+        *,
+        lineage_sources: list[dict[str, str]],
+        markdown_candidates: list[str],
+    ) -> list[dict[str, str]]:
+        sources = self._dedupe_lineage_sources(lineage_sources)
+        if not sources:
+            return []
+
+        markdown_links: list[tuple[str, str]] = []
+        for markdown in markdown_candidates:
+            markdown_links.extend(self._extract_markdown_links(markdown))
+        if not markdown_links:
+            return sources
+
+        title_by_source_ref: dict[str, str] = {}
+        for title, source_ref in markdown_links:
+            title_by_source_ref.setdefault(source_ref, title)
+        allow_positional_fill = len(markdown_links) == len(sources)
+
+        hydrated: list[dict[str, str]] = []
+        for index, item in enumerate(sources):
+            note_id = str(item.get("note_id", "")).strip()
+            if not note_id:
+                continue
+            title = str(item.get("title", "")).strip() or note_id
+            source_ref = self._normalize_source_ref(str(item.get("source_ref", "")))
+            fallback_title = title_by_source_ref.get(source_ref, "").strip()
+            if (not title or title == note_id) and fallback_title:
+                title = fallback_title
+
+            if not source_ref and allow_positional_fill:
+                link_title, link_source_ref = markdown_links[index]
+                source_ref = link_source_ref
+                if not title or title == note_id:
+                    title = link_title
+
+            hydrated.append(
+                {
+                    "note_id": note_id,
+                    "title": title or note_id,
+                    "source_ref": source_ref,
+                }
+            )
+        return self._dedupe_lineage_sources(hydrated)
+
+    def _lineage_source_refs_by_note_id(
+        self,
+        lineage_sources: list[dict[str, str]],
+    ) -> dict[str, str]:
+        output: dict[str, str] = {}
+        for item in self._dedupe_lineage_sources(lineage_sources):
+            note_id = str(item.get("note_id", "")).strip()
+            source_ref = self._normalize_source_ref(str(item.get("source_ref", "")))
+            if note_id and source_ref:
+                output[note_id] = source_ref
+        return output
 
     def _load_lineage_sources_for_merged_note(
         self,
@@ -1327,12 +1439,20 @@ class NoteLibraryService:
         *,
         source: str,
         history: dict[str, Any],
+        markdown_hint: str = "",
         visited: set[str] | None = None,
     ) -> list[dict[str, str]]:
         field_decisions = self._decode_field_decisions(history.get("field_decisions"))
+        markdown_candidates = [
+            str(field_decisions.get("merged_summary_markdown", "")),
+            str(markdown_hint),
+        ]
         parsed = self._parse_lineage_sources(field_decisions.get("lineage_sources"))
         if parsed:
-            return parsed
+            return self._hydrate_lineage_sources_from_markdown(
+                lineage_sources=parsed,
+                markdown_candidates=markdown_candidates,
+            )
         lineage_source_ids = self._read_lineage_source_ids(history)
         source_link_snapshot = self._read_source_link_snapshot(
             history=history,
@@ -1341,8 +1461,9 @@ class NoteLibraryService:
         source_refs_by_id = self._read_source_refs_from_history(
             history=history,
             field_decisions=field_decisions,
+            lineage_source_ids=lineage_source_ids,
         )
-        return self._collect_lineage_sources(
+        collected = self._collect_lineage_sources(
             source=source,
             lineage_source_ids=lineage_source_ids,
             source_link_snapshot=source_link_snapshot,
@@ -1350,6 +1471,48 @@ class NoteLibraryService:
             preferred_sources={},
             visited=visited,
         )
+        return self._hydrate_lineage_sources_from_markdown(
+            lineage_sources=collected,
+            markdown_candidates=markdown_candidates,
+        )
+
+    def _persist_lineage_sources_to_history_if_needed(
+        self,
+        *,
+        history: dict[str, Any],
+        lineage_sources: list[dict[str, str]],
+    ) -> None:
+        merge_id = str(history.get("merge_id", "")).strip()
+        if not merge_id:
+            return
+        normalized_sources = self._dedupe_lineage_sources(lineage_sources)
+        if not normalized_sources:
+            return
+
+        field_decisions = self._decode_field_decisions(history.get("field_decisions"))
+        changed = False
+        if self._parse_lineage_sources(field_decisions.get("lineage_sources")) != normalized_sources:
+            field_decisions["lineage_sources"] = normalized_sources
+            changed = True
+
+        lineage_ref_mapping = self._lineage_source_refs_by_note_id(normalized_sources)
+        existing_raw_ref_mapping = field_decisions.get("source_ref_by_note_id")
+        existing_ref_mapping: dict[str, str] = {}
+        if isinstance(existing_raw_ref_mapping, dict):
+            for note_id, source_ref in existing_raw_ref_mapping.items():
+                key = str(note_id).strip()
+                value = self._normalize_source_ref(str(source_ref))
+                if key and value:
+                    existing_ref_mapping[key] = value
+        if lineage_ref_mapping and existing_ref_mapping != lineage_ref_mapping:
+            field_decisions["source_ref_by_note_id"] = lineage_ref_mapping
+            changed = True
+
+        if changed:
+            self._repository.update_merge_history_field_decisions(
+                merge_id=merge_id,
+                field_decisions=field_decisions,
+            )
 
     def _escape_markdown_link_text(self, text: str) -> str:
         normalized = text.replace("\n", " ").strip()
@@ -1375,7 +1538,7 @@ class NoteLibraryService:
         for item in sources:
             note_id = str(item.get("note_id", "")).strip()
             title = str(item.get("title", "")).strip() or note_id or "未命名笔记"
-            source_ref = str(item.get("source_ref", "")).strip().replace("\n", "")
+            source_ref = self._normalize_source_ref(str(item.get("source_ref", "")))
             if source_ref:
                 escaped_title = self._escape_markdown_link_text(title)
                 lines.append(f"- [{escaped_title}](<{source_ref}>)")

@@ -404,6 +404,24 @@ class NoteLibraryRepository:
             conn.commit()
             return int(cursor.rowcount)
 
+    def update_merge_history_field_decisions(
+        self,
+        *,
+        merge_id: str,
+        field_decisions: dict[str, Any],
+    ) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                """
+                UPDATE note_merge_history
+                SET field_decisions = ?, updated_at = CURRENT_TIMESTAMP
+                WHERE merge_id = ?
+                """,
+                (json.dumps(field_decisions or {}, ensure_ascii=False), merge_id),
+            )
+            conn.commit()
+            return int(cursor.rowcount)
+
     def upsert_source_index_links(
         self,
         *,

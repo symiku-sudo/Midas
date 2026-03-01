@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -451,6 +452,126 @@ def test_existing_merge_note_format_is_refreshed_for_legacy_markdown() -> None:
     assert "## 原始笔记来源" in refreshed_summary
     assert "[历史标题一](<https://www.bilibili.com/video/BV1xx411c7mD>)" in refreshed_summary
     assert "[历史标题二](<https://www.bilibili.com/video/BV1xx411c7mE>)" in refreshed_summary
+
+
+def test_legacy_merge_history_without_titles_is_rehydrated_from_markdown_links() -> None:
+    _reset_xiaohongshu_state()
+    first_url = "https://www.bilibili.com/video/BV1xx411c7mD"
+    second_url = "https://www.bilibili.com/video/BV1xx411c7mE"
+
+    first_save = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": first_url,
+            "summary_markdown": "# 测试一",
+            "elapsed_ms": 10,
+            "transcript_chars": 20,
+            "title": "历史标题一",
+        },
+    )
+    assert first_save.status_code == 200
+    first_note_id = first_save.json()["data"]["note_id"]
+
+    second_save = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": second_url,
+            "summary_markdown": "# 测试二",
+            "elapsed_ms": 11,
+            "transcript_chars": 22,
+            "title": "历史标题二",
+        },
+    )
+    assert second_save.status_code == 200
+    second_note_id = second_save.json()["data"]["note_id"]
+
+    commit_resp = client.post(
+        "/api/notes/merge/commit",
+        json={
+            "source": "bilibili",
+            "note_ids": [first_note_id, second_note_id],
+        },
+    )
+    assert commit_resp.status_code == 200
+    merge_data = commit_resp.json()["data"]
+    merge_id = merge_data["merge_id"]
+    merged_note_id = merge_data["merged_note_id"]
+
+    finalize_resp = client.post(
+        "/api/notes/merge/finalize",
+        json={"merge_id": merge_id, "confirm_destructive": True},
+    )
+    assert finalize_resp.status_code == 200
+
+    legacy_markdown = (
+        "# 旧版合并笔记\n\n"
+        "## 来源\n\n"
+        f"- [历史标题一](<{first_url}>)\n"
+        f"- [历史标题二](<{second_url}>)"
+    )
+    repo = NoteLibraryRepository(get_settings().xiaohongshu.db_path)
+    assert (
+        repo.update_bilibili_note_summary(
+            note_id=merged_note_id,
+            summary_markdown=legacy_markdown,
+        )
+        == 1
+    )
+    assert (
+        repo.update_merge_history_field_decisions(
+            merge_id=merge_id,
+            field_decisions={
+                "merged_title": "旧版合并笔记",
+                "merged_summary_markdown": legacy_markdown,
+                "source_refs": [first_url, second_url],
+                "lineage_source_ids": [first_note_id, second_note_id],
+                "source_link_snapshot": {
+                    first_note_id: first_note_id,
+                    second_note_id: second_note_id,
+                },
+                "conflict_markers": [],
+            },
+        )
+        == 1
+    )
+
+    routes_module._get_note_library_service.cache_clear()
+
+    list_resp = client.get("/api/notes/bilibili")
+    assert list_resp.status_code == 200
+    list_body = list_resp.json()
+    merged_items = [
+        item
+        for item in list_body["data"]["items"]
+        if item["note_id"] == merged_note_id
+    ]
+    assert len(merged_items) == 1
+    refreshed_summary = merged_items[0]["summary_markdown"]
+    assert "## 原始笔记来源" in refreshed_summary
+    assert f"[历史标题一](<{first_url}>)" in refreshed_summary
+    assert f"[历史标题二](<{second_url}>)" in refreshed_summary
+    assert f"- [{first_note_id}](<{first_url}>)" not in refreshed_summary
+    assert f"- [{second_note_id}](<{second_url}>)" not in refreshed_summary
+
+    refreshed_history = repo.get_merge_history(merge_id)
+    assert refreshed_history is not None
+    field_decisions = json.loads(str(refreshed_history["field_decisions"]))
+    assert field_decisions["lineage_sources"] == [
+        {
+            "note_id": first_note_id,
+            "title": "历史标题一",
+            "source_ref": first_url,
+        },
+        {
+            "note_id": second_note_id,
+            "title": "历史标题二",
+            "source_ref": second_url,
+        },
+    ]
+    assert field_decisions["source_ref_by_note_id"] == {
+        first_note_id: first_url,
+        second_note_id: second_url,
+    }
 
 
 def test_notes_merge_suggest_default_threshold_hits_title_and_summary_similarity() -> None:
