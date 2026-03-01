@@ -28,8 +28,6 @@ class MainScreenContentSmokeTest {
         var xhsSummarizeUrlClicks = 0
         var xhsSaveSingleClicks = 0
         var notesRefreshClicks = 0
-        var notesClearBilibiliClicks = 0
-        var notesClearXhsClicks = 0
 
         composeRule.setContent {
             MaterialTheme {
@@ -96,9 +94,7 @@ class MainScreenContentSmokeTest {
                     onNotesKeywordChange = {},
                     onRefreshNotes = { notesRefreshClicks += 1 },
                     onDeleteBilibiliNote = {},
-                    onClearBilibiliNotes = { notesClearBilibiliClicks += 1 },
                     onDeleteXiaohongshuNote = {},
-                    onClearXiaohongshuNotes = { notesClearXhsClicks += 1 },
                     enableLifecycleAutoRefresh = false,
                     enableCyclicTabs = false,
                     animateTabSwitch = false,
@@ -117,8 +113,6 @@ class MainScreenContentSmokeTest {
         composeRule.onNodeWithText("笔记库").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithText("刷新笔记库").performClick()
-        composeRule.onNodeWithText("清空B站").performClick()
-        composeRule.onNodeWithText("清空小红书").performClick()
 
         composeRule.onNodeWithText("设置").performClick()
         composeRule.waitForIdle()
@@ -132,8 +126,6 @@ class MainScreenContentSmokeTest {
         assertEquals(1, xhsSummarizeUrlClicks)
         assertEquals(1, xhsSaveSingleClicks)
         assertEquals(1, notesRefreshClicks)
-        assertEquals(1, notesClearBilibiliClicks)
-        assertEquals(1, notesClearXhsClicks)
         assertEquals(1, saveBaseUrlClicks)
         assertEquals(1, testConnectionClicks)
         assertEquals(1, resetConfigClicks)

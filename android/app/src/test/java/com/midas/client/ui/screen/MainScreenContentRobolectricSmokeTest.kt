@@ -2,6 +2,7 @@ package com.midas.client.ui.screen
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -33,8 +34,6 @@ class MainScreenContentRobolectricSmokeTest {
         var xhsSummarizeUrlClicks = 0
         var xhsSaveSingleClicks = 0
         var notesRefreshClicks = 0
-        var notesClearBilibiliClicks = 0
-        var notesClearXhsClicks = 0
 
         composeRule.setContent {
             MaterialTheme {
@@ -101,9 +100,7 @@ class MainScreenContentRobolectricSmokeTest {
                     onNotesKeywordChange = {},
                     onRefreshNotes = { notesRefreshClicks += 1 },
                     onDeleteBilibiliNote = {},
-                    onClearBilibiliNotes = { notesClearBilibiliClicks += 1 },
                     onDeleteXiaohongshuNote = {},
-                    onClearXiaohongshuNotes = { notesClearXhsClicks += 1 },
                     enableLifecycleAutoRefresh = false,
                     enableCyclicTabs = false,
                     animateTabSwitch = false,
@@ -122,8 +119,6 @@ class MainScreenContentRobolectricSmokeTest {
         composeRule.onNodeWithText("笔记库").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithText("刷新笔记库").performClick()
-        composeRule.onNodeWithText("清空B站").performClick()
-        composeRule.onNodeWithText("清空小红书").performClick()
 
         composeRule.onNodeWithText("设置").performClick()
         composeRule.waitForIdle()
@@ -137,10 +132,146 @@ class MainScreenContentRobolectricSmokeTest {
         assertEquals(1, xhsSummarizeUrlClicks)
         assertEquals(1, xhsSaveSingleClicks)
         assertEquals(1, notesRefreshClicks)
-        assertEquals(1, notesClearBilibiliClicks)
-        assertEquals(1, notesClearXhsClicks)
         assertEquals(1, saveBaseUrlClicks)
         assertEquals(1, testConnectionClicks)
         assertEquals(1, resetConfigClicks)
+    }
+
+    @Test
+    fun bilibiliInput_clearButton_shouldTriggerEmptyCallback() {
+        var latestVideoInput = "BV1xx411c7mD"
+
+        composeRule.setContent {
+            MaterialTheme {
+                MainScreenContent(
+                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
+                    bilibili = BilibiliUiState(videoUrlInput = latestVideoInput),
+                    xiaohongshu = XiaohongshuUiState(),
+                    notes = NotesUiState(),
+                    onAppForeground = {},
+                    onBaseUrlChange = {},
+                    onSaveBaseUrl = {},
+                    onTestConnection = {},
+                    onConfigTextChange = { _, _ -> },
+                    onConfigBooleanChange = { _, _ -> },
+                    onResetConfig = {},
+                    onBilibiliVideoUrlChange = { latestVideoInput = it },
+                    onSubmitBilibiliSummary = {},
+                    onSaveBilibiliNote = {},
+                    onXiaohongshuUrlChange = {},
+                    onSummarizeXiaohongshuUrl = {},
+                    onRefreshXiaohongshuAuthConfig = {},
+                    onSaveSingleXiaohongshuNote = {},
+                    onNotesKeywordChange = {},
+                    onRefreshNotes = {},
+                    onDeleteBilibiliNote = {},
+                    onDeleteXiaohongshuNote = {},
+                    enableLifecycleAutoRefresh = false,
+                    enableCyclicTabs = false,
+                    animateTabSwitch = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithTag("bilibili_url_clear_button", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+
+        assertEquals("", latestVideoInput)
+    }
+
+    @Test
+    fun xhsInput_clearButton_shouldTriggerEmptyCallback() {
+        var latestUrlInput = "https://www.xiaohongshu.com/explore/test-note-id"
+
+        composeRule.setContent {
+            MaterialTheme {
+                MainScreenContent(
+                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
+                    bilibili = BilibiliUiState(),
+                    xiaohongshu = XiaohongshuUiState(urlInput = latestUrlInput),
+                    notes = NotesUiState(),
+                    onAppForeground = {},
+                    onBaseUrlChange = {},
+                    onSaveBaseUrl = {},
+                    onTestConnection = {},
+                    onConfigTextChange = { _, _ -> },
+                    onConfigBooleanChange = { _, _ -> },
+                    onResetConfig = {},
+                    onBilibiliVideoUrlChange = {},
+                    onSubmitBilibiliSummary = {},
+                    onSaveBilibiliNote = {},
+                    onXiaohongshuUrlChange = { latestUrlInput = it },
+                    onSummarizeXiaohongshuUrl = {},
+                    onRefreshXiaohongshuAuthConfig = {},
+                    onSaveSingleXiaohongshuNote = {},
+                    onNotesKeywordChange = {},
+                    onRefreshNotes = {},
+                    onDeleteBilibiliNote = {},
+                    onDeleteXiaohongshuNote = {},
+                    enableLifecycleAutoRefresh = false,
+                    enableCyclicTabs = false,
+                    animateTabSwitch = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("小红书").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithTag("xhs_url_clear_button", useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+
+        assertEquals("", latestUrlInput)
+    }
+
+    @Test
+    fun notesKeyword_shouldMatchSummaryContent() {
+        composeRule.setContent {
+            MaterialTheme {
+                MainScreenContent(
+                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
+                    bilibili = BilibiliUiState(),
+                    xiaohongshu = XiaohongshuUiState(),
+                    notes = NotesUiState(
+                        keywordInput = "命中词",
+                        bilibiliNotes = listOf(
+                            BilibiliSavedNote(
+                                noteId = "b1",
+                                title = "标题未命中",
+                                videoUrl = "https://www.bilibili.com/video/BV1xx411c7mD",
+                                summaryMarkdown = "这里有命中词",
+                                elapsedMs = 1000,
+                                transcriptChars = 66,
+                                savedAt = "2026-02-27 00:00:00",
+                            ),
+                        ),
+                    ),
+                    onAppForeground = {},
+                    onBaseUrlChange = {},
+                    onSaveBaseUrl = {},
+                    onTestConnection = {},
+                    onConfigTextChange = { _, _ -> },
+                    onConfigBooleanChange = { _, _ -> },
+                    onResetConfig = {},
+                    onBilibiliVideoUrlChange = {},
+                    onSubmitBilibiliSummary = {},
+                    onSaveBilibiliNote = {},
+                    onXiaohongshuUrlChange = {},
+                    onSummarizeXiaohongshuUrl = {},
+                    onRefreshXiaohongshuAuthConfig = {},
+                    onSaveSingleXiaohongshuNote = {},
+                    onNotesKeywordChange = {},
+                    onRefreshNotes = {},
+                    onDeleteBilibiliNote = {},
+                    onDeleteXiaohongshuNote = {},
+                    enableLifecycleAutoRefresh = false,
+                    enableCyclicTabs = false,
+                    animateTabSwitch = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("笔记库").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("B站笔记（1/1）").assertIsDisplayed()
     }
 }

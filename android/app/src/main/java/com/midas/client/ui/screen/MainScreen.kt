@@ -158,83 +158,27 @@ private val configFieldSpecs = listOf(
     ),
     ConfigFieldSpec(
         path = "xiaohongshu.mode",
-        section = "小红书同步",
-        title = "同步模式",
-        description = "固定使用真实同步模式。",
+        section = "小红书单篇",
+        title = "单篇模式",
+        description = "固定使用 web_readonly 单篇模式。",
         defaultValue = "web_readonly",
         control = ConfigControlKind.DROPDOWN,
         options = listOf(
-            ConfigOption(value = "web_readonly", label = "真实同步（web_readonly）"),
+            ConfigOption(value = "web_readonly", label = "web_readonly"),
         ),
     ),
     ConfigFieldSpec(
-        path = "xiaohongshu.collection_id",
-        section = "小红书同步",
-        title = "收藏夹 ID",
-        description = "真实同步时使用的小红书收藏夹 ID。",
-        defaultValue = "",
-        control = ConfigControlKind.TEXT,
-    ),
-    ConfigFieldSpec(
-        path = "xiaohongshu.default_limit",
-        section = "小红书同步",
-        title = "默认同步条数",
-        description = "未指定 limit 时使用这个值。",
-        defaultValue = "20",
-        control = ConfigControlKind.TEXT,
-    ),
-    ConfigFieldSpec(
-        path = "xiaohongshu.max_limit",
-        section = "小红书同步",
-        title = "单次最大同步条数",
-        description = "客户端可请求的上限，防止单次任务过大。",
-        defaultValue = "30",
-        control = ConfigControlKind.TEXT,
-    ),
-    ConfigFieldSpec(
-        path = "xiaohongshu.random_delay_min_seconds",
-        section = "小红书同步",
-        title = "请求间最小随机间隔（秒）",
-        description = "同一轮同步中，相邻两次请求之间的最小等待时间。",
-        defaultValue = "3.0",
-        control = ConfigControlKind.TEXT,
-    ),
-    ConfigFieldSpec(
-        path = "xiaohongshu.random_delay_max_seconds",
-        section = "小红书同步",
-        title = "请求间最大随机间隔（秒）",
-        description = "同一轮同步中，相邻两次请求之间的最大等待时间。",
-        defaultValue = "10.0",
-        control = ConfigControlKind.TEXT,
-    ),
-    ConfigFieldSpec(
-        path = "xiaohongshu.min_live_sync_interval_seconds",
-        section = "小红书同步",
-        title = "两次真实同步最小间隔（秒）",
-        description = "两次 web_readonly 真实同步任务之间的最短间隔。",
-        defaultValue = "1800",
-        control = ConfigControlKind.TEXT,
-    ),
-    ConfigFieldSpec(
         path = "xiaohongshu.request_timeout_seconds",
-        section = "小红书同步",
-        title = "小红书请求超时（秒）",
-        description = "单次小红书上游请求的超时时间。",
+        section = "小红书单篇",
+        title = "单篇请求超时（秒）",
+        description = "单篇总结请求小红书上游的超时时间。",
         defaultValue = "30",
-        control = ConfigControlKind.TEXT,
-    ),
-    ConfigFieldSpec(
-        path = "xiaohongshu.circuit_breaker_failures",
-        section = "小红书同步",
-        title = "连续失败熔断阈值",
-        description = "连续失败达到该次数时，本次同步任务会中断。",
-        defaultValue = "3",
         control = ConfigControlKind.TEXT,
     ),
     ConfigFieldSpec(
         path = "xiaohongshu.web_readonly.detail_fetch_mode",
-        section = "小红书同步",
-        title = "详情抓取策略",
+        section = "小红书单篇",
+        title = "单篇详情抓取策略",
         description = "auto=按需抓，always=总是抓，never=不抓详情。",
         defaultValue = "auto",
         control = ConfigControlKind.DROPDOWN,
@@ -243,6 +187,22 @@ private val configFieldSpecs = listOf(
             ConfigOption(value = "always", label = "总是抓取（always）"),
             ConfigOption(value = "never", label = "不抓详情（never）"),
         ),
+    ),
+    ConfigFieldSpec(
+        path = "xiaohongshu.web_readonly.max_images_per_note",
+        section = "小红书单篇",
+        title = "单篇最多读取图片数",
+        description = "总结单篇时最多读取的图片数量。",
+        defaultValue = "32",
+        control = ConfigControlKind.TEXT,
+    ),
+    ConfigFieldSpec(
+        path = "xiaohongshu.min_live_sync_interval_seconds",
+        section = "小红书同步",
+        title = "两次同步笔记最大间隔（秒）",
+        description = "控制两次同步任务的间隔阈值，默认 120 秒。",
+        defaultValue = "120",
+        control = ConfigControlKind.TEXT,
     ),
     ConfigFieldSpec(
         path = "runtime.log_level",
@@ -298,9 +258,7 @@ fun MainScreen(viewModel: MainViewModel) {
         onNotesKeywordChange = viewModel::onNotesKeywordInputChange,
         onRefreshNotes = viewModel::loadSavedNotes,
         onDeleteBilibiliNote = viewModel::deleteBilibiliSavedNote,
-        onClearBilibiliNotes = viewModel::clearBilibiliSavedNotes,
         onDeleteXiaohongshuNote = viewModel::deleteXiaohongshuSavedNote,
-        onClearXiaohongshuNotes = viewModel::clearXiaohongshuSavedNotes,
     )
 }
 
@@ -328,9 +286,7 @@ fun MainScreenContent(
     onNotesKeywordChange: (String) -> Unit,
     onRefreshNotes: () -> Unit,
     onDeleteBilibiliNote: (String) -> Unit,
-    onClearBilibiliNotes: () -> Unit,
     onDeleteXiaohongshuNote: (String) -> Unit,
-    onClearXiaohongshuNotes: () -> Unit,
     enableLifecycleAutoRefresh: Boolean = true,
     enableCyclicTabs: Boolean = true,
     animateTabSwitch: Boolean = true,
@@ -452,9 +408,7 @@ fun MainScreenContent(
                         onKeywordChange = onNotesKeywordChange,
                         onRefresh = onRefreshNotes,
                         onDeleteBilibili = onDeleteBilibiliNote,
-                        onClearBilibili = onClearBilibiliNotes,
                         onDeleteXiaohongshu = onDeleteXiaohongshuNote,
-                        onClearXiaohongshu = onClearXiaohongshuNotes,
                         modifier = Modifier
                             .fillMaxSize()
                             .padding(16.dp),
@@ -832,6 +786,16 @@ private fun BilibiliPanel(
             supportingText = {
                 Text("示例：BV1xx411c7mD 或 https://www.bilibili.com/video/BV1xx411c7mD")
             },
+            trailingIcon = {
+                if (state.videoUrlInput.isNotBlank()) {
+                    IconButton(
+                        onClick = { onVideoUrlChange("") },
+                        modifier = Modifier.testTag("bilibili_url_clear_button"),
+                    ) {
+                        Text("X")
+                    }
+                }
+            },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
@@ -898,6 +862,16 @@ private fun XiaohongshuPanel(
             value = state.urlInput,
             onValueChange = onUrlChange,
             label = { Text("单篇笔记 URL") },
+            trailingIcon = {
+                if (state.urlInput.isNotBlank()) {
+                    IconButton(
+                        onClick = { onUrlChange("") },
+                        modifier = Modifier.testTag("xhs_url_clear_button"),
+                    ) {
+                        Text("X")
+                    }
+                }
+            },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
@@ -919,16 +893,16 @@ private fun XiaohongshuPanel(
                     .weight(1f)
                     .testTag("xhs_refresh_auth_button"),
             ) {
-                SingleLineActionText(if (state.isRefreshingCaptureConfig) "更新中..." else "更新Auth(兜底)")
+                SingleLineActionText(if (state.isRefreshingCaptureConfig) "更新中..." else "更新Auth")
             }
         }
         Text(
-            text = "优先读取默认 HAR，失败后回退默认 cURL，自动更新小红书请求头。",
+            text = "读取默认 HAR 或 cURL，自动更新小红书请求头。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
         Text(
-            text = "若单篇总结失败，请先点击“更新Auth(兜底)”刷新登录态后重试。",
+            text = "若单篇总结失败，请先点击“更新Auth”刷新登录态后重试。",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
@@ -1003,19 +977,21 @@ private fun NotesPanel(
     onKeywordChange: (String) -> Unit,
     onRefresh: () -> Unit,
     onDeleteBilibili: (String) -> Unit,
-    onClearBilibili: () -> Unit,
     onDeleteXiaohongshu: (String) -> Unit,
-    onClearXiaohongshu: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var selectedDetail by remember { mutableStateOf<NoteDetailViewState?>(null) }
     val context = LocalContext.current
     val keyword = state.keywordInput.trim()
     val filteredBilibili = state.bilibiliNotes.filter { item ->
-        keyword.isBlank() || item.title.contains(keyword, ignoreCase = true)
+        keyword.isBlank() ||
+            item.title.contains(keyword, ignoreCase = true) ||
+            item.summaryMarkdown.contains(keyword, ignoreCase = true)
     }
     val filteredXhs = state.xiaohongshuNotes.filter { item ->
-        keyword.isBlank() || item.title.contains(keyword, ignoreCase = true)
+        keyword.isBlank() ||
+            item.title.contains(keyword, ignoreCase = true) ||
+            item.summaryMarkdown.contains(keyword, ignoreCase = true)
     }
 
     Column(
@@ -1041,19 +1017,13 @@ private fun NotesPanel(
         OutlinedTextField(
             value = state.keywordInput,
             onValueChange = onKeywordChange,
-            label = { Text("关键词检索（标题）") },
+            label = { Text("关键词检索（标题+内容）") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             Button(onClick = onRefresh, enabled = !state.isLoading) {
                 SingleLineActionText(if (state.isLoading) "刷新中..." else "刷新笔记库")
-            }
-            Button(onClick = onClearBilibili, enabled = state.bilibiliNotes.isNotEmpty()) {
-                SingleLineActionText("清空B站")
-            }
-            Button(onClick = onClearXiaohongshu, enabled = state.xiaohongshuNotes.isNotEmpty()) {
-                SingleLineActionText("清空小红书")
             }
         }
 

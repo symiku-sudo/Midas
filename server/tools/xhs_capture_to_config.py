@@ -224,7 +224,7 @@ def apply_capture_to_config(
 ) -> dict[str, Any]:
     xhs_cfg = config.setdefault("xiaohongshu", {})
     xhs_cfg["mode"] = "web_readonly"
-    xhs_cfg.setdefault("min_live_sync_interval_seconds", 1800)
+    xhs_cfg.setdefault("min_live_sync_interval_seconds", 120)
 
     web_cfg = xhs_cfg.setdefault("web_readonly", {})
     web_cfg["request_url"] = capture.request_url

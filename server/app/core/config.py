@@ -90,7 +90,7 @@ class XiaohongshuWebReadonlyConfig(BaseModel):
         ]
     )
     source_url_field: str = "url"
-    max_images_per_note: int = 6
+    max_images_per_note: int = 32
     host_allowlist: list[str] = Field(
         default_factory=lambda: ["www.xiaohongshu.com", "edith.xiaohongshu.com"]
     )
@@ -105,7 +105,7 @@ class XiaohongshuConfig(BaseModel):
     random_delay_min_seconds: float = 3.0
     random_delay_max_seconds: float = 10.0
     circuit_breaker_failures: int = 3
-    min_live_sync_interval_seconds: int = 1800
+    min_live_sync_interval_seconds: int = 120
     db_path: str = ".tmp/midas.db"
     request_timeout_seconds: int = 30
     api_base: str = ""
