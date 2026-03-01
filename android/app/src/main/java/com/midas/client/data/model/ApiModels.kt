@@ -108,6 +108,7 @@ data class NotesMergeCandidateItem(
     val source: String,
     @Json(name = "note_ids") val noteIds: List<String>,
     val score: Double,
+    @Json(name = "relation_level") val relationLevel: String = "WEAK",
     @Json(name = "reason_codes") val reasonCodes: List<String>,
     val notes: List<NotesMergeCandidateNote>,
 )

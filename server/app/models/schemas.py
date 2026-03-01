@@ -136,6 +136,7 @@ class NotesMergeCandidateItem(BaseModel):
     source: str
     note_ids: list[str]
     score: float
+    relation_level: str
     reason_codes: list[str]
     notes: list[NotesMergeCandidateNote]
 

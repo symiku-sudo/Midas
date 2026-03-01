@@ -574,7 +574,7 @@ def test_legacy_merge_history_without_titles_is_rehydrated_from_markdown_links()
     }
 
 
-def test_notes_merge_suggest_default_threshold_hits_title_and_summary_similarity() -> None:
+def test_notes_merge_suggest_default_threshold_hits_summary_and_keyword_similarity() -> None:
     _reset_xiaohongshu_state()
     first_save = client.post(
         "/api/notes/bilibili/save",
@@ -615,13 +615,15 @@ def test_notes_merge_suggest_default_threshold_hits_title_and_summary_similarity
         note_ids = set(item["note_ids"])
         if {first_note_id, second_note_id} == note_ids:
             pair_found = True
-            assert "TITLE_SIMILAR" in item["reason_codes"]
+            assert item["relation_level"] in {"STRONG", "WEAK"}
+            assert "KEYWORD_OVERLAP" in item["reason_codes"]
             assert "SUMMARY_SIMILAR" in item["reason_codes"]
+            assert "TITLE_SIMILAR" not in item["reason_codes"]
             break
     assert pair_found is True
 
 
-def test_notes_merge_suggest_default_threshold_rejects_no_title_anchor_pair() -> None:
+def test_notes_merge_suggest_default_threshold_allows_pair_without_title_similarity() -> None:
     _reset_xiaohongshu_state()
     first_save = client.post(
         "/api/notes/bilibili/save",
@@ -660,18 +662,28 @@ def test_notes_merge_suggest_default_threshold_rejects_no_title_anchor_pair() ->
     assert suggest_resp.status_code == 200
     body = suggest_resp.json()
     assert body["ok"] is True
-    assert body["data"]["total"] == 0
+
+    pair_found = False
+    for item in body["data"]["items"]:
+        note_ids = set(item["note_ids"])
+        if {first_save.json()["data"]["note_id"], second_save.json()["data"]["note_id"]} == note_ids:
+            pair_found = True
+            assert item["relation_level"] in {"STRONG", "WEAK"}
+            assert "SUMMARY_SIMILAR" in item["reason_codes"]
+            assert "TITLE_SIMILAR" not in item["reason_codes"]
+            break
+    assert pair_found is True
 
 
-def test_notes_merge_suggest_allows_soft_title_anchor_with_high_summary_similarity() -> None:
+def test_notes_merge_suggest_marks_medium_related_pair_as_weak() -> None:
     _reset_xiaohongshu_state()
     first_save = client.post(
         "/api/notes/bilibili/save",
         json={
             "video_url": "https://www.bilibili.com/video/BV1xx411c7mK",
             "summary_markdown": (
-                "# Skill 设计\n\n"
-                "企业在引入 Skill 时，需要先定义边界、鉴权和审计闭环。"
+                "# Agent 治理\n\n"
+                "企业落地 Agent 要先做权限边界、审计日志和成本看板。"
             ),
             "elapsed_ms": 10,
             "transcript_chars": 20,
@@ -686,8 +698,8 @@ def test_notes_merge_suggest_allows_soft_title_anchor_with_high_summary_similari
         json={
             "video_url": "https://www.bilibili.com/video/BV1xx411c7mL",
             "summary_markdown": (
-                "# Skill 落地\n\n"
-                "企业在引入 Skill 时，需要先定义边界、鉴权和审计闭环，并明确交付标准。"
+                "# Agent 实施\n\n"
+                "企业部署智能体之前，应先完成权限设计、审计闭环，并追踪投入产出。"
             ),
             "elapsed_ms": 11,
             "transcript_chars": 22,
@@ -711,7 +723,10 @@ def test_notes_merge_suggest_allows_soft_title_anchor_with_high_summary_similari
         if {first_note_id, second_note_id} == note_ids:
             pair_found = True
             assert item["score"] >= 0.35
+            assert item["relation_level"] == "WEAK"
+            assert "RELATION_WEAK" in item["reason_codes"]
             assert "SUMMARY_SIMILAR" in item["reason_codes"]
+            assert "TITLE_SIMILAR" not in item["reason_codes"]
             break
     assert pair_found is True
 

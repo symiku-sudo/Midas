@@ -294,7 +294,8 @@ Success `data`:
       "source": "bilibili",
       "note_ids": ["n1", "n2"],
       "score": 0.91,
-      "reason_codes": ["KEYWORD_OVERLAP", "TITLE_SIMILAR"],
+      "relation_level": "STRONG",
+      "reason_codes": ["KEYWORD_OVERLAP", "SUMMARY_SIMILAR", "RELATION_STRONG"],
       "notes": [
         {"note_id": "n1", "title": "标题A", "saved_at": "2026-03-01 10:00:00"},
         {"note_id": "n2", "title": "标题B", "saved_at": "2026-03-01 11:00:00"}
@@ -303,6 +304,11 @@ Success `data`:
   ]
 }
 ```
+
+说明：
+- 候选评分仅基于 `summary_similarity + keyword_overlap`。
+- `relation_level`：`STRONG`（强相关）/ `WEAK`（中相关）。
+- 仅返回强相关与中相关候选（弱相关会被过滤）。
 
 ## `POST /api/notes/merge/preview`
 

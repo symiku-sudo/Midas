@@ -45,11 +45,14 @@ _MERGE_SOURCE_SECTION_PATTERN = re.compile(
 _MERGE_MARKDOWN_LINK_PATTERN = re.compile(
     r"\[([^\]\n]+)\]\(\s*(?:<)?(https?://[^)\s>]+)(?:>)?\s*\)"
 )
-_TITLE_TOKEN_MIN_ANCHOR = 0.06
-_TITLE_SURFACE_MIN_ANCHOR = 0.55
-_TITLE_TOKEN_SOFT_ANCHOR = 0.03
-_SUMMARY_OVERRIDE_MIN = 0.82
-_KEYWORD_OVERRIDE_MIN = 0.10
+_SUMMARY_WEIGHT = 0.65
+_KEYWORD_WEIGHT = 0.35
+_MERGE_RELATION_STRONG = "STRONG"
+_MERGE_RELATION_WEAK = "WEAK"
+_STRONG_SUMMARY_MIN = 0.70
+_STRONG_KEYWORD_MIN = 0.11
+_MEDIUM_SUMMARY_MIN = 0.62
+_MEDIUM_KEYWORD_MIN = 0.08
 _ASCII_TOKEN_PATTERN = re.compile(r"[0-9a-z]+")
 _CJK_BLOCK_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
 _ASCII_STOPWORDS = {
@@ -231,12 +234,16 @@ class NoteLibraryService:
                 continue
             for first, second in combinations(notes, 2):
                 score_data = self._score_note_pair(first, second)
+                relation_level = str(score_data.get("relation_level", "")).strip()
+                if relation_level not in {_MERGE_RELATION_STRONG, _MERGE_RELATION_WEAK}:
+                    continue
                 if score_data["score"] < min_score:
                     continue
                 candidate = NotesMergeCandidateItem(
                     source=one_source,
                     note_ids=[first["note_id"], second["note_id"]],
                     score=round(float(score_data["score"]), 4),
+                    relation_level=relation_level,
                     reason_codes=score_data["reason_codes"],
                     notes=[
                         NotesMergeCandidateNote(
@@ -693,61 +700,51 @@ class NoteLibraryService:
         first: dict[str, Any],
         second: dict[str, Any],
     ) -> dict[str, Any]:
-        first_title = str(first.get("title", ""))
-        second_title = str(second.get("title", ""))
         first_summary = str(first.get("summary_markdown", ""))
         second_summary = str(second.get("summary_markdown", ""))
 
-        keyword_overlap = self._token_jaccard(
-            f"{first_title}\n{first_summary}",
-            f"{second_title}\n{second_summary}",
-        )
-        title_token_similarity = self._token_jaccard(first_title, second_title)
-        title_surface_similarity = SequenceMatcher(
-            None,
-            first_title.lower(),
-            second_title.lower(),
-        ).ratio()
-        has_title_anchor = (
-            title_token_similarity >= _TITLE_TOKEN_MIN_ANCHOR
-            or title_surface_similarity >= _TITLE_SURFACE_MIN_ANCHOR
-        )
+        keyword_overlap = self._token_jaccard(first_summary, second_summary)
         summary_similarity, _ = self._summary_similarity_with_mode(
             first_summary=first_summary,
             second_summary=second_summary,
         )
-        if has_title_anchor:
-            score = (
-                0.35 * title_token_similarity
-                + 0.50 * summary_similarity
-                + 0.15 * keyword_overlap
-            )
-        else:
-            allow_summary_override = (
-                title_token_similarity >= _TITLE_TOKEN_SOFT_ANCHOR
-                and summary_similarity >= _SUMMARY_OVERRIDE_MIN
-                and keyword_overlap >= _KEYWORD_OVERRIDE_MIN
-            )
-            if allow_summary_override:
-                # Keep non-anchor pairs lower than anchor-backed pairs, but avoid hard-zero false negatives.
-                score = (
-                    0.35 * title_token_similarity
-                    + 0.40 * summary_similarity
-                    + 0.25 * keyword_overlap
-                )
-            else:
-                score = 0.0
+
+        score = (
+            _SUMMARY_WEIGHT * summary_similarity
+            + _KEYWORD_WEIGHT * keyword_overlap
+        )
+
+        is_strong_related = (
+            summary_similarity >= _STRONG_SUMMARY_MIN
+            and keyword_overlap >= _STRONG_KEYWORD_MIN
+        )
+        is_medium_related = (
+            summary_similarity >= _MEDIUM_SUMMARY_MIN
+            and keyword_overlap >= _MEDIUM_KEYWORD_MIN
+        )
+
+        relation_level = ""
+        if is_strong_related:
+            relation_level = _MERGE_RELATION_STRONG
+        elif is_medium_related:
+            relation_level = _MERGE_RELATION_WEAK
 
         reason_codes: list[str] = []
-        if keyword_overlap >= 0.12:
+        if keyword_overlap >= _MEDIUM_KEYWORD_MIN:
             reason_codes.append("KEYWORD_OVERLAP")
-        if title_token_similarity >= 0.08 or title_surface_similarity >= _TITLE_SURFACE_MIN_ANCHOR:
-            reason_codes.append("TITLE_SIMILAR")
-        if summary_similarity >= 0.62:
+        if summary_similarity >= _MEDIUM_SUMMARY_MIN:
             reason_codes.append("SUMMARY_SIMILAR")
-        if not reason_codes:
+        if relation_level == _MERGE_RELATION_STRONG:
+            reason_codes.append("RELATION_STRONG")
+        elif relation_level == _MERGE_RELATION_WEAK:
+            reason_codes.append("RELATION_WEAK")
+        else:
             reason_codes.append("LOW_CONFIDENCE")
-        return {"score": score, "reason_codes": reason_codes}
+        return {
+            "score": score,
+            "reason_codes": reason_codes,
+            "relation_level": relation_level,
+        }
 
     async def _build_merged_content(
         self,

@@ -1096,7 +1096,11 @@ private fun NotesPanel(
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         Text(
-                            text = "来源：${if (item.source == "bilibili") "B站" else "小红书"}  相似度：${"%.2f".format(item.score)}",
+                            text = (
+                                "来源：${if (item.source == "bilibili") "B站" else "小红书"}  "
+                                    + "相似度：${"%.2f".format(item.score)}  "
+                                    + "相关级别：${if (item.relationLevel == "STRONG") "强相关" else "弱相关"}"
+                                ),
                             style = MaterialTheme.typography.bodySmall,
                         )
                         item.notes.forEach { note ->
@@ -1171,7 +1175,11 @@ private fun MergePreviewPanel(
             ) {
                 Text("合并预览", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    text = "来源：${if (candidate.source == "bilibili") "B站" else "小红书"}  相似度：${"%.2f".format(candidate.score)}",
+                    text = (
+                        "来源：${if (candidate.source == "bilibili") "B站" else "小红书"}  "
+                            + "相似度：${"%.2f".format(candidate.score)}  "
+                            + "相关级别：${if (candidate.relationLevel == "STRONG") "强相关" else "弱相关"}"
+                        ),
                     style = MaterialTheme.typography.bodySmall,
                 )
                 candidate.notes.forEach { note ->
