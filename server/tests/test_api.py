@@ -574,6 +574,126 @@ def test_legacy_merge_history_without_titles_is_rehydrated_from_markdown_links()
     }
 
 
+def test_existing_merge_history_with_duplicate_source_refs_is_collapsed_on_refresh() -> None:
+    _reset_xiaohongshu_state()
+    first_url = "https://www.bilibili.com/video/BV1xx411c7mD"
+    second_url = "https://www.bilibili.com/video/BV1xx411c7mE"
+
+    first_save = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": first_url,
+            "summary_markdown": "# 测试一",
+            "elapsed_ms": 10,
+            "transcript_chars": 20,
+            "title": "历史标题一",
+        },
+    )
+    assert first_save.status_code == 200
+    first_note_id = first_save.json()["data"]["note_id"]
+
+    second_save = client.post(
+        "/api/notes/bilibili/save",
+        json={
+            "video_url": second_url,
+            "summary_markdown": "# 测试二",
+            "elapsed_ms": 11,
+            "transcript_chars": 22,
+            "title": "历史标题二",
+        },
+    )
+    assert second_save.status_code == 200
+    second_note_id = second_save.json()["data"]["note_id"]
+
+    commit_resp = client.post(
+        "/api/notes/merge/commit",
+        json={
+            "source": "bilibili",
+            "note_ids": [first_note_id, second_note_id],
+        },
+    )
+    assert commit_resp.status_code == 200
+    merge_data = commit_resp.json()["data"]
+    merge_id = merge_data["merge_id"]
+    merged_note_id = merge_data["merged_note_id"]
+
+    repo = NoteLibraryRepository(get_settings().xiaohongshu.db_path)
+    legacy_markdown = "# 旧版合并笔记\n\n- 占位内容"
+    assert (
+        repo.update_bilibili_note_summary(
+            note_id=merged_note_id,
+            summary_markdown=legacy_markdown,
+        )
+        == 1
+    )
+    assert (
+        repo.update_merge_history_field_decisions(
+            merge_id=merge_id,
+            field_decisions={
+                "merged_title": "旧版合并笔记",
+                "merged_summary_markdown": legacy_markdown,
+                "source_refs": [first_url, second_url],
+                "source_ref_by_note_id": {
+                    first_note_id: first_url,
+                    "alias_note_a": first_url,
+                    second_note_id: second_url,
+                    "alias_note_b": second_url,
+                },
+                "lineage_source_ids": [first_note_id, second_note_id],
+                "lineage_sources": [
+                    {
+                        "note_id": first_note_id,
+                        "title": "历史标题一",
+                        "source_ref": first_url,
+                    },
+                    {
+                        "note_id": "alias_note_a",
+                        "title": "历史标题一（重复）",
+                        "source_ref": first_url,
+                    },
+                    {
+                        "note_id": second_note_id,
+                        "title": "历史标题二",
+                        "source_ref": second_url,
+                    },
+                    {
+                        "note_id": "alias_note_b",
+                        "title": "历史标题二（重复）",
+                        "source_ref": second_url,
+                    },
+                ],
+                "source_link_snapshot": {
+                    first_note_id: first_note_id,
+                    second_note_id: second_note_id,
+                },
+                "conflict_markers": [],
+            },
+        )
+        == 1
+    )
+
+    routes_module._get_note_library_service.cache_clear()
+
+    list_resp = client.get("/api/notes/bilibili")
+    assert list_resp.status_code == 200
+    merged_items = [
+        item
+        for item in list_resp.json()["data"]["items"]
+        if item["note_id"] == merged_note_id
+    ]
+    assert len(merged_items) == 1
+    refreshed_summary = merged_items[0]["summary_markdown"]
+    assert refreshed_summary.count(f"(<{first_url}>)") == 1
+    assert refreshed_summary.count(f"(<{second_url}>)") == 1
+
+    refreshed_history = repo.get_merge_history(merge_id)
+    assert refreshed_history is not None
+    field_decisions = json.loads(str(refreshed_history["field_decisions"]))
+    lineage_sources = field_decisions["lineage_sources"]
+    assert len(lineage_sources) == 2
+    assert {item["source_ref"] for item in lineage_sources} == {first_url, second_url}
+
+
 def test_notes_merge_suggest_default_threshold_hits_summary_and_keyword_similarity() -> None:
     _reset_xiaohongshu_state()
     first_save = client.post(

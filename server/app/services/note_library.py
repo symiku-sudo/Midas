@@ -45,6 +45,8 @@ _MERGE_SOURCE_SECTION_PATTERN = re.compile(
 _MERGE_MARKDOWN_LINK_PATTERN = re.compile(
     r"\[([^\]\n]+)\]\(\s*(?:<)?(https?://[^)\s>]+)(?:>)?\s*\)"
 )
+_XHS_SOURCE_REF_ID_PATTERN = re.compile(r"/(?:discovery/item|explore)/([0-9A-Za-z]+)")
+_BILIBILI_SOURCE_REF_BV_PATTERN = re.compile(r"/video/(BV[0-9A-Za-z]+)", re.IGNORECASE)
 _SUMMARY_WEIGHT = 0.65
 _KEYWORD_WEIGHT = 0.35
 _MERGE_RELATION_STRONG = "STRONG"
@@ -1233,6 +1235,70 @@ class NoteLibraryService:
                 current["source_ref"] = source_ref
         return deduped
 
+    def _lineage_title_rank(self, *, title: str, note_id: str) -> tuple[int, int]:
+        normalized = title.strip()
+        if not normalized:
+            return (0, 0)
+        if note_id and normalized == note_id:
+            return (1, len(normalized))
+        return (2, len(normalized))
+
+    def _source_ref_dedupe_key(self, source_ref: str) -> str:
+        normalized = self._normalize_source_ref(source_ref)
+        if not normalized:
+            return ""
+        xhs_match = _XHS_SOURCE_REF_ID_PATTERN.search(normalized)
+        if xhs_match:
+            return f"xhs:{xhs_match.group(1).lower()}"
+        bilibili_match = _BILIBILI_SOURCE_REF_BV_PATTERN.search(normalized)
+        if bilibili_match:
+            return f"bilibili:{bilibili_match.group(1).upper()}"
+        return normalized
+
+    def _collapse_lineage_sources(
+        self,
+        sources: list[dict[str, str]],
+    ) -> list[dict[str, str]]:
+        deduped = self._dedupe_lineage_sources(sources)
+        if not deduped:
+            return []
+
+        collapsed: list[dict[str, str]] = []
+        index_by_key: dict[str, int] = {}
+        for item in deduped:
+            note_id = str(item.get("note_id", "")).strip()
+            if not note_id:
+                continue
+            title = str(item.get("title", "")).strip() or note_id
+            source_ref = self._normalize_source_ref(str(item.get("source_ref", "")))
+            source_ref_key = self._source_ref_dedupe_key(source_ref)
+            key = f"ref:{source_ref_key}" if source_ref_key else f"id:{note_id}"
+
+            existing_index = index_by_key.get(key)
+            if existing_index is None:
+                index_by_key[key] = len(collapsed)
+                collapsed.append(
+                    {
+                        "note_id": note_id,
+                        "title": title,
+                        "source_ref": source_ref,
+                    }
+                )
+                continue
+
+            current = collapsed[existing_index]
+            current_rank = self._lineage_title_rank(
+                title=str(current.get("title", "")),
+                note_id=str(current.get("note_id", "")),
+            )
+            candidate_rank = self._lineage_title_rank(title=title, note_id=note_id)
+            if candidate_rank > current_rank:
+                current["title"] = title
+                current["note_id"] = note_id
+            if not str(current.get("source_ref", "")).strip() and source_ref:
+                current["source_ref"] = source_ref
+        return collapsed
+
     def _normalize_source_ref(self, source_ref: str) -> str:
         normalized = source_ref.replace("\n", "").strip()
         if normalized.startswith("<") and normalized.endswith(">"):
@@ -1317,7 +1383,7 @@ class NoteLibraryService:
                     "source_ref": source_ref,
                 }
             )
-        return self._dedupe_lineage_sources(hydrated)
+        return self._collapse_lineage_sources(hydrated)
 
     def _lineage_source_refs_by_note_id(
         self,
@@ -1429,7 +1495,7 @@ class NoteLibraryService:
                     "source_ref": source_ref,
                 }
             )
-        return self._dedupe_lineage_sources(output)
+        return self._collapse_lineage_sources(output)
 
     def _read_lineage_sources_from_history(
         self,
@@ -1482,7 +1548,7 @@ class NoteLibraryService:
         merge_id = str(history.get("merge_id", "")).strip()
         if not merge_id:
             return
-        normalized_sources = self._dedupe_lineage_sources(lineage_sources)
+        normalized_sources = self._collapse_lineage_sources(lineage_sources)
         if not normalized_sources:
             return
 
@@ -1527,7 +1593,7 @@ class NoteLibraryService:
         lineage_sources: list[dict[str, str]],
     ) -> str:
         lines = [f"## {_MERGE_SOURCE_SECTION_TITLE}"]
-        sources = self._dedupe_lineage_sources(lineage_sources)
+        sources = self._collapse_lineage_sources(lineage_sources)
         if not sources:
             lines.append("- 无可用来源信息。")
             return "\n".join(lines)
