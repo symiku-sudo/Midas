@@ -7,7 +7,10 @@ SERVER_DIR="$ROOT_DIR/server"
 
 BUILD_TYPE="debug"
 OUTPUT_ARGS=()
+OUTPUT_DIR=""
 SKIP_BUILD="0"
+SHARE_TAILNET="0"
+SHARE_PORT="8765"
 
 usage() {
   cat <<'EOF'
@@ -20,12 +23,15 @@ Options:
   --output <dir>          Output directory for exported APK
   --name <filename.apk>   Output APK file name
   --skip-build            Skip Gradle assemble and export existing APK only
+  --share-tailnet         Share latest APK over Tailscale URL (best effort)
+  --share-port <port>     Share HTTP port for APK file (default: 8765)
   -h, --help              Show help
 
 Flow:
   1) strict selfcheck (fail => stop)
   2) restart mobile server
   3) export APK
+  4) (optional) share APK via tailnet URL
 EOF
 }
 
@@ -45,6 +51,7 @@ while [[ $# -gt 0 ]]; do
         exit 1
       fi
       OUTPUT_ARGS+=("--output" "$2")
+      OUTPUT_DIR="$2"
       shift 2
       ;;
     --name)
@@ -58,6 +65,18 @@ while [[ $# -gt 0 ]]; do
     --skip-build)
       SKIP_BUILD="1"
       shift
+      ;;
+    --share-tailnet)
+      SHARE_TAILNET="1"
+      shift
+      ;;
+    --share-port)
+      if [[ $# -lt 2 ]]; then
+        echo "[release] missing value for --share-port"
+        exit 1
+      fi
+      SHARE_PORT="$2"
+      shift 2
       ;;
     -h|--help)
       usage
@@ -102,5 +121,24 @@ cmd+=("${OUTPUT_ARGS[@]}")
   cd "$ROOT_DIR"
   "${cmd[@]}"
 )
+
+if [[ "$SHARE_TAILNET" == "1" ]]; then
+  SHARE_OUTPUT_DIR="$OUTPUT_DIR"
+  if [[ -z "$SHARE_OUTPUT_DIR" ]]; then
+    SHARE_OUTPUT_DIR="$ROOT_DIR/android/.tmp/apk"
+  elif [[ "$SHARE_OUTPUT_DIR" != /* ]]; then
+    SHARE_OUTPUT_DIR="$ROOT_DIR/$SHARE_OUTPUT_DIR"
+  fi
+  SHARE_APK_PATH="$SHARE_OUTPUT_DIR/midas-${BUILD_TYPE}-latest.apk"
+
+  echo "[release] 4/4 share APK over tailnet..."
+  if [[ ! -f "$SHARE_APK_PATH" ]]; then
+    echo "[release] warning: share target APK not found: $SHARE_APK_PATH"
+  elif ! "$ROOT_DIR/android/tools/share_apk_tailnet.sh" \
+    --apk "$SHARE_APK_PATH" \
+    --port "$SHARE_PORT"; then
+    echo "[release] warning: tailnet APK share failed (release artifact still exported)."
+  fi
+fi
 
 echo "[release] done"

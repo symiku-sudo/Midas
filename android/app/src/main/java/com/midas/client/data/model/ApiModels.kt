@@ -96,6 +96,7 @@ data class NotesMergeSuggestRequest(
     val source: String = "",
     val limit: Int = 20,
     @Json(name = "min_score") val minScore: Double = 0.35,
+    @Json(name = "include_weak") val includeWeak: Boolean = false,
 )
 
 data class NotesMergeCandidateNote(

@@ -276,13 +276,15 @@ Request:
 {
   "source": "bilibili",
   "limit": 20,
-  "min_score": 0.35
+  "min_score": 0.35,
+  "include_weak": false
 }
 ```
 
 说明：
 - `source` 可选：`bilibili` / `xiaohongshu`；为空时同时返回两类候选。
 - `min_score` 范围 `0~1`。
+- `include_weak` 默认 `false`，仅返回强相关候选；设为 `true` 时会额外返回中相关（`WEAK`）候选。
 
 Success `data`:
 
@@ -308,7 +310,7 @@ Success `data`:
 说明：
 - 候选评分仅基于 `summary_similarity + keyword_overlap`。
 - `relation_level`：`STRONG`（强相关）/ `WEAK`（中相关）。
-- 仅返回强相关与中相关候选（弱相关会被过滤）。
+- 默认仅返回 `STRONG` 候选；传 `include_weak=true` 时会返回 `WEAK`。
 
 ## `POST /api/notes/merge/preview`
 

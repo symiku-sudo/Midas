@@ -735,7 +735,7 @@ def test_notes_merge_suggest_default_threshold_hits_summary_and_keyword_similari
         note_ids = set(item["note_ids"])
         if {first_note_id, second_note_id} == note_ids:
             pair_found = True
-            assert item["relation_level"] in {"STRONG", "WEAK"}
+            assert item["relation_level"] == "STRONG"
             assert "KEYWORD_OVERLAP" in item["reason_codes"]
             assert "SUMMARY_SIMILAR" in item["reason_codes"]
             assert "TITLE_SIMILAR" not in item["reason_codes"]
@@ -788,7 +788,7 @@ def test_notes_merge_suggest_default_threshold_allows_pair_without_title_similar
         note_ids = set(item["note_ids"])
         if {first_save.json()["data"]["note_id"], second_save.json()["data"]["note_id"]} == note_ids:
             pair_found = True
-            assert item["relation_level"] in {"STRONG", "WEAK"}
+            assert item["relation_level"] == "STRONG"
             assert "SUMMARY_SIMILAR" in item["reason_codes"]
             assert "TITLE_SIMILAR" not in item["reason_codes"]
             break
@@ -829,9 +829,21 @@ def test_notes_merge_suggest_marks_medium_related_pair_as_weak() -> None:
     assert second_save.status_code == 200
     second_note_id = second_save.json()["data"]["note_id"]
 
-    suggest_resp = client.post(
+    default_suggest_resp = client.post(
         "/api/notes/merge/suggest",
         json={"source": "bilibili", "limit": 20},
+    )
+    assert default_suggest_resp.status_code == 200
+    default_items = default_suggest_resp.json()["data"]["items"]
+    assert all(item["relation_level"] == "STRONG" for item in default_items)
+    assert all(
+        set(item["note_ids"]) != {first_note_id, second_note_id}
+        for item in default_items
+    )
+
+    suggest_resp = client.post(
+        "/api/notes/merge/suggest",
+        json={"source": "bilibili", "limit": 20, "include_weak": True},
     )
     assert suggest_resp.status_code == 200
     body = suggest_resp.json()

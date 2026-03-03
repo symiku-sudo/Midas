@@ -267,6 +267,7 @@ async def suggest_notes_merge(
         source=payload.source,
         limit=payload.limit,
         min_score=payload.min_score,
+        include_weak=payload.include_weak,
     )
     data = NotesMergeSuggestData(total=result.total, items=result.items)
     return success_response(data=data.model_dump(), request_id=request.state.request_id)

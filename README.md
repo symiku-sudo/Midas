@@ -105,6 +105,8 @@ tools/release.sh
 - `--output <dir>`：指定导出目录
 - `--name <filename.apk>`：指定导出文件名
 - `--skip-build`：跳过 Gradle 构建，仅导出现有 APK
+- `--share-tailnet`：额外启动 APK 分享并输出 Tailscale 下载链接
+- `--share-port <port>`：分享端口（默认 `8765`）
 
 ## 说明
 

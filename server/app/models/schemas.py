@@ -103,6 +103,7 @@ class NotesMergeSuggestRequest(BaseModel):
     source: str = Field(default="", max_length=32)
     limit: int = Field(default=20, ge=1, le=100)
     min_score: float = Field(default=0.35, ge=0.0, le=1.0)
+    include_weak: bool = False
 
 
 class NotesMergePreviewRequest(BaseModel):

@@ -726,15 +726,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
             when (val result = apiRepository.suggestMergeCandidates(baseUrl = baseUrl)) {
                 is AppResult.Success -> {
-                    val message = if (result.data.items.isEmpty()) {
+                    val strongOnly = filterStrongMergeCandidates(result.data.items)
+                    val message = if (strongOnly.isEmpty()) {
                         "未发现可合并候选。"
                     } else {
-                        "已发现 ${result.data.total} 组候选，请先预览后再确认合并。"
+                        "已发现 ${strongOnly.size} 组候选，请先预览后再确认合并。"
                     }
                     _notesState.update {
                         it.copy(
                             isMergeSuggesting = false,
-                            mergeCandidates = result.data.items,
+                            mergeCandidates = strongOnly,
                             mergeStatus = message,
                             errorMessage = "",
                         )
@@ -928,15 +929,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     ) {
                         is AppResult.Success -> {
-                            val message = if (suggestResult.data.items.isEmpty()) {
+                            val strongOnly = filterStrongMergeCandidates(suggestResult.data.items)
+                            val message = if (strongOnly.isEmpty()) {
                                 "已确认合并结果，当前无可合并候选。"
                             } else {
-                                "已确认合并结果，剩余 ${suggestResult.data.total} 组候选。"
+                                "已确认合并结果，剩余 ${strongOnly.size} 组候选。"
                             }
                             _notesState.update {
                                 it.copy(
                                     isMergeSuggesting = false,
-                                    mergeCandidates = suggestResult.data.items,
+                                    mergeCandidates = strongOnly,
                                     mergeStatus = message,
                                     errorMessage = "",
                                 )
@@ -1291,6 +1293,12 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             .filter { it.isNotEmpty() }
             .sorted()
         return "${source.trim().lowercase()}::${normalizedIds.joinToString("|")}"
+    }
+
+    private fun filterStrongMergeCandidates(
+        candidates: List<NotesMergeCandidateItem>,
+    ): List<NotesMergeCandidateItem> {
+        return candidates.filter { it.relationLevel == "STRONG" }
     }
 
 }

@@ -209,6 +209,11 @@ curl -X POST http://127.0.0.1:8000/api/notes/merge/suggest \
   -H 'Content-Type: application/json' \
   -d '{"source":"bilibili","limit":20,"min_score":0.35}'
 
+# 如需显示中相关（WEAK）候选，显式开启 include_weak
+curl -X POST http://127.0.0.1:8000/api/notes/merge/suggest \
+  -H 'Content-Type: application/json' \
+  -d '{"source":"bilibili","limit":20,"min_score":0.35,"include_weak":true}'
+
 # 生成合并预览
 curl -X POST http://127.0.0.1:8000/api/notes/merge/preview \
   -H 'Content-Type: application/json' \

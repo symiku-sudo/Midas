@@ -219,6 +219,7 @@ class NoteLibraryService:
         source: str = "",
         limit: int = 20,
         min_score: float = 0.35,
+        include_weak: bool = False,
     ) -> NotesMergeSuggestData:
         source_value = source.strip().lower()
         if source_value and source_value not in _SUPPORTED_MERGE_SOURCES:
@@ -238,6 +239,8 @@ class NoteLibraryService:
                 score_data = self._score_note_pair(first, second)
                 relation_level = str(score_data.get("relation_level", "")).strip()
                 if relation_level not in {_MERGE_RELATION_STRONG, _MERGE_RELATION_WEAK}:
+                    continue
+                if relation_level == _MERGE_RELATION_WEAK and not include_weak:
                     continue
                 if score_data["score"] < min_score:
                     continue
