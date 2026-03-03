@@ -1,0 +1,4 @@
+interface:
+  display_name: "Midas Doc"
+  short_description: "Maintain Midas docs with contract consistency"
+  default_prompt: "Use $doc to update Midas docs and keep API, README, and examples consistent."

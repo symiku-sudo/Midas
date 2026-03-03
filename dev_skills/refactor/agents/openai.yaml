@@ -1,3 +1,4 @@
 interface:
-  display_name: "Refactor"
-  short_description: "Help with Refactor tasks and workflows"
+  display_name: "Midas Refactor"
+  short_description: "Refactor Midas code with behavior parity gates"
+  default_prompt: "Use $refactor to improve structure without changing external behavior, then prove parity."

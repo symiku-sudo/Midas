@@ -1,3 +1,4 @@
 interface:
-  display_name: "Feature"
-  short_description: "Help with Feature tasks and workflows"
+  display_name: "Midas Feature"
+  short_description: "Build Midas features with DoD and validation"
+  default_prompt: "Use $feature to implement this Midas capability with tests, docs, and delivery checks."

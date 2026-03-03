@@ -1,0 +1,4 @@
+interface:
+  display_name: "Midas Issue"
+  short_description: "Manage Midas GitHub issues and dedup flow"
+  default_prompt: "Use $issue to search duplicates, maintain a canonical issue, and update issue states."

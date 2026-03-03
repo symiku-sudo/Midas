@@ -1,3 +1,4 @@
 interface:
-  display_name: "Sop"
-  short_description: "Help with Sop tasks and workflows"
+  display_name: "Midas SOP"
+  short_description: "Route and execute Midas tasks with SOP gates"
+  default_prompt: "Use $sop to route this Midas task, apply DoD gates, and produce a verifiable delivery summary."

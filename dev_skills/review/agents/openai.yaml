@@ -1,3 +1,4 @@
 interface:
-  display_name: "Review"
-  short_description: "Help with Review tasks and workflows"
+  display_name: "Midas Review"
+  short_description: "Review Midas changes for risk and test gaps"
+  default_prompt: "Use $review to produce severity-ranked findings with file/line references and testing gaps."

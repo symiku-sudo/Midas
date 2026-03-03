@@ -1,3 +1,4 @@
 interface:
-  display_name: "Bugfix"
-  short_description: "Help with Bugfix tasks and workflows"
+  display_name: "Midas Bugfix"
+  short_description: "Diagnose and fix Midas regressions safely"
+  default_prompt: "Use $bugfix to reproduce, locate root cause, patch minimally, and add regression proof."
