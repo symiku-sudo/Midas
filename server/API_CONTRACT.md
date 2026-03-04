@@ -51,6 +51,7 @@ Request:
 
 说明：
 - `video_url` 支持完整链接（`https://www.bilibili.com/video/BV...`）或直接传 `BV` 号。
+- 新生成的 `summary_markdown` 会追加“`## 评论区洞察（含点赞权重）`”章节（best-effort，不影响主摘要返回）。
 
 Success `data`:
 
@@ -172,6 +173,7 @@ Success `data`:
 说明：
 - 对视频型笔记，会走“音频导出 -> ASR 转写 -> LLM 总结”，并合并正文（若存在）。
 - 总结成功后会自动写入去重表 `xiaohongshu_synced_notes`。
+- 新生成的 `summary_markdown` 会追加“`## 评论区洞察（含点赞权重）`”章节（best-effort，不影响主摘要返回）。
 
 ## `POST /api/notes/xiaohongshu/save-batch`
 

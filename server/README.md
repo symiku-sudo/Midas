@@ -27,6 +27,7 @@
 - Config-driven runtime (`config.yaml`)
 - Xiaohongshu URL summarize + dedupe(SQLite)
 - Xiaohongshu 视频笔记总结：音频导出 -> ASR -> LLM（合并正文）
+- 新生成摘要自动追加“评论区洞察（含点赞权重）”章节（B站/小红书，best-effort）
 - API schema reference: `API_CONTRACT.md`
 
 ## Quick start
@@ -257,6 +258,7 @@ curl -X POST http://127.0.0.1:8000/api/config/editable/reset
 - 单篇 URL 总结成功后会自动把 `note_id` 写入去重表。
 - 删除“已保存小红书笔记”不会删除去重表中的 `note_id`，后续按 URL 总结仍会复用已处理状态。
 - 每次新增 B 站或小红书已保存笔记后，服务会自动备份一次数据库到 `.tmp/backups/`。
+- B站/小红书新生成 `summary_markdown` 会附加“`## 评论区洞察（含点赞权重）`”章节；评论抓取失败时仅降级该章节，不影响主摘要。
 - 智能合并默认非破坏，`finalize` 后会做破坏性清理（仅保留 merged 笔记）。
 - 合并候选评分支持本地 embedding 语义相似（配置见 `notes_merge.*`，可关闭后回退词面相似）。
 - merged 笔记正文末尾会自动追加 `原始笔记来源` 小节（原始标题 + 可点击来源链接）。

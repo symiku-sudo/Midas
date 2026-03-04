@@ -81,6 +81,7 @@ def test_xiaohongshu_summarize_single_url() -> None:
     assert body["data"]["note_id"] == "mock-note-001"
     assert body["data"]["source_url"] == "https://www.xiaohongshu.com/explore/mock-note-001"
     assert body["data"]["summary_markdown"]
+    assert "评论区洞察（含点赞权重）" in body["data"]["summary_markdown"]
 
 
 def test_bilibili_saved_notes_crud() -> None:

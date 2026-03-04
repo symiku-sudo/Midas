@@ -47,6 +47,16 @@ _MERGE_PROMPT = (
     "5) 严格基于输入内容，不得编造事实。"
 )
 
+_COMMENT_INSIGHT_PROMPT = (
+    "你是中文舆情分析助手。"
+    "请基于评论文本与点赞数做结构化总结。"
+    "必须显式体现点赞权重，不可只看评论条数。"
+    "输出仅包含三个三级标题："
+    "### 公众态度、### 高赞分析、### 样本说明。"
+    "其中“高赞分析”需给出要点列表，并引用高赞观点。"
+    "严禁编造评论中不存在的事实。"
+)
+
 
 class LLMService:
     def __init__(self, settings: Settings) -> None:
@@ -293,6 +303,96 @@ class LLMService:
             ],
         }
         return await self._request_chat_completion(payload, api_key=api_key)
+
+    async def summarize_comment_insights(
+        self,
+        *,
+        platform: str,
+        source_title: str,
+        source_url: str,
+        comments: list[dict[str, Any]],
+        max_highlight_items: int,
+    ) -> str:
+        normalized_comments: list[dict[str, Any]] = []
+        for item in comments:
+            if not isinstance(item, dict):
+                continue
+            text = str(item.get("text", "")).strip()
+            if not text:
+                continue
+            like_count = item.get("like_count", 0)
+            if isinstance(like_count, bool):
+                like_count = int(like_count)
+            elif isinstance(like_count, (int, float)):
+                like_count = int(like_count)
+            elif isinstance(like_count, str) and like_count.strip().isdigit():
+                like_count = int(like_count.strip())
+            else:
+                like_count = 0
+            normalized_comments.append(
+                {
+                    "text": text,
+                    "like_count": max(int(like_count), 0),
+                }
+            )
+
+        if not normalized_comments:
+            return (
+                "### 公众态度\n\n"
+                "- 暂未提取到可用评论，无法判断倾向。\n\n"
+                "### 高赞分析\n\n"
+                "- 暂无可提炼观点。\n\n"
+                "### 样本说明\n\n"
+                "- 评论样本为空。\n"
+            )
+
+        if not self._settings.llm.enabled:
+            top_comments = sorted(
+                normalized_comments,
+                key=lambda item: (int(item["like_count"]), len(str(item["text"]))),
+                reverse=True,
+            )[: max(int(max_highlight_items), 1)]
+            top_lines = "\n".join(
+                f"- 👍{int(item['like_count'])}: {str(item['text'])}"
+                for item in top_comments
+            )
+            return (
+                "### 公众态度\n\n"
+                "- 当前为本地降级输出，观点倾向请结合高赞评论自行判断。\n\n"
+                "### 高赞分析\n\n"
+                f"{top_lines}\n\n"
+                "### 样本说明\n\n"
+                f"- 纳入评论：{len(normalized_comments)} 条\n"
+                "- 已按点赞数排序提炼。\n"
+            )
+
+        api_key = self._require_api_key()
+        comment_lines = "\n".join(
+            f"{index + 1}. 👍{int(item['like_count'])} | {str(item['text'])}"
+            for index, item in enumerate(normalized_comments)
+        )
+        payload = {
+            "model": self._settings.llm.model,
+            "temperature": 0.2,
+            "messages": [
+                {"role": "system", "content": _COMMENT_INSIGHT_PROMPT},
+                {
+                    "role": "user",
+                    "content": (
+                        f"平台: {platform}\n"
+                        f"来源标题: {source_title or '（未知）'}\n"
+                        f"来源链接: {source_url or '（未知）'}\n"
+                        f"高赞洞察条数上限: {max(int(max_highlight_items), 1)}\n\n"
+                        f"评论样本（含点赞）:\n{comment_lines}"
+                    ),
+                },
+            ],
+        }
+        return await self._request_chat_completion(
+            payload,
+            api_key=api_key,
+            server_error_message="LLM 评论洞察生成失败。",
+        )
 
     async def merge_notes(
         self,

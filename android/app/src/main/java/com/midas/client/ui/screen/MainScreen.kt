@@ -1547,7 +1547,12 @@ private fun BilibiliNoteDetail(
                 note.videoUrl,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.clickable { onOpenSourceUrl(note.videoUrl) },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("bili_source_url_detail")
+                    .clickable { onOpenSourceUrl(note.videoUrl) },
             )
         }
         HorizontalDivider()
@@ -1575,7 +1580,12 @@ private fun XiaohongshuNoteDetail(
                 note.sourceUrl,
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.clickable { onOpenSourceUrl(note.sourceUrl) },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("xhs_source_url_detail")
+                    .clickable { onOpenSourceUrl(note.sourceUrl) },
             )
         }
         HorizontalDivider()

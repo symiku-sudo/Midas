@@ -20,6 +20,14 @@ bilibili:
   yt_dlp_path: yt-dlp
   ffmpeg_path: ffmpeg
 
+comment_insights:
+  enabled: true
+  request_timeout_seconds: 12
+  max_comments_fetch: 30
+  max_comments_for_summary: 16
+  max_highlight_items: 3
+  max_comment_length: 180
+
 runtime:
   temp_dir: .tmp
   log_level: INFO

@@ -633,6 +633,7 @@ async def test_web_readonly_summarize_url_marks_synced(tmp_path) -> None:
     assert source.last_url == "https://www.xiaohongshu.com/explore/u1"
     assert repo.is_synced("u1") is True
     assert "原文链接" in result.summary_markdown
+    assert "评论区洞察（含点赞权重）" in result.summary_markdown
 
 
 @pytest.mark.asyncio
@@ -839,6 +840,70 @@ async def test_web_readonly_fetch_note_by_url_resolves_xhslink_when_final_url_is
     note = await source.fetch_note_by_url("http://xhslink.com/o/eNmdwzRjEI")
     assert note.note_id == "abc123"
     assert note.source_url == "https://www.xiaohongshu.com/discovery/item/abc123"
+
+
+@pytest.mark.asyncio
+async def test_web_readonly_fetch_note_by_url_keeps_image_only_note(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=str(tmp_path / "midas.db"),
+            min_live_sync_interval_seconds=0,
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://www.xiaohongshu.com/api/some/path",
+                detail_fetch_mode="never",
+            ),
+        )
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+
+    class _FakeResp:
+        def __init__(self, *, text: str = "", status_code: int = 200) -> None:
+            self.status_code = status_code
+            self.text = text
+
+        @staticmethod
+        def json() -> dict:
+            return {}
+
+    class _FakeClient:
+        calls: list[str] = []
+
+        def __init__(self, *_, **__):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def request(self, **kwargs):
+            url = kwargs["url"]
+            self.calls.append(url)
+            html = """
+            <html><body>
+            <script>
+            window.__INITIAL_STATE__ = {"note":{"noteDetailMap":{"imgonly1":{"note":{"noteId":"imgonly1","title":"图片笔记标题","desc":"","type":"normal","imageList":[{"urlDefault":"https://sns-webpic-qc.xhscdn.com/imgonly-1"}]}}}}};
+            </script>
+            </body></html>
+            """
+            return _FakeResp(text=html)
+
+    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeClient)
+
+    note = await source.fetch_note_by_url(
+        "https://www.xiaohongshu.com/discovery/item/imgonly1"
+    )
+    assert note.note_id == "imgonly1"
+    assert note.title == "图片笔记标题"
+    assert note.content == ""
+    assert note.image_urls == ["https://sns-webpic-qc.xhscdn.com/imgonly-1"]
+    assert note.is_video is False
+    assert any("/discovery/item/imgonly1" in url for url in _FakeClient.calls)
 
 
 def test_extract_note_id_from_url_supports_note_and_notes_paths(tmp_path) -> None:
@@ -2216,3 +2281,181 @@ def test_extract_request_cursor_from_request_supports_json_and_form_body() -> No
 
     assert cursor_from_json == "abc123"
     assert cursor_from_form == "xyz789"
+
+
+def test_extract_comment_snippets_from_initial_state_uses_like_weight(tmp_path) -> None:
+    settings = Settings(
+        comment_insights={"max_comment_length": 120},
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=str(tmp_path / "midas.db"),
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://www.xiaohongshu.com/api/some/path",
+            ),
+        ),
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+    initial_state = {
+        "note": {
+            "commentData": {
+                "comments": [
+                    {"content": "太实用了，已经照着做。", "like_count": 42},
+                    {"content": "思路不错，但有点片面。", "liked_count": "7"},
+                    {"content": "太实用了，已经照着做。", "like_count": 1},
+                ]
+            }
+        }
+    }
+
+    snippets = source._extract_comment_snippets_from_initial_state(initial_state, limit=5)
+
+    assert len(snippets) == 2
+    assert snippets[0].text == "太实用了，已经照着做。"
+    assert snippets[0].like_count == 42
+    assert snippets[1].text == "思路不错，但有点片面。"
+    assert snippets[1].like_count == 7
+
+
+@pytest.mark.asyncio
+async def test_fetch_comment_snippets_fallbacks_to_comment_api_when_initial_empty(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    settings = Settings(
+        comment_insights={"request_timeout_seconds": 8},
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=str(tmp_path / "midas.db"),
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
+                host_allowlist=["www.xiaohongshu.com", "edith.xiaohongshu.com"],
+            ),
+        ),
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+    note = XiaohongshuNote(
+        note_id="n1",
+        title="标题",
+        content="正文",
+        source_url=(
+            "https://www.xiaohongshu.com/discovery/item/n1"
+            "?xsec_token=token-1&xsec_source=app_share"
+        ),
+    )
+
+    async def _fake_request_text(*_args, **_kwargs) -> str:
+        return "<html>ok</html>"
+
+    monkeypatch.setattr(source, "_request_text", _fake_request_text)
+    monkeypatch.setattr(
+        source,
+        "_extract_initial_state",
+        lambda _html: {
+            "note": {
+                "noteDetailMap": {
+                    "n1": {
+                        "comments": {
+                            "list": [],
+                            "hasMore": True,
+                            "firstRequestFinish": False,
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    captured_urls: list[str] = []
+
+    async def _fake_request_json(*, client, method, url, headers, body):
+        _ = client
+        _ = headers
+        _ = body
+        assert method == "GET"
+        captured_urls.append(url)
+        return {
+            "msg": "成功",
+            "data": {
+                "has_more": False,
+                "cursor": "",
+                "comments": [
+                    {"content": "第一条评论", "like_count": "12"},
+                    {"content": "第二条评论", "liked_count": "3"},
+                ],
+            },
+        }
+
+    monkeypatch.setattr(source, "_request_json", _fake_request_json)
+
+    comments = await source.fetch_comment_snippets(note=note, limit=5)
+
+    assert len(comments) == 2
+    assert comments[0].text == "第一条评论"
+    assert comments[0].like_count == 12
+    assert comments[1].text == "第二条评论"
+    assert comments[1].like_count == 3
+    assert len(captured_urls) == 1
+    parsed = urlparse(captured_urls[0])
+    assert parsed.path == "/api/sns/web/v2/comment/page"
+    query = parse_qs(parsed.query)
+    assert query["note_id"] == ["n1"]
+    assert query["xsec_token"] == ["token-1"]
+    assert query["xsec_source"] == ["app_share"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_comment_snippets_uses_initial_state_without_comment_api(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=str(tmp_path / "midas.db"),
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
+                host_allowlist=["www.xiaohongshu.com", "edith.xiaohongshu.com"],
+            ),
+        ),
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+    note = XiaohongshuNote(
+        note_id="n2",
+        title="标题2",
+        content="正文2",
+        source_url="https://www.xiaohongshu.com/discovery/item/n2",
+    )
+
+    async def _fake_request_text(*_args, **_kwargs) -> str:
+        return "<html>ok</html>"
+
+    monkeypatch.setattr(source, "_request_text", _fake_request_text)
+    monkeypatch.setattr(
+        source,
+        "_extract_initial_state",
+        lambda _html: {
+            "note": {
+                "noteDetailMap": {
+                    "n2": {
+                        "comments": {
+                            "list": [
+                                {"content": "首包评论", "like_count": "9"},
+                            ],
+                            "hasMore": False,
+                            "firstRequestFinish": True,
+                        }
+                    }
+                }
+            }
+        },
+    )
+
+    async def _unexpected_request_json(*_args, **_kwargs):
+        raise AssertionError("initial_state 已有评论时不应再请求 comment API")
+
+    monkeypatch.setattr(source, "_request_json", _unexpected_request_json)
+
+    comments = await source.fetch_comment_snippets(note=note, limit=5)
+    assert len(comments) == 1
+    assert comments[0].text == "首包评论"
+    assert comments[0].like_count == 9

@@ -2,18 +2,23 @@ package com.midas.client.ui.screen
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.text.TextLayoutResult
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSummaryData
 import com.midas.client.data.model.XiaohongshuSavedNote
 import com.midas.client.data.model.XiaohongshuSummaryItem
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -357,5 +362,76 @@ class MainScreenContentRobolectricSmokeTest {
 
         composeRule.onNodeWithText("Merge Note · 来源请见正文末尾链接").assertIsDisplayed()
         composeRule.onAllNodesWithText(mergedUrl).assertCountEquals(0)
+    }
+
+    @Test
+    fun nonMergeNoteDetail_sourceUrl_shouldBeSingleLineAndKeepClickAction() {
+        val longUrl = buildString {
+            append("https://www.bilibili.com/video/BV1xx411c7mD?")
+            repeat(120) { index ->
+                append("spm_id_from=$index&")
+            }
+        }
+        composeRule.setContent {
+            MaterialTheme {
+                MainScreenContent(
+                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
+                    bilibili = BilibiliUiState(),
+                    xiaohongshu = XiaohongshuUiState(),
+                    notes = NotesUiState(
+                        bilibiliNotes = listOf(
+                            BilibiliSavedNote(
+                                noteId = "b-normal-1",
+                                title = "普通笔记",
+                                videoUrl = longUrl,
+                                summaryMarkdown = "# 正文",
+                                elapsedMs = 1000,
+                                transcriptChars = 66,
+                                savedAt = "2026-02-27 00:00:00",
+                            ),
+                        ),
+                    ),
+                    onAppForeground = {},
+                    onBaseUrlChange = {},
+                    onSaveBaseUrl = {},
+                    onTestConnection = {},
+                    onConfigTextChange = { _, _ -> },
+                    onConfigBooleanChange = { _, _ -> },
+                    onResetConfig = {},
+                    onBilibiliVideoUrlChange = {},
+                    onSubmitBilibiliSummary = {},
+                    onSaveBilibiliNote = {},
+                    onXiaohongshuUrlChange = {},
+                    onSummarizeXiaohongshuUrl = {},
+                    onRefreshXiaohongshuAuthConfig = {},
+                    onSaveSingleXiaohongshuNote = {},
+                    onNotesKeywordChange = {},
+                    onRefreshNotes = {},
+                    onDeleteBilibiliNote = {},
+                    onDeleteXiaohongshuNote = {},
+                    onSuggestMergeCandidates = {},
+                    onPreviewMergeCandidate = { _ -> },
+                    onCommitCurrentMerge = {},
+                    onRollbackLastMerge = {},
+                    onFinalizeLastMerge = {},
+                    enableLifecycleAutoRefresh = false,
+                    enableCyclicTabs = false,
+                    animateTabSwitch = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("普通笔记").performClick()
+
+        val linkNode = composeRule.onNodeWithTag("bili_source_url_detail", useUnmergedTree = true)
+        linkNode.assertIsDisplayed()
+        linkNode.assertHasClickAction()
+
+        val layoutResults = mutableListOf<TextLayoutResult>()
+        linkNode.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { fetch ->
+            assertTrue(fetch(layoutResults))
+        }
+        assertTrue(layoutResults.isNotEmpty())
+        assertTrue(layoutResults.first().lineCount == 1)
     }
 }

@@ -115,6 +115,15 @@ class XiaohongshuConfig(BaseModel):
     )
 
 
+class CommentInsightsConfig(BaseModel):
+    enabled: bool = True
+    request_timeout_seconds: int = 12
+    max_comments_fetch: int = 30
+    max_comments_for_summary: int = 16
+    max_highlight_items: int = 3
+    max_comment_length: int = 180
+
+
 class RuntimeConfig(BaseModel):
     temp_dir: str = ".tmp"
     log_level: str = "INFO"
@@ -134,6 +143,9 @@ class Settings(BaseModel):
     asr: ASRConfig = Field(default_factory=ASRConfig)
     bilibili: BilibiliConfig = Field(default_factory=BilibiliConfig)
     xiaohongshu: XiaohongshuConfig = Field(default_factory=XiaohongshuConfig)
+    comment_insights: CommentInsightsConfig = Field(
+        default_factory=CommentInsightsConfig
+    )
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     notes_merge: NotesMergeConfig = Field(default_factory=NotesMergeConfig)
 

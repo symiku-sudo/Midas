@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import logging
 import random
 import re
 import shutil
@@ -22,7 +23,10 @@ from app.models.schemas import XiaohongshuSummaryItem, XiaohongshuSyncData
 from app.repositories.xiaohongshu_repo import XiaohongshuSyncRepository
 from app.services.asr import ASRService
 from app.services.audio_fetcher import AudioFetcher
+from app.services.comment_insights import CommentInsightService, CommentSnippet
 from app.services.llm import LLMService
+
+logger = logging.getLogger(__name__)
 
 _DEFAULT_NOTES: list[dict[str, str]] = [
     {
@@ -115,6 +119,16 @@ class MockXiaohongshuSource:
                 break
             notes.append(note)
         return notes
+
+    def fetch_comment_snippets(
+        self,
+        *,
+        note: XiaohongshuNote,
+        limit: int,
+    ) -> list[CommentSnippet]:
+        _ = note
+        _ = limit
+        return []
 
     def _build_note_from_record(self, *, index: int, record: dict[str, str]) -> XiaohongshuNote:
         note_id = str(record.get("note_id", "")).strip()
@@ -231,6 +245,17 @@ class XiaohongshuWebReadonlySource:
         r"(?:explore|discovery%2Fitem|note|notes)%2F[A-Za-z0-9_%\-]+",
         re.I,
     )
+    _COMMENT_PATH_HINTS = ("comment", "comments", "reply", "replies")
+    _COMMENT_TEXT_FIELDS = ("content", "text", "comment", "desc", "message")
+    _COMMENT_LIKE_FIELDS = (
+        "like_count",
+        "liked_count",
+        "likes",
+        "likeCount",
+        "up_count",
+        "upCount",
+    )
+    _COMMENT_PAGE_PATH = "/api/sns/web/v2/comment/page"
 
     def __init__(self, settings: Settings) -> None:
         self._settings = settings
@@ -242,6 +267,65 @@ class XiaohongshuWebReadonlySource:
             if len(notes) >= limit:
                 break
         return notes
+
+    async def fetch_comment_snippets(
+        self,
+        *,
+        note: XiaohongshuNote,
+        limit: int,
+    ) -> list[CommentSnippet]:
+        cfg = self._settings.xiaohongshu.web_readonly
+        max_fetch = max(int(limit), 1)
+        headers = self._build_headers(cfg.request_headers)
+        page_url = self._build_note_page_url(
+            note_id=note.note_id,
+            source_url=note.source_url,
+            record={},
+        )
+        self._assert_https_and_host(page_url, cfg.host_allowlist)
+        timeout = max(int(self._settings.comment_insights.request_timeout_seconds), 1)
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            html = await self._request_text(
+                client=client,
+                method="GET",
+                url=page_url,
+                headers=headers,
+                body=None,
+                best_effort=True,
+            )
+        if not html:
+            return []
+        initial_state = self._extract_initial_state(html)
+        if initial_state is None:
+            return []
+        from_initial_state = self._extract_comment_snippets_from_initial_state(
+            initial_state,
+            limit=max_fetch,
+        )
+        if from_initial_state:
+            logger.info(
+                "XHS comments fetched from initial_state, note_id=%s count=%s",
+                note.note_id,
+                len(from_initial_state),
+            )
+            return from_initial_state
+
+        logger.info(
+            "XHS initial_state comments empty, fallback to comment API, note_id=%s",
+            note.note_id,
+        )
+        from_api = await self._fetch_comment_snippets_from_api(
+            note=note,
+            headers=headers,
+            host_allowlist=cfg.host_allowlist,
+            limit=max_fetch,
+        )
+        logger.info(
+            "XHS comments fetched from comment API, note_id=%s count=%s",
+            note.note_id,
+            len(from_api),
+        )
+        return from_api
 
     async def fetch_note_by_url(self, note_url: str) -> XiaohongshuNote:
         cfg = self._settings.xiaohongshu.web_readonly
@@ -1630,7 +1714,9 @@ class XiaohongshuWebReadonlySource:
                     max_count=max_images,
                 )
 
-        if not content and not is_video:
+        # Some image posts can have empty desc/content in initial payload.
+        # Keep non-video notes as long as there is at least one image.
+        if not content and not image_urls and not is_video:
             return None
 
         return XiaohongshuNote(
@@ -2014,6 +2100,192 @@ class XiaohongshuWebReadonlySource:
                     return note_node["note"]
                 return note_node
         return self._find_note_payload_by_id(initial_state, note_id)
+
+    def _extract_comment_snippets_from_initial_state(
+        self,
+        initial_state: dict,
+        *,
+        limit: int,
+    ) -> list[CommentSnippet]:
+        max_fetch = max(int(limit), 1)
+        output: list[CommentSnippet] = []
+        seen: set[str] = set()
+        self._collect_comment_snippets(
+            payload=initial_state,
+            path="root",
+            output=output,
+            seen=seen,
+            limit=max_fetch,
+        )
+        output.sort(key=lambda item: item.like_count, reverse=True)
+        return output[:max_fetch]
+
+    def _collect_comment_snippets(
+        self,
+        *,
+        payload: object,
+        path: str,
+        output: list[CommentSnippet],
+        seen: set[str],
+        limit: int,
+    ) -> None:
+        if len(output) >= limit:
+            return
+
+        if isinstance(payload, dict):
+            normalized_path = path.lower()
+            if any(token in normalized_path for token in self._COMMENT_PATH_HINTS):
+                text = self._extract_comment_text(payload)
+                if text:
+                    normalized_text = re.sub(r"\s+", " ", text).strip().lower()
+                    if normalized_text and normalized_text not in seen:
+                        seen.add(normalized_text)
+                        output.append(
+                            CommentSnippet(
+                                text=text,
+                                like_count=self._extract_comment_like_count(payload),
+                            )
+                        )
+                        if len(output) >= limit:
+                            return
+            for key, value in payload.items():
+                child_path = f"{path}.{key}" if path else str(key)
+                self._collect_comment_snippets(
+                    payload=value,
+                    path=child_path,
+                    output=output,
+                    seen=seen,
+                    limit=limit,
+                )
+                if len(output) >= limit:
+                    return
+            return
+
+        if isinstance(payload, list):
+            for index, item in enumerate(payload):
+                child_path = f"{path}[{index}]"
+                self._collect_comment_snippets(
+                    payload=item,
+                    path=child_path,
+                    output=output,
+                    seen=seen,
+                    limit=limit,
+                )
+                if len(output) >= limit:
+                    return
+
+    def _extract_comment_text(self, payload: dict[str, Any]) -> str:
+        max_length = max(int(self._settings.comment_insights.max_comment_length), 32)
+        for field_name in self._COMMENT_TEXT_FIELDS:
+            text = self._read_str(payload, field_name)
+            if not text:
+                continue
+            normalized = re.sub(r"\s+", " ", text).strip()
+            if not normalized or len(normalized) < 2:
+                continue
+            if len(normalized) > max_length:
+                return normalized[: max_length - 1].rstrip() + "…"
+            return normalized
+        return ""
+
+    def _extract_comment_like_count(self, payload: dict[str, Any]) -> int:
+        for field_name in self._COMMENT_LIKE_FIELDS:
+            value = self._read_value(payload, field_name)
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                return int(value)
+            if isinstance(value, (int, float)):
+                return max(int(value), 0)
+            if isinstance(value, str):
+                raw = value.strip()
+                if raw.isdigit():
+                    return max(int(raw), 0)
+        return 0
+
+    async def _fetch_comment_snippets_from_api(
+        self,
+        *,
+        note: XiaohongshuNote,
+        headers: dict[str, str],
+        host_allowlist: list[str],
+        limit: int,
+    ) -> list[CommentSnippet]:
+        max_fetch = max(int(limit), 1)
+        request_url = self._settings.xiaohongshu.web_readonly.request_url.strip()
+        request_host = urlparse(request_url).netloc.strip().lower() or "edith.xiaohongshu.com"
+        comment_api_url = f"https://{request_host}{self._COMMENT_PAGE_PATH}"
+        self._assert_https_and_host(comment_api_url, host_allowlist)
+
+        xsec_token, xsec_source = self._extract_xsec_from_note_url(note.source_url)
+        output: list[CommentSnippet] = []
+        seen: set[str] = set()
+        cursor = ""
+        seen_cursors: set[str] = set()
+        timeout = max(int(self._settings.comment_insights.request_timeout_seconds), 1)
+
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            while len(output) < max_fetch:
+                params: dict[str, str] = {
+                    "note_id": note.note_id,
+                    "cursor": cursor,
+                    "top_comment_id": "",
+                    "image_formats": "jpg,webp,avif",
+                }
+                if xsec_token:
+                    params["xsec_token"] = xsec_token
+                if xsec_source:
+                    params["xsec_source"] = xsec_source
+                comment_page_url = f"{comment_api_url}?{urlencode(params, doseq=True)}"
+                payload = await self._request_json(
+                    client=client,
+                    method="GET",
+                    url=comment_page_url,
+                    headers=headers,
+                    body=None,
+                )
+                data = payload.get("data")
+                if not isinstance(data, dict):
+                    break
+
+                self._collect_comment_snippets(
+                    payload=data,
+                    path="root.comment_page",
+                    output=output,
+                    seen=seen,
+                    limit=max_fetch,
+                )
+
+                has_more = self._coerce_bool(data.get("has_more"))
+                if has_more is None:
+                    has_more = self._coerce_bool(data.get("hasMore"))
+                next_cursor = (
+                    self._read_str(data, "cursor")
+                    or self._read_str(data, "next_cursor")
+                    or self._read_str(data, "nextCursor")
+                )
+                if len(output) >= max_fetch:
+                    break
+                if not has_more and not next_cursor:
+                    break
+                if not next_cursor:
+                    break
+                if next_cursor in seen_cursors:
+                    break
+                seen_cursors.add(next_cursor)
+                cursor = next_cursor
+
+        output.sort(key=lambda item: item.like_count, reverse=True)
+        return output[:max_fetch]
+
+    def _extract_xsec_from_note_url(self, note_url: str) -> tuple[str, str]:
+        parsed = urlparse(note_url)
+        query = parse_qs(parsed.query, keep_blank_values=True)
+        raw_token = query.get("xsec_token", [""])
+        raw_source = query.get("xsec_source", [""])
+        xsec_token = str(raw_token[0]).strip() if raw_token else ""
+        xsec_source = str(raw_source[0]).strip() if raw_source else ""
+        return xsec_token, xsec_source
 
     def _find_note_payload_by_id(self, payload: object, note_id: str) -> dict | None:
         if isinstance(payload, dict):
@@ -2566,6 +2838,10 @@ class XiaohongshuSyncService:
         self._source = source or MockXiaohongshuSource(settings)
         self._web_source = web_source or XiaohongshuWebReadonlySource(settings)
         self._llm_service = llm_service or LLMService(settings)
+        self._comment_insights = CommentInsightService(
+            settings,
+            llm_service=self._llm_service,
+        )
         self._audio_fetcher = audio_fetcher or AudioFetcher(settings)
         self._asr_service = asr_service or ASRService(settings)
 
@@ -2660,6 +2936,11 @@ class XiaohongshuSyncService:
                         image_urls=note.image_urls,
                     )
                 summary = self._ensure_source_link(summary, note.source_url)
+                summary = await self._append_comment_insights_section(
+                    mode=mode,
+                    note=note,
+                    summary_markdown=summary,
+                )
                 summaries.append(
                     XiaohongshuSummaryItem(
                         note_id=note.note_id,
@@ -2791,6 +3072,11 @@ class XiaohongshuSyncService:
                 image_urls=note.image_urls,
             )
         summary = self._ensure_source_link(summary, note.source_url)
+        summary = await self._append_comment_insights_section(
+            mode=mode,
+            note=note,
+            summary_markdown=summary,
+        )
         result = XiaohongshuSummaryItem(
             note_id=note.note_id,
             title=note.title,
@@ -3184,6 +3470,59 @@ class XiaohongshuSyncService:
         if not summary:
             return suffix + "\n"
         return f"{summary}\n\n---\n\n{suffix}\n"
+
+    async def _append_comment_insights_section(
+        self,
+        *,
+        mode: str,
+        note: XiaohongshuNote,
+        summary_markdown: str,
+    ) -> str:
+        if not self._settings.comment_insights.enabled:
+            return summary_markdown
+
+        comments = await self._fetch_comment_snippets_for_note(mode=mode, note=note)
+        section = await self._comment_insights.build_insight_section(
+            platform="xiaohongshu",
+            source_title=note.title,
+            source_url=note.source_url,
+            comments=comments,
+        )
+        return self._comment_insights.append_section(
+            summary_markdown=summary_markdown,
+            section_markdown=section,
+        )
+
+    async def _fetch_comment_snippets_for_note(
+        self,
+        *,
+        mode: str,
+        note: XiaohongshuNote,
+    ) -> list[CommentSnippet]:
+        max_fetch = max(int(self._settings.comment_insights.max_comments_fetch), 1)
+        try:
+            if mode == "web_readonly":
+                return await self._web_source.fetch_comment_snippets(
+                    note=note,
+                    limit=max_fetch,
+                )
+            return self._source.fetch_comment_snippets(
+                note=note,
+                limit=max_fetch,
+            )
+        except AppError as exc:
+            logger.warning(
+                "Fetch xiaohongshu comments failed, fallback to empty: code=%s message=%s note_id=%s",
+                exc.code.value,
+                exc.message,
+                note.note_id,
+            )
+        except Exception:
+            logger.exception(
+                "Fetch xiaohongshu comments failed with unexpected error, note_id=%s",
+                note.note_id,
+            )
+        return []
 
     async def _emit_progress(
         self,

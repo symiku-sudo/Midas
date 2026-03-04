@@ -111,6 +111,7 @@ tools/release.sh
 ## 说明
 
 - 当前小红书能力为“按 URL 总结单篇”。
+- B站/小红书新生成摘要会额外附带“评论区洞察（含点赞权重）”章节（best-effort）。
 - 每次新增已保存笔记（B站/小红书）后，服务端会自动备份一次数据库（位于 `server/.tmp/backups/`）。
 - Android 端可通过内置 WebView 登录并上传 Cookie/UA 到服务端（`/api/xiaohongshu/auth/update`），减少手工 HAR/cURL 更新频率。
 - 当前默认 `llm.enabled=true`、`asr.mode=faster_whisper`、`asr.model_size=base`。
