@@ -3,22 +3,25 @@ package com.midas.client.ui.screen
 import android.net.Uri
 import android.content.Intent
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -32,15 +35,18 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Tab
 import androidx.compose.material3.TabRow
+import androidx.compose.material3.TabRowDefaults
+import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -60,14 +66,21 @@ import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.ui.components.MarkdownText
 import com.midas.client.util.ConfigFieldType
 import com.midas.client.util.EditableConfigField
-import kotlin.math.abs
-import kotlinx.coroutines.launch
 
 private enum class MainTab(val title: String) {
-    BILIBILI("B站"),
-    XHS("小红书"),
-    NOTES("笔记库"),
-    SETTINGS("设置"),
+    NOTES("Notes"),
+    SIGNALS("Signals"),
+    SETTINGS("Settings"),
+}
+
+private enum class SignalsTab(val title: String) {
+    CAPTURE("Capture"),
+    FINANCE("Finance"),
+}
+
+private enum class CaptureSourceTab(val title: String) {
+    BILIBILI("Bilibili"),
+    XHS("Xiaohongshu"),
 }
 
 private enum class ConfigControlKind {
@@ -75,6 +88,17 @@ private enum class ConfigControlKind {
     SWITCH,
     DROPDOWN,
 }
+
+private enum class ButtonTone {
+    PRIMARY,
+    SUCCESS,
+    NEUTRAL,
+}
+
+private val SuccessStatusColor = Color(0xFF7BE5A6)
+private val ErrorStatusColor = Color(0xFFFF9A9A)
+private val WarningStatusColor = Color(0xFFFFD187)
+private val LinkStatusColor = Color(0xFF8ED8FF)
 
 private data class ConfigOption(
     val value: String,
@@ -230,7 +254,6 @@ private val configFieldSpecs = listOf(
     ),
 )
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
     val settings by viewModel.settingsState.collectAsStateWithLifecycle()
@@ -269,8 +292,8 @@ fun MainScreen(viewModel: MainViewModel) {
     )
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
+@Suppress("UNUSED_PARAMETER")
 fun MainScreenContent(
     settings: SettingsUiState,
     bilibili: BilibiliUiState,
@@ -304,18 +327,9 @@ fun MainScreenContent(
     animateTabSwitch: Boolean = true,
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
-    val tabs = MainTab.entries
-    val tabCount = tabs.size
-    val pagerState = rememberPagerState(
-        initialPage = if (enableCyclicTabs) tabCount * 1000 else 0,
-        pageCount = { if (enableCyclicTabs) Int.MAX_VALUE else tabCount },
-    )
-    val scope = rememberCoroutineScope()
-    val selectedTabIndex = if (enableCyclicTabs) {
-        pagerState.currentPage % tabCount
-    } else {
-        pagerState.currentPage.coerceIn(0, tabCount - 1)
-    }
+    var selectedMainTab by remember { mutableStateOf(MainTab.NOTES) }
+    var selectedSignalsTab by remember { mutableStateOf(SignalsTab.CAPTURE) }
+    var selectedCaptureSourceTab by remember { mutableStateOf(CaptureSourceTab.BILIBILI) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -329,130 +343,251 @@ fun MainScreenContent(
         }
     }
 
-    Scaffold(
-        topBar = {
-            Column {
-                Text(
-                    text = "Midas Client",
-                    style = MaterialTheme.typography.titleLarge,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 12.dp),
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(
+                Brush.verticalGradient(
+                    colors = listOf(
+                        Color(0xFF091629),
+                        Color(0xFF10304A),
+                        Color(0xFF15465B),
+                    )
                 )
-                TabRow(selectedTabIndex = selectedTabIndex) {
-                    tabs.forEachIndexed { index, tab ->
-                        Tab(
-                            selected = selectedTabIndex == index,
-                            onClick = {
-                                val targetPage = if (enableCyclicTabs) {
-                                    nearestCyclicTabPage(
-                                        currentPage = pagerState.currentPage,
-                                        currentTabIndex = selectedTabIndex,
-                                        targetTabIndex = index,
-                                        tabCount = tabCount,
-                                    )
-                                } else {
-                                    index
-                                }
-                                scope.launch {
-                                    if (animateTabSwitch) {
-                                        pagerState.animateScrollToPage(targetPage)
-                                    } else {
-                                        pagerState.scrollToPage(targetPage)
-                                    }
-                                }
-                            },
-                            text = { SingleLineActionText(tab.title) },
-                        )
-                    }
-                }
-            }
-        },
-    ) { innerPadding ->
-        HorizontalPager(
-            state = pagerState,
+            ),
+    ) {
+        Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding),
-        ) { page ->
-            when (tabs[if (enableCyclicTabs) page % tabCount else page]) {
-                MainTab.SETTINGS -> {
-                    SettingsPanel(
-                        state = settings,
-                        onBaseUrlChange = onBaseUrlChange,
-                        onSave = onSaveBaseUrl,
-                        onTestConnection = onTestConnection,
-                        onConfigTextChange = onConfigTextChange,
-                        onConfigBooleanChange = onConfigBooleanChange,
-                        onResetConfig = onResetConfig,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp),
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(Color(0x5535B6F8), Color.Transparent),
+                        center = Offset(880f, 120f),
+                        radius = 900f,
                     )
-                }
+                ),
+        )
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(
+                    Brush.radialGradient(
+                        colors = listOf(Color(0x4476C8A4), Color.Transparent),
+                        center = Offset(80f, 1600f),
+                        radius = 980f,
+                    )
+                ),
+        )
 
-                MainTab.BILIBILI -> {
+        Scaffold(
+            containerColor = Color.Transparent,
+            contentColor = MaterialTheme.colorScheme.onBackground,
+            topBar = {
+                Column(
+                    modifier = Modifier
+                        .statusBarsPadding()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    GlassTabBar(
+                        selectedTabIndex = selectedMainTab.ordinal,
+                        labels = MainTab.entries.map { it.title },
+                        onSelect = { index -> selectedMainTab = MainTab.entries[index] },
+                    )
+                    if (selectedMainTab == MainTab.SIGNALS) {
+                        GlassTabBar(
+                            selectedTabIndex = selectedSignalsTab.ordinal,
+                            labels = SignalsTab.entries.map { it.title },
+                            onSelect = { index -> selectedSignalsTab = SignalsTab.entries[index] },
+                        )
+                        if (selectedSignalsTab == SignalsTab.CAPTURE) {
+                            GlassTabBar(
+                                selectedTabIndex = selectedCaptureSourceTab.ordinal,
+                                labels = CaptureSourceTab.entries.map { it.title },
+                                onSelect = { index ->
+                                    selectedCaptureSourceTab = CaptureSourceTab.entries[index]
+                                },
+                            )
+                        }
+                    }
+                }
+            },
+        ) { innerPadding ->
+            val contentModifier = Modifier
+                .fillMaxSize()
+                .padding(innerPadding)
+                .padding(16.dp)
+
+            when {
+                selectedMainTab == MainTab.SETTINGS -> SettingsPanel(
+                    state = settings,
+                    onBaseUrlChange = onBaseUrlChange,
+                    onSave = onSaveBaseUrl,
+                    onTestConnection = onTestConnection,
+                    onConfigTextChange = onConfigTextChange,
+                    onConfigBooleanChange = onConfigBooleanChange,
+                    onResetConfig = onResetConfig,
+                    modifier = contentModifier,
+                )
+
+                selectedMainTab == MainTab.NOTES -> NotesPanel(
+                    state = notes,
+                    onKeywordChange = onNotesKeywordChange,
+                    onRefresh = onRefreshNotes,
+                    onDeleteBilibili = onDeleteBilibiliNote,
+                    onDeleteXiaohongshu = onDeleteXiaohongshuNote,
+                    onSuggestMergeCandidates = onSuggestMergeCandidates,
+                    onPreviewMergeCandidate = onPreviewMergeCandidate,
+                    onCommitCurrentMerge = onCommitCurrentMerge,
+                    onRollbackLastMerge = onRollbackLastMerge,
+                    onFinalizeLastMerge = onFinalizeLastMerge,
+                    modifier = contentModifier,
+                )
+
+                selectedSignalsTab == SignalsTab.CAPTURE && selectedCaptureSourceTab == CaptureSourceTab.BILIBILI -> {
                     BilibiliPanel(
                         state = bilibili,
                         onVideoUrlChange = onBilibiliVideoUrlChange,
                         onSubmit = onSubmitBilibiliSummary,
                         onSaveNote = onSaveBilibiliNote,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp),
+                        modifier = contentModifier,
                     )
                 }
 
-                MainTab.XHS -> {
+                selectedSignalsTab == SignalsTab.CAPTURE && selectedCaptureSourceTab == CaptureSourceTab.XHS -> {
                     XiaohongshuPanel(
                         state = xiaohongshu,
                         onUrlChange = onXiaohongshuUrlChange,
                         onSummarizeUrl = onSummarizeXiaohongshuUrl,
                         onRefreshAuthConfig = onRefreshXiaohongshuAuthConfig,
                         onSaveSingleNote = onSaveSingleXiaohongshuNote,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp),
+                        modifier = contentModifier,
                     )
                 }
 
-                MainTab.NOTES -> {
-                    NotesPanel(
-                        state = notes,
-                        onKeywordChange = onNotesKeywordChange,
-                        onRefresh = onRefreshNotes,
-                        onDeleteBilibili = onDeleteBilibiliNote,
-                        onDeleteXiaohongshu = onDeleteXiaohongshuNote,
-                        onSuggestMergeCandidates = onSuggestMergeCandidates,
-                        onPreviewMergeCandidate = onPreviewMergeCandidate,
-                        onCommitCurrentMerge = onCommitCurrentMerge,
-                        onRollbackLastMerge = onRollbackLastMerge,
-                        onFinalizeLastMerge = onFinalizeLastMerge,
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .padding(16.dp),
-                    )
-                }
+                else -> FinanceSignalsPanel(
+                    notes = notes,
+                    bilibili = bilibili,
+                    xiaohongshu = xiaohongshu,
+                    modifier = contentModifier,
+                )
             }
         }
     }
 }
 
-private fun nearestCyclicTabPage(
-    currentPage: Int,
-    currentTabIndex: Int,
-    targetTabIndex: Int,
-    tabCount: Int,
-): Int {
-    val forward = (targetTabIndex - currentTabIndex + tabCount) % tabCount
-    val backward = forward - tabCount
-    val delta = if (abs(forward) <= abs(backward)) forward else backward
-    return currentPage + delta
+@Composable
+private fun GlassTabBar(
+    selectedTabIndex: Int,
+    labels: List<String>,
+    onSelect: (Int) -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .background(
+                color = MaterialTheme.colorScheme.surface.copy(alpha = 0.46f),
+                shape = RoundedCornerShape(20.dp),
+            )
+            .padding(3.dp),
+    ) {
+        TabRow(
+            selectedTabIndex = selectedTabIndex,
+            containerColor = Color.Transparent,
+            divider = {},
+            indicator = { tabPositions ->
+                TabRowDefaults.SecondaryIndicator(
+                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
+                    height = 2.dp,
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.95f),
+                )
+            },
+        ) {
+            labels.forEachIndexed { index, label ->
+                Tab(
+                    selected = selectedTabIndex == index,
+                    onClick = { onSelect(index) },
+                    selectedContentColor = MaterialTheme.colorScheme.onSurface,
+                    unselectedContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.76f),
+                    text = { SingleLineActionText(label) },
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun GlassCard(
+    modifier: Modifier = Modifier,
+    content: @Composable () -> Unit,
+) {
+    Card(
+        modifier = modifier,
+        shape = RoundedCornerShape(18.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surface.copy(alpha = 0.58f),
+            contentColor = MaterialTheme.colorScheme.onSurface,
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)),
+    ) {
+        content()
+    }
+}
+
+@Composable
+private fun MidasButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    tone: ButtonTone = ButtonTone.PRIMARY,
+    content: @Composable RowScope.() -> Unit,
+) {
+    val colors = when (tone) {
+        ButtonTone.PRIMARY -> ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.92f),
+            contentColor = Color(0xFFF1F8FF),
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+        )
+
+        ButtonTone.SUCCESS -> ButtonDefaults.buttonColors(
+            containerColor = Color(0xFF1F8668),
+            contentColor = Color(0xFFEFFEF7),
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+        )
+
+        ButtonTone.NEUTRAL -> ButtonDefaults.buttonColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.82f),
+            contentColor = MaterialTheme.colorScheme.onSurface,
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f),
+            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.72f),
+        )
+    }
+
+    Button(
+        onClick = onClick,
+        modifier = modifier,
+        enabled = enabled,
+        shape = RoundedCornerShape(14.dp),
+        colors = colors,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.42f)),
+        elevation = ButtonDefaults.buttonElevation(
+            defaultElevation = 5.dp,
+            pressedElevation = 1.dp,
+            disabledElevation = 0.dp,
+        ),
+        contentPadding = PaddingValues(horizontal = 14.dp, vertical = 10.dp),
+        content = content,
+    )
 }
 
 @Composable
 private fun SingleLineActionText(text: String) {
     Text(
         text = text,
-        style = MaterialTheme.typography.labelSmall,
+        style = MaterialTheme.typography.labelMedium,
         maxLines = 1,
         softWrap = false,
         overflow = TextOverflow.Ellipsis,
@@ -483,15 +618,19 @@ private fun SettingsPanel(
             singleLine = true,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onSave) {
+            MidasButton(onClick = onSave) {
                 SingleLineActionText("保存")
             }
-            Button(onClick = onTestConnection, enabled = !state.isTesting) {
+            MidasButton(
+                onClick = onTestConnection,
+                enabled = !state.isTesting,
+                tone = ButtonTone.NEUTRAL,
+            ) {
                 SingleLineActionText(if (state.isTesting) "测试中..." else "连接测试")
             }
         }
         if (state.saveStatus.isNotBlank()) {
-            Text(text = state.saveStatus, color = Color(0xFF2E7D32))
+            Text(text = state.saveStatus, color = SuccessStatusColor)
         }
         if (state.testStatus.isNotBlank()) {
             Text(text = state.testStatus)
@@ -500,7 +639,11 @@ private fun SettingsPanel(
         HorizontalDivider()
         Text("运行配置", style = MaterialTheme.typography.titleSmall)
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onResetConfig, enabled = !state.isConfigResetting) {
+            MidasButton(
+                onClick = onResetConfig,
+                enabled = !state.isConfigResetting,
+                tone = ButtonTone.NEUTRAL,
+            ) {
                 SingleLineActionText(if (state.isConfigResetting) "恢复中..." else "恢复默认")
             }
             if (state.isConfigSaving) {
@@ -518,7 +661,7 @@ private fun SettingsPanel(
         )
         if (state.configStatus.isNotBlank()) {
             val statusColor = if (state.configFieldErrors.isNotEmpty()) {
-                Color(0xFFC62828)
+                ErrorStatusColor
             } else {
                 MaterialTheme.colorScheme.onSurfaceVariant
             }
@@ -583,18 +726,18 @@ private fun ConfigFieldEditor(
         else -> "默认"
     }
     val indicatorColor = when {
-        hasError -> Color(0xFFC62828)
-        isCustomized -> Color(0xFF2E7D32)
+        hasError -> ErrorStatusColor
+        isCustomized -> SuccessStatusColor
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
     val containerColor = when {
-        hasError -> Color(0xFFFFEBEE)
-        isCustomized -> Color(0xFFF1F8E9)
+        hasError -> Color(0xFF4A1F2A)
+        isCustomized -> Color(0xFF1D3D2F)
         else -> MaterialTheme.colorScheme.surface
     }
     val borderColor = when {
-        hasError -> Color(0xFFEF5350)
-        isCustomized -> Color(0xFF66BB6A)
+        hasError -> ErrorStatusColor.copy(alpha = 0.85f)
+        isCustomized -> SuccessStatusColor.copy(alpha = 0.85f)
         else -> MaterialTheme.colorScheme.outline.copy(alpha = 0.45f)
     }
 
@@ -602,7 +745,10 @@ private fun ConfigFieldEditor(
         modifier = Modifier
             .fillMaxWidth()
             .padding(vertical = 4.dp),
-        colors = CardDefaults.cardColors(containerColor = containerColor),
+        colors = CardDefaults.cardColors(
+            containerColor = containerColor,
+            contentColor = MaterialTheme.colorScheme.onSurface,
+        ),
         border = BorderStroke(1.dp, borderColor),
     ) {
         Column(
@@ -629,7 +775,7 @@ private fun ConfigFieldEditor(
                 Text(
                     text = "默认值：${spec.defaultDisplayText()}",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFF2E7D32),
+                    color = SuccessStatusColor,
                 )
             }
 
@@ -682,7 +828,7 @@ private fun ConfigFieldEditor(
                 Text(
                     text = errorMessage ?: "字段格式错误。",
                     style = MaterialTheme.typography.bodySmall,
-                    color = Color(0xFFC62828),
+                    color = ErrorStatusColor,
                 )
             }
         }
@@ -817,12 +963,13 @@ private fun BilibiliPanel(
             singleLine = true,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onSubmit, enabled = !state.isLoading) {
+            MidasButton(onClick = onSubmit, enabled = !state.isLoading) {
                 SingleLineActionText(if (state.isLoading) "处理中..." else "开始总结")
             }
-            Button(
+            MidasButton(
                 onClick = onSaveNote,
                 enabled = !state.isSavingNote && state.result != null,
+                tone = ButtonTone.SUCCESS,
             ) {
                 SingleLineActionText(if (state.isSavingNote) "保存中..." else "保存总结")
             }
@@ -834,10 +981,10 @@ private fun BilibiliPanel(
             }
         }
         if (state.errorMessage.isNotBlank()) {
-            Text(text = state.errorMessage, color = Color(0xFFC62828))
+            Text(text = state.errorMessage, color = ErrorStatusColor)
         }
         if (state.saveStatus.isNotBlank()) {
-            Text(text = state.saveStatus, color = Color(0xFF2E7D32))
+            Text(text = state.saveStatus, color = SuccessStatusColor)
         }
         state.result?.let { result ->
             BilibiliResult(result)
@@ -848,7 +995,7 @@ private fun BilibiliPanel(
 @Composable
 private fun BilibiliResult(result: BilibiliSummaryData) {
     val elapsedSeconds = result.elapsedMs / 1000.0
-    Card(modifier = Modifier.fillMaxWidth()) {
+    GlassCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text("链接：${result.videoUrl}", style = MaterialTheme.typography.bodySmall)
             Text(
@@ -896,16 +1043,17 @@ private fun XiaohongshuPanel(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            Button(
+            MidasButton(
                 onClick = onSummarizeUrl,
                 enabled = !state.isSummarizingUrl,
                 modifier = Modifier.weight(1f),
             ) {
                 SingleLineActionText(if (state.isSummarizingUrl) "总结中..." else "总结单篇")
             }
-            Button(
+            MidasButton(
                 onClick = onRefreshAuthConfig,
                 enabled = !state.isRefreshingCaptureConfig,
+                tone = ButtonTone.NEUTRAL,
                 modifier = Modifier
                     .weight(1f)
                     .testTag("xhs_refresh_auth_button"),
@@ -925,16 +1073,16 @@ private fun XiaohongshuPanel(
         )
 
         if (state.errorMessage.isNotBlank()) {
-            Text(text = state.errorMessage, color = Color(0xFFC62828))
+            Text(text = state.errorMessage, color = ErrorStatusColor)
         }
         if (state.saveStatus.isNotBlank()) {
-            Text(text = state.saveStatus, color = Color(0xFF2E7D32))
+            Text(text = state.saveStatus, color = SuccessStatusColor)
         }
         if (state.captureRefreshStatus.isNotBlank()) {
-            Text(text = state.captureRefreshStatus, color = Color(0xFF2E7D32))
+            Text(text = state.captureRefreshStatus, color = SuccessStatusColor)
         }
         if (state.summarizeUrlStatus.isNotBlank()) {
-            Text(text = state.summarizeUrlStatus, color = Color(0xFF2E7D32))
+            Text(text = state.summarizeUrlStatus, color = SuccessStatusColor)
         }
 
         state.summaries.forEach { summary ->
@@ -955,7 +1103,7 @@ private fun XiaohongshuSummaryCard(
     isSaving: Boolean,
     isSaved: Boolean,
 ) {
-    Card(modifier = Modifier.fillMaxWidth()) {
+    GlassCard(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
@@ -966,9 +1114,10 @@ private fun XiaohongshuSummaryCard(
                     style = MaterialTheme.typography.titleSmall,
                     modifier = Modifier.weight(1f),
                 )
-                Button(
+                MidasButton(
                     onClick = onSave,
                     enabled = !isSaving && !isSaved,
+                    tone = ButtonTone.SUCCESS,
                     modifier = Modifier.testTag("xhs_save_single_${item.noteId}"),
                 ) {
                     SingleLineActionText(
@@ -989,6 +1138,72 @@ private fun XiaohongshuSummaryCard(
 }
 
 @Composable
+private fun FinanceSignalsPanel(
+    notes: NotesUiState,
+    bilibili: BilibiliUiState,
+    xiaohongshu: XiaohongshuUiState,
+    modifier: Modifier = Modifier,
+) {
+    val totalNotes = notes.bilibiliNotes.size + notes.xiaohongshuNotes.size
+    val recentCaptureCount = listOfNotNull(
+        bilibili.result?.videoUrl,
+        xiaohongshu.summaries.firstOrNull()?.noteId,
+    ).size
+
+    Column(
+        modifier = modifier.verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text("Finance Signals", style = MaterialTheme.typography.titleMedium)
+        Text(
+            text = "财经模块先落占位版，后续接入真实行情与个股跟踪。",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Workspace Snapshot", style = MaterialTheme.typography.titleSmall)
+                Text("当前笔记总数：$totalNotes", style = MaterialTheme.typography.bodyMedium)
+                Text("最近采集结果：$recentCaptureCount 条", style = MaterialTheme.typography.bodyMedium)
+                Text("待接入：实时指数、关注列表、日报推送。", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("Watchlist Preview", style = MaterialTheme.typography.titleSmall)
+                Text("AAPL  191.20  +0.72%", style = MaterialTheme.typography.bodySmall)
+                Text("MSFT  438.15  +0.36%", style = MaterialTheme.typography.bodySmall)
+                Text("TSLA  177.82  -0.94%", style = MaterialTheme.typography.bodySmall)
+                Text("NVDA  894.11  +1.44%", style = MaterialTheme.typography.bodySmall)
+            }
+        }
+
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("AI Insight (Placeholder)", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    text = "Risk sentiment is improving while yields remain elevated. " +
+                        "后续会把这段替换成真实行情与历史笔记融合总结。",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+@Suppress("UNUSED_PARAMETER")
 private fun NotesPanel(
     state: NotesUiState,
     onKeywordChange: (String) -> Unit,
@@ -1062,10 +1277,14 @@ private fun NotesPanel(
             singleLine = true,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onRefresh, enabled = !state.isLoading) {
+            MidasButton(
+                onClick = onRefresh,
+                enabled = !state.isLoading,
+                tone = ButtonTone.NEUTRAL,
+            ) {
                 SingleLineActionText(if (state.isLoading) "刷新中..." else "刷新笔记库")
             }
-            Button(
+            MidasButton(
                 onClick = onSuggestMergeCandidates,
                 enabled = !state.isMergeSuggesting && !state.isMergeCommitting,
             ) {
@@ -1074,13 +1293,13 @@ private fun NotesPanel(
         }
 
         if (state.errorMessage.isNotBlank()) {
-            Text(text = state.errorMessage, color = Color(0xFFC62828))
+            Text(text = state.errorMessage, color = ErrorStatusColor)
         }
         if (state.actionStatus.isNotBlank()) {
-            Text(text = state.actionStatus, color = Color(0xFF2E7D32))
+            Text(text = state.actionStatus, color = SuccessStatusColor)
         }
         if (state.mergeStatus.isNotBlank()) {
-            Text(text = state.mergeStatus, color = Color(0xFF2E7D32))
+            Text(text = state.mergeStatus, color = SuccessStatusColor)
         }
 
         if (state.mergeCandidates.isNotEmpty()) {
@@ -1090,7 +1309,7 @@ private fun NotesPanel(
                 fontWeight = FontWeight.SemiBold,
             )
             state.mergeCandidates.forEach { item ->
-                Card(modifier = Modifier.fillMaxWidth()) {
+                GlassCard(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1109,12 +1328,13 @@ private fun NotesPanel(
                                 style = MaterialTheme.typography.bodySmall,
                             )
                         }
-                        Button(
+                        MidasButton(
                             onClick = {
                                 selectedMergeCandidate = item
                                 onPreviewMergeCandidate(item)
                             },
                             enabled = !state.isMergePreviewLoading,
+                            tone = ButtonTone.NEUTRAL,
                         ) {
                             SingleLineActionText(if (state.isMergePreviewLoading) "预览中..." else "预览合并")
                         }
@@ -1168,7 +1388,7 @@ private fun MergePreviewPanel(
     onConfirmMerge: () -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Card(modifier = Modifier.fillMaxWidth()) {
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
@@ -1200,7 +1420,7 @@ private fun MergePreviewPanel(
                             Text(
                                 text = "冲突标记：${preview.conflictMarkers.joinToString("、")}",
                                 style = MaterialTheme.typography.bodySmall,
-                                color = Color(0xFFB26A00),
+                                color = WarningStatusColor,
                             )
                         }
                         MarkdownText(
@@ -1208,9 +1428,10 @@ private fun MergePreviewPanel(
                             modifier = Modifier.fillMaxWidth(),
                         )
                         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                            Button(
+                            MidasButton(
                                 onClick = onConfirmMerge,
                                 enabled = !isConfirmingMerge,
+                                tone = ButtonTone.SUCCESS,
                             ) {
                                 SingleLineActionText(
                                     if (isConfirmingMerge) "处理中..." else "确认合并并删除原笔记",
@@ -1237,7 +1458,7 @@ private fun SavedNoteListItem(
 ) {
     var menuExpanded by remember(title, savedAt) { mutableStateOf(false) }
 
-    Card(modifier = Modifier.fillMaxWidth()) {
+    GlassCard(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -1292,7 +1513,7 @@ private fun NoteDetailPanel(
     onOpenSourceUrl: (String) -> Unit,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        Card(modifier = Modifier.fillMaxWidth()) {
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
             when (detail) {
                 is NoteDetailViewState.Bilibili -> {
                     BilibiliNoteDetail(note = detail.note, onOpenSourceUrl = onOpenSourceUrl)
@@ -1319,7 +1540,7 @@ private fun BilibiliNoteDetail(
             Text(
                 "Merge Note · 来源请见正文末尾链接",
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF1565C0),
+                color = LinkStatusColor,
             )
         } else {
             Text(
@@ -1347,7 +1568,7 @@ private fun XiaohongshuNoteDetail(
             Text(
                 "Merge Note · 来源请见正文末尾链接",
                 style = MaterialTheme.typography.bodySmall,
-                color = Color(0xFF1565C0),
+                color = LinkStatusColor,
             )
         } else {
             Text(

@@ -107,19 +107,21 @@ class MainScreenContentSmokeTest {
             }
         }
 
+        composeRule.onNodeWithText("Signals").performClick()
+        composeRule.waitForIdle()
         composeRule.onNodeWithText("开始总结").performClick()
         composeRule.onNodeWithText("保存总结").performClick()
 
-        composeRule.onNodeWithText("小红书").performClick()
+        composeRule.onNodeWithText("Xiaohongshu").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithText("总结单篇").performClick()
         composeRule.onNodeWithTag("xhs_save_single_test-note-id", useUnmergedTree = true).performScrollTo().performClick()
 
-        composeRule.onNodeWithText("笔记库").performClick()
+        composeRule.onNodeWithText("Notes").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithText("刷新笔记库").performClick()
 
-        composeRule.onNodeWithText("设置").performClick()
+        composeRule.onNodeWithText("Settings").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithText("保存").performClick()
         composeRule.onNodeWithText("连接测试").performClick()

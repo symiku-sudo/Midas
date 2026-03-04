@@ -115,19 +115,21 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
+        composeRule.onNodeWithText("Signals").performClick()
+        composeRule.waitForIdle()
         composeRule.onNodeWithText("开始总结").performClick()
         composeRule.onNodeWithText("保存总结").performClick()
 
-        composeRule.onNodeWithText("小红书").performClick()
+        composeRule.onNodeWithText("Xiaohongshu").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithText("总结单篇").performClick()
         composeRule.onNodeWithTag("xhs_save_single_test-note-id", useUnmergedTree = true).performScrollTo().performClick()
 
-        composeRule.onNodeWithText("笔记库").performClick()
+        composeRule.onNodeWithText("Notes").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithText("刷新笔记库").performClick()
 
-        composeRule.onNodeWithText("设置").performClick()
+        composeRule.onNodeWithText("Settings").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithText("保存").performClick()
         composeRule.onNodeWithText("连接测试").performClick()
@@ -185,6 +187,8 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
+        composeRule.onNodeWithText("Signals").performClick()
+        composeRule.waitForIdle()
         composeRule.onNodeWithTag("bilibili_url_clear_button", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
 
@@ -232,7 +236,9 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("小红书").performClick()
+        composeRule.onNodeWithText("Signals").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("Xiaohongshu").performClick()
         composeRule.waitForIdle()
         composeRule.onNodeWithTag("xhs_url_clear_button", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
@@ -292,8 +298,6 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("笔记库").performClick()
-        composeRule.waitForIdle()
         composeRule.onNodeWithText("B站笔记（1/1）").assertIsDisplayed()
     }
 
@@ -349,8 +353,6 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("笔记库").performClick()
-        composeRule.waitForIdle()
         composeRule.onAllNodesWithText("合并笔记")[1].performClick()
 
         composeRule.onNodeWithText("Merge Note · 来源请见正文末尾链接").assertIsDisplayed()

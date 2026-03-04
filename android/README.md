@@ -2,6 +2,8 @@
 
 ## 功能
 
+- 双层导航：顶层 `Notes / Signals / Settings`；`Signals` 下提供 `Capture / Finance` 子导航
+- `Capture` 内提供 `Bilibili / Xiaohongshu` 双来源切换
 - 服务端地址设置（持久化）
 - 可编辑服务端运行配置：精简常用项、中文说明、布尔开关/下拉/文本输入与一键恢复默认
 - 连接测试（`/health`）
