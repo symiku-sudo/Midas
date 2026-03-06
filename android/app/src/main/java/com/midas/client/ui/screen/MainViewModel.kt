@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.util.Locale
 
 data class SettingsUiState(
     val baseUrlInput: String = "",
@@ -82,11 +83,48 @@ data class NotesUiState(
     val xiaohongshuNotes: List<XiaohongshuSavedNote> = emptyList(),
 )
 
+data class AssetCategoryDraft(
+    val key: String,
+    val label: String,
+    val amountInput: String = "",
+)
+
+private data class AssetCategorySpec(
+    val key: String,
+    val label: String,
+)
+
+private val assetCategorySpecs = listOf(
+    AssetCategorySpec(key = "bank_current_deposit", label = "银行活期存款"),
+    AssetCategorySpec(key = "bank_fixed_deposit", label = "银行定期存款"),
+    AssetCategorySpec(key = "money_market_fund", label = "货币基金"),
+    AssetCategorySpec(key = "bond_and_bond_fund", label = "债券/债券基金"),
+    AssetCategorySpec(key = "stock", label = "股票"),
+    AssetCategorySpec(key = "gold", label = "黄金"),
+    AssetCategorySpec(key = "equity_fund", label = "股票基金"),
+    AssetCategorySpec(key = "housing_fund", label = "公积金"),
+)
+
+private fun defaultAssetDrafts(): List<AssetCategoryDraft> {
+    return assetCategorySpecs.map { spec ->
+        AssetCategoryDraft(
+            key = spec.key,
+            label = spec.label,
+            amountInput = "",
+        )
+    }
+}
+
 data class FinanceSignalsUiState(
     val isLoading: Boolean = false,
     val updateTime: String = "",
     val watchlistPreview: List<FinanceWatchlistItem> = emptyList(),
     val aiInsightText: String = "",
+    val assetDrafts: List<AssetCategoryDraft> = defaultAssetDrafts(),
+    val assetTotalAmount: Double = 0.0,
+    val isSavingAssetStats: Boolean = false,
+    val assetErrorMessage: String = "",
+    val assetStatusMessage: String = "",
     val errorMessage: String = "",
     val statusMessage: String = "",
 )
@@ -115,6 +153,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var autoSaveConfigJob: Job? = null
 
     init {
+        loadLocalAssetStats()
         loadEditableConfig()
         loadSavedNotes()
         loadFinanceSignals()
@@ -123,6 +162,81 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     fun onAppForeground() {
         loadSavedNotes()
         loadFinanceSignals()
+    }
+
+    fun onAssetAmountInputChange(categoryKey: String, newValue: String) {
+        _financeState.update { state ->
+            val nextDrafts = state.assetDrafts.map { draft ->
+                if (draft.key == categoryKey) {
+                    draft.copy(amountInput = newValue)
+                } else {
+                    draft
+                }
+            }
+            state.copy(
+                assetDrafts = nextDrafts,
+                assetTotalAmount = computeAssetTotalAmount(nextDrafts),
+                assetErrorMessage = "",
+                assetStatusMessage = "",
+            )
+        }
+    }
+
+    fun saveAssetStats() {
+        val drafts = _financeState.value.assetDrafts
+        val invalidLabels = mutableListOf<String>()
+        val amounts = linkedMapOf<String, Double>()
+
+        drafts.forEach { draft ->
+            val raw = draft.amountInput.trim()
+            if (raw.isBlank()) {
+                return@forEach
+            }
+            val normalized = raw.replace(",", "")
+            val amount = normalized.toDoubleOrNull()
+            if (amount == null || !amount.isFinite() || amount < 0.0) {
+                invalidLabels += draft.label
+            } else {
+                amounts[draft.key] = amount
+            }
+        }
+
+        if (invalidLabels.isNotEmpty()) {
+            val fields = invalidLabels.joinToString("、")
+            _financeState.update {
+                it.copy(
+                    isSavingAssetStats = false,
+                    assetErrorMessage = "以下分类金额格式不正确：$fields",
+                    assetStatusMessage = "",
+                )
+            }
+            return
+        }
+
+        _financeState.update {
+            it.copy(
+                isSavingAssetStats = true,
+                assetErrorMessage = "",
+                assetStatusMessage = "",
+            )
+        }
+
+        settingsRepository.saveAssetCategoryAmounts(amounts)
+        val normalizedDrafts = buildAssetDrafts(amounts)
+        val total = amounts.values.sum()
+        _financeState.update {
+            it.copy(
+                isSavingAssetStats = false,
+                assetDrafts = normalizedDrafts,
+                assetTotalAmount = total,
+                assetErrorMessage = "",
+                assetStatusMessage = if (amounts.isEmpty()) {
+                    "已清空资产统计。"
+                } else {
+                    "已保存资产统计：${amounts.size} 类，合计 ${formatAmountCny(total)}。"
+                },
+            )
+        }
     }
 
     fun onBaseUrlInputChange(newValue: String) {
@@ -1172,6 +1286,53 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    private fun loadLocalAssetStats() {
+        val amounts = settingsRepository.getAssetCategoryAmounts()
+        val drafts = buildAssetDrafts(amounts)
+        _financeState.update {
+            it.copy(
+                assetDrafts = drafts,
+                assetTotalAmount = computeAssetTotalAmount(drafts),
+                assetErrorMessage = "",
+                assetStatusMessage = "",
+            )
+        }
+    }
+
+    private fun buildAssetDrafts(amounts: Map<String, Double>): List<AssetCategoryDraft> {
+        return assetCategorySpecs.map { spec ->
+            val value = amounts[spec.key]
+            AssetCategoryDraft(
+                key = spec.key,
+                label = spec.label,
+                amountInput = if (value != null) formatAmountInput(value) else "",
+            )
+        }
+    }
+
+    private fun computeAssetTotalAmount(drafts: List<AssetCategoryDraft>): Double {
+        return drafts.sumOf { draft ->
+            val value = draft.amountInput.trim().replace(",", "")
+            val amount = value.toDoubleOrNull()
+            if (amount != null && amount.isFinite() && amount >= 0.0) {
+                amount
+            } else {
+                0.0
+            }
+        }
+    }
+
+    private fun formatAmountInput(amount: Double): String {
+        if (amount == amount.toLong().toDouble()) {
+            return amount.toLong().toString()
+        }
+        return "%.2f".format(Locale.US, amount).trimEnd('0').trimEnd('.')
+    }
+
+    private fun formatAmountCny(amount: Double): String {
+        return "¥${"%,.2f".format(Locale.US, amount)}"
     }
 
     fun loadSavedNotes() {

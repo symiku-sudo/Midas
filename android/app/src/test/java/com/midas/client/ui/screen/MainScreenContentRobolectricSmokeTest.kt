@@ -11,6 +11,7 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.text.TextLayoutResult
 import com.midas.client.data.model.BilibiliSavedNote
@@ -152,7 +153,7 @@ class MainScreenContentRobolectricSmokeTest {
     }
 
     @Test
-    fun workspaceDropdown_switchToFinance_shouldShowFinancePanelAndTriggerRefresh() {
+    fun workspaceDropdown_switchToAsset_shouldShowAssetPanelAndTriggerRefresh() {
         var financeRefreshClicks = 0
 
         composeRule.setContent {
@@ -194,15 +195,77 @@ class MainScreenContentRobolectricSmokeTest {
         }
 
         composeRule.onNodeWithText("笔记系统").performClick()
-        composeRule.onNodeWithText("财经系统").performClick()
+        composeRule.onNodeWithText("资产系统").performClick()
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithText("Finance Signals").assertIsDisplayed()
-        composeRule.onNodeWithText("Watchlist Preview").assertIsDisplayed()
-        composeRule.onNodeWithText("RSS Insight").assertIsDisplayed()
+        composeRule.onAllNodesWithText("资产统计").assertCountEquals(1)
+        composeRule.onAllNodesWithText("Watchlist Preview").assertCountEquals(1)
+        composeRule.onAllNodesWithText("RSS Insight").assertCountEquals(1)
         composeRule.onAllNodesWithText("Notes").assertCountEquals(0)
 
         assertEquals(1, financeRefreshClicks)
+    }
+
+    @Test
+    fun assetPanel_reportAmount_shouldTriggerCallbacks() {
+        var saveClicks = 0
+        var amountChangeCalls = 0
+        var latestChangedKey = ""
+
+        composeRule.setContent {
+            MaterialTheme {
+                MainScreenContent(
+                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
+                    bilibili = BilibiliUiState(),
+                    xiaohongshu = XiaohongshuUiState(),
+                    notes = NotesUiState(),
+                    onAppForeground = {},
+                    onBaseUrlChange = {},
+                    onSaveBaseUrl = {},
+                    onTestConnection = {},
+                    onConfigTextChange = { _, _ -> },
+                    onConfigBooleanChange = { _, _ -> },
+                    onResetConfig = {},
+                    onBilibiliVideoUrlChange = {},
+                    onSubmitBilibiliSummary = {},
+                    onSaveBilibiliNote = {},
+                    onXiaohongshuUrlChange = {},
+                    onSummarizeXiaohongshuUrl = {},
+                    onRefreshXiaohongshuAuthConfig = {},
+                    onSaveSingleXiaohongshuNote = {},
+                    onNotesKeywordChange = {},
+                    onRefreshNotes = {},
+                    onDeleteBilibiliNote = {},
+                    onDeleteXiaohongshuNote = {},
+                    onSuggestMergeCandidates = {},
+                    onPreviewMergeCandidate = { _ -> },
+                    onCommitCurrentMerge = {},
+                    onRollbackLastMerge = {},
+                    onFinalizeLastMerge = {},
+                    onAssetAmountChange = { key, _ ->
+                        amountChangeCalls += 1
+                        latestChangedKey = key
+                    },
+                    onSaveAssetStats = { saveClicks += 1 },
+                    enableLifecycleAutoRefresh = false,
+                    enableCyclicTabs = false,
+                    animateTabSwitch = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("笔记系统").performClick()
+        composeRule.onNodeWithText("资产系统").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("asset_amount_bank_current_deposit", useUnmergedTree = true)
+            .performTextInput("1")
+        composeRule.onNodeWithText("保存资产统计").performScrollTo().performClick()
+        composeRule.waitForIdle()
+
+        assertTrue(amountChangeCalls > 0)
+        assertEquals("bank_current_deposit", latestChangedKey)
+        assertEquals(1, saveClicks)
     }
 
     @Test

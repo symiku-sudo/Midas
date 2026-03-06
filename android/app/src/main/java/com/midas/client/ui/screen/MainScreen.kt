@@ -67,6 +67,7 @@ import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.ui.components.MarkdownText
 import com.midas.client.util.ConfigFieldType
 import com.midas.client.util.EditableConfigField
+import java.util.Locale
 
 private enum class MainTab(val title: String) {
     NOTES("Notes"),
@@ -76,7 +77,7 @@ private enum class MainTab(val title: String) {
 
 private enum class WorkspaceSection(val title: String) {
     NOTES("笔记系统"),
-    FINANCE("财经系统"),
+    FINANCE("资产系统"),
 }
 
 private enum class CaptureSourceTab(val title: String) {
@@ -293,6 +294,8 @@ fun MainScreen(viewModel: MainViewModel) {
         onRollbackLastMerge = viewModel::rollbackLastMerge,
         onFinalizeLastMerge = viewModel::finalizeLastMerge,
         onRefreshFinanceSignals = viewModel::loadFinanceSignals,
+        onAssetAmountChange = viewModel::onAssetAmountInputChange,
+        onSaveAssetStats = viewModel::saveAssetStats,
     )
 }
 
@@ -328,6 +331,8 @@ fun MainScreenContent(
     onRollbackLastMerge: () -> Unit,
     onFinalizeLastMerge: () -> Unit,
     onRefreshFinanceSignals: () -> Unit = {},
+    onAssetAmountChange: (String, String) -> Unit = { _, _ -> },
+    onSaveAssetStats: () -> Unit = {},
     enableLifecycleAutoRefresh: Boolean = true,
     enableCyclicTabs: Boolean = true,
     animateTabSwitch: Boolean = true,
@@ -449,6 +454,8 @@ fun MainScreenContent(
                 FinanceSignalsPanel(
                     state = finance,
                     onRefresh = onRefreshFinanceSignals,
+                    onAssetAmountChange = onAssetAmountChange,
+                    onSaveAssetStats = onSaveAssetStats,
                     modifier = contentModifier,
                 )
             } else {
@@ -1169,13 +1176,15 @@ private fun XiaohongshuSummaryCard(
 private fun FinanceSignalsPanel(
     state: FinanceSignalsUiState,
     onRefresh: () -> Unit,
+    onAssetAmountChange: (String, String) -> Unit,
+    onSaveAssetStats: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("Finance Signals", style = MaterialTheme.typography.titleMedium)
+        Text("资产系统", style = MaterialTheme.typography.titleMedium)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -1195,6 +1204,52 @@ private fun FinanceSignalsPanel(
                 tone = ButtonTone.NEUTRAL,
             ) {
                 SingleLineActionText(if (state.isLoading) "刷新中..." else "刷新")
+            }
+        }
+
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("资产统计", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    "按分类上报资产金额（单位：元）。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    "资产合计：${formatAmountCny(state.assetTotalAmount)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                state.assetDrafts.forEach { draft ->
+                    OutlinedTextField(
+                        value = draft.amountInput,
+                        onValueChange = { value ->
+                            onAssetAmountChange(draft.key, value)
+                        },
+                        label = { Text(draft.label) },
+                        placeholder = { Text("例如：120000") },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("asset_amount_${draft.key}"),
+                        singleLine = true,
+                    )
+                }
+                MidasButton(
+                    onClick = onSaveAssetStats,
+                    enabled = !state.isSavingAssetStats,
+                    tone = ButtonTone.SUCCESS,
+                ) {
+                    SingleLineActionText(if (state.isSavingAssetStats) "保存中..." else "保存资产统计")
+                }
+                if (state.assetErrorMessage.isNotBlank()) {
+                    Text(text = state.assetErrorMessage, color = ErrorStatusColor)
+                }
+                if (state.assetStatusMessage.isNotBlank()) {
+                    Text(text = state.assetStatusMessage, color = SuccessStatusColor)
+                }
             }
         }
 
@@ -1243,6 +1298,10 @@ private fun FinanceSignalsPanel(
             Text(text = state.statusMessage, color = SuccessStatusColor)
         }
     }
+}
+
+private fun formatAmountCny(amount: Double): String {
+    return "¥${"%,.2f".format(Locale.US, amount)}"
 }
 
 @Composable

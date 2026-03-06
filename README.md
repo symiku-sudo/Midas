@@ -16,7 +16,7 @@
   - 连接测试
   - B 站总结请求与 Markdown 展示
   - 小红书按 URL 单篇总结与结果展示
-  - Finance Signals 面板（Watchlist Preview + RSS Insight）实时读取服务端状态
+  - 资产系统面板（资产统计 + Watchlist Preview + RSS Insight）
   - 笔记库智能合并（候选、预览、回退、确认破坏性收尾）
 
 ## 目录
@@ -115,6 +115,7 @@ tools/release.sh
 ## 说明
 
 - 当前小红书能力为“按 URL 总结单篇”。
+- Android 端左上角可切换“笔记系统 / 资产系统”；资产系统支持本地资产分类上报与汇总（银行活期存款、银行定期存款、货币基金、债券/债券基金、股票、黄金、股票基金、公积金）。
 - B站/小红书新生成摘要会额外附带“评论区洞察（含点赞权重）”章节（best-effort）。
 - 每次新增已保存笔记（B站/小红书）后，服务端会自动备份一次数据库（位于 `server/.tmp/backups/`）。
 - Android 端可通过内置 WebView 登录并上传 Cookie/UA 到服务端（`/api/xiaohongshu/auth/update`），减少手工 HAR/cURL 更新频率。
