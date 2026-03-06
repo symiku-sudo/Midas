@@ -120,10 +120,15 @@ else
 fi
 
 SRC_APK=""
+SRC_MTIME=0
 for candidate in "${candidate_apks[@]}"; do
-  if [[ -f "$candidate" ]]; then
+  if [[ ! -f "$candidate" ]]; then
+    continue
+  fi
+  candidate_mtime="$(stat -c %Y "$candidate" 2>/dev/null || echo 0)"
+  if [[ -z "$SRC_APK" || "$candidate_mtime" -gt "$SRC_MTIME" ]]; then
     SRC_APK="$candidate"
-    break
+    SRC_MTIME="$candidate_mtime"
   fi
 done
 
@@ -133,6 +138,15 @@ if [[ -z "$SRC_APK" ]]; then
     echo "  - $candidate"
   done
   exit 1
+fi
+
+if [[ "$SKIP_BUILD" == "1" && "$SRC_MTIME" -gt 0 ]]; then
+  now_ts="$(date +%s)"
+  age_seconds="$((now_ts - SRC_MTIME))"
+  if [[ "$age_seconds" -gt 3600 ]]; then
+    echo "[export_apk] warning: selected APK is older than 1 hour (age=${age_seconds}s)."
+    echo "[export_apk] warning: consider removing --skip-build to force a fresh build."
+  fi
 fi
 
 SIGNED_TMP_APK=""
