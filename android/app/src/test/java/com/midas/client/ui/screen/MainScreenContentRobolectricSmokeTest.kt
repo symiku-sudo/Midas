@@ -152,6 +152,60 @@ class MainScreenContentRobolectricSmokeTest {
     }
 
     @Test
+    fun workspaceDropdown_switchToFinance_shouldShowFinancePanelAndTriggerRefresh() {
+        var financeRefreshClicks = 0
+
+        composeRule.setContent {
+            MaterialTheme {
+                MainScreenContent(
+                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
+                    bilibili = BilibiliUiState(),
+                    xiaohongshu = XiaohongshuUiState(),
+                    notes = NotesUiState(),
+                    onAppForeground = {},
+                    onBaseUrlChange = {},
+                    onSaveBaseUrl = {},
+                    onTestConnection = {},
+                    onConfigTextChange = { _, _ -> },
+                    onConfigBooleanChange = { _, _ -> },
+                    onResetConfig = {},
+                    onBilibiliVideoUrlChange = {},
+                    onSubmitBilibiliSummary = {},
+                    onSaveBilibiliNote = {},
+                    onXiaohongshuUrlChange = {},
+                    onSummarizeXiaohongshuUrl = {},
+                    onRefreshXiaohongshuAuthConfig = {},
+                    onSaveSingleXiaohongshuNote = {},
+                    onNotesKeywordChange = {},
+                    onRefreshNotes = {},
+                    onDeleteBilibiliNote = {},
+                    onDeleteXiaohongshuNote = {},
+                    onSuggestMergeCandidates = {},
+                    onPreviewMergeCandidate = { _ -> },
+                    onCommitCurrentMerge = {},
+                    onRollbackLastMerge = {},
+                    onFinalizeLastMerge = {},
+                    onRefreshFinanceSignals = { financeRefreshClicks += 1 },
+                    enableLifecycleAutoRefresh = false,
+                    enableCyclicTabs = false,
+                    animateTabSwitch = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("笔记系统").performClick()
+        composeRule.onNodeWithText("财经系统").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("Finance Signals").assertIsDisplayed()
+        composeRule.onNodeWithText("Watchlist Preview").assertIsDisplayed()
+        composeRule.onNodeWithText("RSS Insight").assertIsDisplayed()
+        composeRule.onAllNodesWithText("Notes").assertCountEquals(0)
+
+        assertEquals(1, financeRefreshClicks)
+    }
+
+    @Test
     fun bilibiliInput_clearButton_shouldTriggerEmptyCallback() {
         var latestVideoInput = "BV1xx411c7mD"
 

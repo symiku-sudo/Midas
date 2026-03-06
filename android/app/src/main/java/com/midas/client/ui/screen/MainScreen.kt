@@ -74,9 +74,9 @@ private enum class MainTab(val title: String) {
     SETTINGS("Settings"),
 }
 
-private enum class SignalsTab(val title: String) {
-    CAPTURE("Capture"),
-    FINANCE("Finance"),
+private enum class WorkspaceSection(val title: String) {
+    NOTES("笔记系统"),
+    FINANCE("财经系统"),
 }
 
 private enum class CaptureSourceTab(val title: String) {
@@ -333,8 +333,9 @@ fun MainScreenContent(
     animateTabSwitch: Boolean = true,
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
+    var selectedWorkspace by remember { mutableStateOf(WorkspaceSection.NOTES) }
+    var workspaceMenuExpanded by remember { mutableStateOf(false) }
     var selectedMainTab by remember { mutableStateOf(MainTab.NOTES) }
-    var selectedSignalsTab by remember { mutableStateOf(SignalsTab.CAPTURE) }
     var selectedCaptureSourceTab by remember { mutableStateOf(CaptureSourceTab.BILIBILI) }
 
     DisposableEffect(lifecycleOwner) {
@@ -395,18 +396,38 @@ fun MainScreenContent(
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    GlassTabBar(
-                        selectedTabIndex = selectedMainTab.ordinal,
-                        labels = MainTab.entries.map { it.title },
-                        onSelect = { index -> selectedMainTab = MainTab.entries[index] },
-                    )
-                    if (selectedMainTab == MainTab.SIGNALS) {
+                    Box {
+                        MidasButton(
+                            onClick = { workspaceMenuExpanded = true },
+                            tone = ButtonTone.NEUTRAL,
+                        ) {
+                            SingleLineActionText(selectedWorkspace.title)
+                        }
+                        DropdownMenu(
+                            expanded = workspaceMenuExpanded,
+                            onDismissRequest = { workspaceMenuExpanded = false },
+                        ) {
+                            WorkspaceSection.entries.forEach { section ->
+                                DropdownMenuItem(
+                                    text = { Text(section.title) },
+                                    onClick = {
+                                        workspaceMenuExpanded = false
+                                        selectedWorkspace = section
+                                        if (section == WorkspaceSection.FINANCE) {
+                                            onRefreshFinanceSignals()
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                    if (selectedWorkspace == WorkspaceSection.NOTES) {
                         GlassTabBar(
-                            selectedTabIndex = selectedSignalsTab.ordinal,
-                            labels = SignalsTab.entries.map { it.title },
-                            onSelect = { index -> selectedSignalsTab = SignalsTab.entries[index] },
+                            selectedTabIndex = selectedMainTab.ordinal,
+                            labels = MainTab.entries.map { it.title },
+                            onSelect = { index -> selectedMainTab = MainTab.entries[index] },
                         )
-                        if (selectedSignalsTab == SignalsTab.CAPTURE) {
+                        if (selectedMainTab == MainTab.SIGNALS) {
                             GlassTabBar(
                                 selectedTabIndex = selectedCaptureSourceTab.ordinal,
                                 labels = CaptureSourceTab.entries.map { it.title },
@@ -424,58 +445,60 @@ fun MainScreenContent(
                 .padding(innerPadding)
                 .padding(16.dp)
 
-            when {
-                selectedMainTab == MainTab.SETTINGS -> SettingsPanel(
-                    state = settings,
-                    onBaseUrlChange = onBaseUrlChange,
-                    onSave = onSaveBaseUrl,
-                    onTestConnection = onTestConnection,
-                    onConfigTextChange = onConfigTextChange,
-                    onConfigBooleanChange = onConfigBooleanChange,
-                    onResetConfig = onResetConfig,
-                    modifier = contentModifier,
-                )
-
-                selectedMainTab == MainTab.NOTES -> NotesPanel(
-                    state = notes,
-                    onKeywordChange = onNotesKeywordChange,
-                    onRefresh = onRefreshNotes,
-                    onDeleteBilibili = onDeleteBilibiliNote,
-                    onDeleteXiaohongshu = onDeleteXiaohongshuNote,
-                    onSuggestMergeCandidates = onSuggestMergeCandidates,
-                    onPreviewMergeCandidate = onPreviewMergeCandidate,
-                    onCommitCurrentMerge = onCommitCurrentMerge,
-                    onRollbackLastMerge = onRollbackLastMerge,
-                    onFinalizeLastMerge = onFinalizeLastMerge,
-                    modifier = contentModifier,
-                )
-
-                selectedSignalsTab == SignalsTab.CAPTURE && selectedCaptureSourceTab == CaptureSourceTab.BILIBILI -> {
-                    BilibiliPanel(
-                        state = bilibili,
-                        onVideoUrlChange = onBilibiliVideoUrlChange,
-                        onSubmit = onSubmitBilibiliSummary,
-                        onSaveNote = onSaveBilibiliNote,
-                        modifier = contentModifier,
-                    )
-                }
-
-                selectedSignalsTab == SignalsTab.CAPTURE && selectedCaptureSourceTab == CaptureSourceTab.XHS -> {
-                    XiaohongshuPanel(
-                        state = xiaohongshu,
-                        onUrlChange = onXiaohongshuUrlChange,
-                        onSummarizeUrl = onSummarizeXiaohongshuUrl,
-                        onRefreshAuthConfig = onRefreshXiaohongshuAuthConfig,
-                        onSaveSingleNote = onSaveSingleXiaohongshuNote,
-                        modifier = contentModifier,
-                    )
-                }
-
-                else -> FinanceSignalsPanel(
+            if (selectedWorkspace == WorkspaceSection.FINANCE) {
+                FinanceSignalsPanel(
                     state = finance,
                     onRefresh = onRefreshFinanceSignals,
                     modifier = contentModifier,
                 )
+            } else {
+                when {
+                    selectedMainTab == MainTab.SETTINGS -> SettingsPanel(
+                        state = settings,
+                        onBaseUrlChange = onBaseUrlChange,
+                        onSave = onSaveBaseUrl,
+                        onTestConnection = onTestConnection,
+                        onConfigTextChange = onConfigTextChange,
+                        onConfigBooleanChange = onConfigBooleanChange,
+                        onResetConfig = onResetConfig,
+                        modifier = contentModifier,
+                    )
+
+                    selectedMainTab == MainTab.NOTES -> NotesPanel(
+                        state = notes,
+                        onKeywordChange = onNotesKeywordChange,
+                        onRefresh = onRefreshNotes,
+                        onDeleteBilibili = onDeleteBilibiliNote,
+                        onDeleteXiaohongshu = onDeleteXiaohongshuNote,
+                        onSuggestMergeCandidates = onSuggestMergeCandidates,
+                        onPreviewMergeCandidate = onPreviewMergeCandidate,
+                        onCommitCurrentMerge = onCommitCurrentMerge,
+                        onRollbackLastMerge = onRollbackLastMerge,
+                        onFinalizeLastMerge = onFinalizeLastMerge,
+                        modifier = contentModifier,
+                    )
+
+                    selectedCaptureSourceTab == CaptureSourceTab.BILIBILI -> {
+                        BilibiliPanel(
+                            state = bilibili,
+                            onVideoUrlChange = onBilibiliVideoUrlChange,
+                            onSubmit = onSubmitBilibiliSummary,
+                            onSaveNote = onSaveBilibiliNote,
+                            modifier = contentModifier,
+                        )
+                    }
+
+                    else -> {
+                        XiaohongshuPanel(
+                            state = xiaohongshu,
+                            onUrlChange = onXiaohongshuUrlChange,
+                            onSummarizeUrl = onSummarizeXiaohongshuUrl,
+                            onRefreshAuthConfig = onRefreshXiaohongshuAuthConfig,
+                            onSaveSingleNote = onSaveSingleXiaohongshuNote,
+                            modifier = contentModifier,
+                        )
+                    }
+                }
             }
         }
     }
