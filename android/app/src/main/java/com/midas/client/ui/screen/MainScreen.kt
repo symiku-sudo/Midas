@@ -1,5 +1,7 @@
 package com.midas.client.ui.screen
 
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.net.Uri
 import android.content.Intent
 import androidx.activity.compose.BackHandler
@@ -301,6 +303,8 @@ fun MainScreen(viewModel: MainViewModel) {
         onRefreshFinanceSignals = viewModel::loadFinanceSignals,
         onAssetAmountChange = viewModel::onAssetAmountInputChange,
         onSaveAssetStats = viewModel::saveAssetStats,
+        onDeleteAssetHistoryRecord = viewModel::deleteAssetHistoryRecord,
+        onAssetSummaryCopied = viewModel::markAssetSummaryCopied,
     )
 }
 
@@ -338,6 +342,8 @@ fun MainScreenContent(
     onRefreshFinanceSignals: () -> Unit = {},
     onAssetAmountChange: (String, String) -> Unit = { _, _ -> },
     onSaveAssetStats: () -> Unit = {},
+    onDeleteAssetHistoryRecord: (String) -> Unit = {},
+    onAssetSummaryCopied: () -> Unit = {},
     enableLifecycleAutoRefresh: Boolean = true,
     enableCyclicTabs: Boolean = true,
     animateTabSwitch: Boolean = true,
@@ -461,6 +467,8 @@ fun MainScreenContent(
                     onRefresh = onRefreshFinanceSignals,
                     onAssetAmountChange = onAssetAmountChange,
                     onSaveAssetStats = onSaveAssetStats,
+                    onDeleteAssetHistoryRecord = onDeleteAssetHistoryRecord,
+                    onAssetSummaryCopied = onAssetSummaryCopied,
                     modifier = contentModifier,
                 )
             } else {
@@ -1183,6 +1191,8 @@ private fun FinanceSignalsPanel(
     onRefresh: () -> Unit,
     onAssetAmountChange: (String, String) -> Unit,
     onSaveAssetStats: () -> Unit,
+    onDeleteAssetHistoryRecord: (String) -> Unit,
+    onAssetSummaryCopied: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var selectedAssetTab by remember { mutableStateOf(AssetPanelTab.MARKET) }
@@ -1263,6 +1273,8 @@ private fun FinanceSignalsPanel(
                 state = state,
                 onAssetAmountChange = onAssetAmountChange,
                 onSaveAssetStats = onSaveAssetStats,
+                onDeleteAssetHistoryRecord = onDeleteAssetHistoryRecord,
+                onAssetSummaryCopied = onAssetSummaryCopied,
             )
         }
 
@@ -1275,8 +1287,8 @@ private fun FinanceSignalsPanel(
     }
 }
 
-private fun formatAmountCny(amount: Double): String {
-    return "¥${"%,.2f".format(Locale.US, amount)}"
+private fun formatAmountWanRmb(amount: Double): String {
+    return "${"%.2f".format(Locale.US, amount)} 万元人民币"
 }
 
 @Composable
@@ -1284,7 +1296,25 @@ private fun AssetStatsCard(
     state: FinanceSignalsUiState,
     onAssetAmountChange: (String, String) -> Unit,
     onSaveAssetStats: () -> Unit,
+    onDeleteAssetHistoryRecord: (String) -> Unit,
+    onAssetSummaryCopied: () -> Unit,
 ) {
+    val context = LocalContext.current
+    var selectedHistoryId by remember { mutableStateOf<String?>(null) }
+    val selectedHistory = state.assetHistory.firstOrNull { it.id == selectedHistoryId }
+    BackHandler(enabled = selectedHistoryId != null) {
+        selectedHistoryId = null
+    }
+
+    if (selectedHistory != null) {
+        AssetHistoryDetailPanel(
+            record = selectedHistory,
+            drafts = state.assetDrafts,
+            onBack = { selectedHistoryId = null },
+        )
+        return
+    }
+
     GlassCard(modifier = Modifier.fillMaxWidth()) {
         Column(
             modifier = Modifier.padding(12.dp),
@@ -1292,12 +1322,12 @@ private fun AssetStatsCard(
         ) {
             Text("资产分类录入", style = MaterialTheme.typography.titleSmall)
             Text(
-                "按分类上报资产金额（单位：元）。",
+                "按风险从高到低排序，单位：万元人民币。",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
             Text(
-                "资产合计：${formatAmountCny(state.assetTotalAmount)}",
+                "资产合计：${formatAmountWanRmb(state.assetTotalAmount)}",
                 style = MaterialTheme.typography.bodySmall,
                 fontWeight = FontWeight.SemiBold,
             )
@@ -1308,25 +1338,156 @@ private fun AssetStatsCard(
                         onAssetAmountChange(draft.key, value)
                     },
                     label = { Text(draft.label) },
-                    placeholder = { Text("例如：120000") },
+                    placeholder = { Text("例如：12.50（万元）") },
                     modifier = Modifier
                         .fillMaxWidth()
                         .testTag("asset_amount_${draft.key}"),
                     singleLine = true,
                 )
             }
-            MidasButton(
-                onClick = onSaveAssetStats,
-                enabled = !state.isSavingAssetStats,
-                tone = ButtonTone.SUCCESS,
-            ) {
-                SingleLineActionText(if (state.isSavingAssetStats) "保存中..." else "保存资产统计")
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                MidasButton(
+                    onClick = onSaveAssetStats,
+                    enabled = !state.isSavingAssetStats,
+                    tone = ButtonTone.SUCCESS,
+                ) {
+                    SingleLineActionText(if (state.isSavingAssetStats) "保存中..." else "保存资产统计")
+                }
+                MidasButton(
+                    onClick = {
+                        val text = buildAssetSummaryText(state)
+                        val clipboard = context.getSystemService(ClipboardManager::class.java)
+                        clipboard?.setPrimaryClip(ClipData.newPlainText("asset_summary", text))
+                        onAssetSummaryCopied()
+                    },
+                    tone = ButtonTone.NEUTRAL,
+                ) {
+                    SingleLineActionText("复制资产情况")
+                }
             }
             if (state.assetErrorMessage.isNotBlank()) {
                 Text(text = state.assetErrorMessage, color = ErrorStatusColor)
             }
             if (state.assetStatusMessage.isNotBlank()) {
                 Text(text = state.assetStatusMessage, color = SuccessStatusColor)
+            }
+
+            HorizontalDivider()
+            Text("历史记录（近到远）", style = MaterialTheme.typography.titleSmall)
+            if (state.assetHistory.isEmpty()) {
+                Text("暂无历史记录。", style = MaterialTheme.typography.bodySmall)
+            } else {
+                state.assetHistory.forEach { record ->
+                    AssetHistoryListItem(
+                        record = record,
+                        onOpen = { selectedHistoryId = record.id },
+                        onDelete = { onDeleteAssetHistoryRecord(record.id) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun buildAssetSummaryText(state: FinanceSignalsUiState): String {
+    val lines = mutableListOf<String>()
+    lines += "资产情况（单位：万元人民币）"
+    var nonZeroCount = 0
+    state.assetDrafts.forEach { draft ->
+        val amount = draft.amountInput.trim().replace(",", "").toDoubleOrNull() ?: 0.0
+        if (amount > 0.0) {
+            lines += "${draft.label}：${formatAmountWanRmb(amount)}"
+            nonZeroCount += 1
+        }
+    }
+    if (nonZeroCount == 0) {
+        lines += "暂无已填资产。"
+    }
+    lines += "总资产：${formatAmountWanRmb(state.assetTotalAmount)}"
+    return lines.joinToString("\n")
+}
+
+@Composable
+private fun AssetHistoryListItem(
+    record: AssetHistoryRecord,
+    onOpen: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var menuExpanded by remember(record.id) { mutableStateOf(false) }
+    GlassCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("asset_history_open_${record.id}")
+            .clickable(onClick = onOpen),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text("保存时间：${record.savedAt}", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "总资产：${formatAmountWanRmb(record.totalAmountWan)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Box {
+                IconButton(
+                    onClick = { menuExpanded = true },
+                    modifier = Modifier.testTag("asset_history_menu_${record.id}"),
+                ) {
+                    Text("⋮")
+                }
+                DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("删除记录") },
+                        onClick = {
+                            menuExpanded = false
+                            onDelete()
+                        },
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AssetHistoryDetailPanel(
+    record: AssetHistoryRecord,
+    drafts: List<AssetCategoryDraft>,
+    onBack: () -> Unit,
+) {
+    GlassCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("历史记录详情", style = MaterialTheme.typography.titleSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                MidasButton(onClick = onBack, tone = ButtonTone.NEUTRAL) {
+                    SingleLineActionText("返回列表")
+                }
+            }
+            Text("保存时间：${record.savedAt}", style = MaterialTheme.typography.bodySmall)
+            Text(
+                "总资产：${formatAmountWanRmb(record.totalAmountWan)}",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            HorizontalDivider()
+            drafts.forEach { draft ->
+                val amount = record.amounts[draft.key] ?: 0.0
+                Text("${draft.label}：${formatAmountWanRmb(amount)}", style = MaterialTheme.typography.bodySmall)
             }
         }
     }

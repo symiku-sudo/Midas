@@ -273,6 +273,85 @@ class MainScreenContentRobolectricSmokeTest {
     }
 
     @Test
+    fun assetPanel_copyAndHistory_shouldTriggerCallbacks() {
+        val historyId = "history-1"
+        var copyClicks = 0
+        var deletedHistoryId = ""
+
+        composeRule.setContent {
+            MaterialTheme {
+                MainScreenContent(
+                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
+                    bilibili = BilibiliUiState(),
+                    xiaohongshu = XiaohongshuUiState(),
+                    notes = NotesUiState(),
+                    finance = FinanceSignalsUiState(
+                        assetDrafts = listOf(
+                            AssetCategoryDraft(key = "stock", label = "股票", amountInput = "10"),
+                            AssetCategoryDraft(key = "bank_current_deposit", label = "银行活期存款", amountInput = "2"),
+                        ),
+                        assetTotalAmount = 12.0,
+                        assetHistory = listOf(
+                            AssetHistoryRecord(
+                                id = historyId,
+                                savedAt = "2026-03-06 18:00:00",
+                                totalAmountWan = 12.0,
+                                amounts = mapOf(
+                                    "stock" to 10.0,
+                                    "bank_current_deposit" to 2.0,
+                                ),
+                            ),
+                        ),
+                    ),
+                    onAppForeground = {},
+                    onBaseUrlChange = {},
+                    onSaveBaseUrl = {},
+                    onTestConnection = {},
+                    onConfigTextChange = { _, _ -> },
+                    onConfigBooleanChange = { _, _ -> },
+                    onResetConfig = {},
+                    onBilibiliVideoUrlChange = {},
+                    onSubmitBilibiliSummary = {},
+                    onSaveBilibiliNote = {},
+                    onXiaohongshuUrlChange = {},
+                    onSummarizeXiaohongshuUrl = {},
+                    onRefreshXiaohongshuAuthConfig = {},
+                    onSaveSingleXiaohongshuNote = {},
+                    onNotesKeywordChange = {},
+                    onRefreshNotes = {},
+                    onDeleteBilibiliNote = {},
+                    onDeleteXiaohongshuNote = {},
+                    onSuggestMergeCandidates = {},
+                    onPreviewMergeCandidate = { _ -> },
+                    onCommitCurrentMerge = {},
+                    onRollbackLastMerge = {},
+                    onFinalizeLastMerge = {},
+                    onDeleteAssetHistoryRecord = { deletedHistoryId = it },
+                    onAssetSummaryCopied = { copyClicks += 1 },
+                    enableLifecycleAutoRefresh = false,
+                    enableCyclicTabs = false,
+                    animateTabSwitch = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("笔记系统").performClick()
+        composeRule.onNodeWithText("资产系统").performClick()
+        composeRule.onNodeWithText("资产统计").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("复制资产情况").performScrollTo().performClick()
+        composeRule.onNodeWithTag("asset_history_open_$historyId").performScrollTo().performClick()
+        composeRule.onNodeWithText("返回列表").performScrollTo().performClick()
+        composeRule.onNodeWithTag("asset_history_menu_$historyId").performScrollTo().performClick()
+        composeRule.onNodeWithText("删除记录").performClick()
+        composeRule.waitForIdle()
+
+        assertEquals(1, copyClicks)
+        assertEquals(historyId, deletedHistoryId)
+    }
+
+    @Test
     fun bilibiliInput_clearButton_shouldTriggerEmptyCallback() {
         var latestVideoInput = "BV1xx411c7mD"
 

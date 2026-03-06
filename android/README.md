@@ -2,8 +2,11 @@
 
 ## 功能
 
-- 双层导航：顶层 `Notes / Signals / Settings`；`Signals` 下提供 `Capture / Finance` 子导航
-- `Capture` 内提供 `Bilibili / Xiaohongshu` 双来源切换
+- 双层导航：顶层 `Notes / Signals / Settings`；`Signals` 内可切换“笔记系统 / 资产系统”
+- 笔记系统内提供 `Bilibili / Xiaohongshu` 双来源切换
+- 资产系统内提供 `Watchlist+RSS` 与 `资产统计` 双页签
+- 资产统计支持“万元人民币”录入、按风险从高到低排序展示、一键复制资产概况
+- 资产统计支持本地历史快照（时间戳 + 总资产预览）、详情查看与单条删除
 - 服务端地址设置（持久化）
 - 可编辑服务端运行配置：精简常用项、中文说明、布尔开关/下拉/文本输入与一键恢复默认
 - 连接测试（`/health`）

@@ -26,7 +26,10 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import java.text.SimpleDateFormat
+import java.util.Date
 import java.util.Locale
+import java.util.UUID
 
 data class SettingsUiState(
     val baseUrlInput: String = "",
@@ -89,19 +92,26 @@ data class AssetCategoryDraft(
     val amountInput: String = "",
 )
 
+data class AssetHistoryRecord(
+    val id: String,
+    val savedAt: String,
+    val totalAmountWan: Double,
+    val amounts: Map<String, Double>,
+)
+
 private data class AssetCategorySpec(
     val key: String,
     val label: String,
 )
 
 private val assetCategorySpecs = listOf(
-    AssetCategorySpec(key = "bank_current_deposit", label = "银行活期存款"),
-    AssetCategorySpec(key = "bank_fixed_deposit", label = "银行定期存款"),
-    AssetCategorySpec(key = "money_market_fund", label = "货币基金"),
-    AssetCategorySpec(key = "bond_and_bond_fund", label = "债券/债券基金"),
     AssetCategorySpec(key = "stock", label = "股票"),
-    AssetCategorySpec(key = "gold", label = "黄金"),
     AssetCategorySpec(key = "equity_fund", label = "股票基金"),
+    AssetCategorySpec(key = "gold", label = "黄金"),
+    AssetCategorySpec(key = "bond_and_bond_fund", label = "债券/债券基金"),
+    AssetCategorySpec(key = "money_market_fund", label = "货币基金"),
+    AssetCategorySpec(key = "bank_fixed_deposit", label = "银行定期存款"),
+    AssetCategorySpec(key = "bank_current_deposit", label = "银行活期存款"),
     AssetCategorySpec(key = "housing_fund", label = "公积金"),
 )
 
@@ -125,6 +135,7 @@ data class FinanceSignalsUiState(
     val isSavingAssetStats: Boolean = false,
     val assetErrorMessage: String = "",
     val assetStatusMessage: String = "",
+    val assetHistory: List<AssetHistoryRecord> = emptyList(),
     val errorMessage: String = "",
     val statusMessage: String = "",
 )
@@ -221,20 +232,66 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
 
-        settingsRepository.saveAssetCategoryAmounts(amounts)
-        val normalizedDrafts = buildAssetDrafts(amounts)
         val total = amounts.values.sum()
+        val snapshot = SettingsRepository.AssetSnapshotRecord(
+            id = UUID.randomUUID().toString(),
+            savedAt = currentTimestamp(),
+            totalAmountWan = total,
+            amounts = amounts,
+        )
+
+        settingsRepository.saveAssetCategoryAmounts(amounts)
+        val existingHistory = settingsRepository.getAssetSnapshotHistory()
+        val nextHistory = listOf(snapshot) + existingHistory
+        settingsRepository.saveAssetSnapshotHistory(nextHistory)
+        val normalizedDrafts = buildAssetDrafts(amounts)
         _financeState.update {
             it.copy(
                 isSavingAssetStats = false,
                 assetDrafts = normalizedDrafts,
                 assetTotalAmount = total,
                 assetErrorMessage = "",
+                assetHistory = mapAssetHistory(nextHistory),
                 assetStatusMessage = if (amounts.isEmpty()) {
                     "已清空资产统计。"
                 } else {
-                    "已保存资产统计：${amounts.size} 类，合计 ${formatAmountCny(total)}。"
+                    "已保存资产统计：${amounts.size} 类，合计 ${formatAmountWan(total)}。"
                 },
+            )
+        }
+    }
+
+    fun deleteAssetHistoryRecord(recordId: String) {
+        val trimmed = recordId.trim()
+        if (trimmed.isBlank()) {
+            return
+        }
+        val current = settingsRepository.getAssetSnapshotHistory()
+        val next = current.filterNot { it.id == trimmed }
+        if (next.size == current.size) {
+            _financeState.update {
+                it.copy(
+                    assetErrorMessage = "未找到可删除的历史记录。",
+                    assetStatusMessage = "",
+                )
+            }
+            return
+        }
+        settingsRepository.saveAssetSnapshotHistory(next)
+        _financeState.update {
+            it.copy(
+                assetHistory = mapAssetHistory(next),
+                assetErrorMessage = "",
+                assetStatusMessage = "已删除 1 条历史记录。",
+            )
+        }
+    }
+
+    fun markAssetSummaryCopied() {
+        _financeState.update {
+            it.copy(
+                assetErrorMessage = "",
+                assetStatusMessage = "已复制资产情况。",
             )
         }
     }
@@ -1290,6 +1347,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private fun loadLocalAssetStats() {
         val amounts = settingsRepository.getAssetCategoryAmounts()
+        val history = settingsRepository.getAssetSnapshotHistory()
         val drafts = buildAssetDrafts(amounts)
         _financeState.update {
             it.copy(
@@ -1297,6 +1355,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 assetTotalAmount = computeAssetTotalAmount(drafts),
                 assetErrorMessage = "",
                 assetStatusMessage = "",
+                assetHistory = mapAssetHistory(history),
             )
         }
     }
@@ -1331,8 +1390,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         return "%.2f".format(Locale.US, amount).trimEnd('0').trimEnd('.')
     }
 
-    private fun formatAmountCny(amount: Double): String {
-        return "¥${"%,.2f".format(Locale.US, amount)}"
+    private fun formatAmountWan(amount: Double): String {
+        return "${"%.2f".format(Locale.US, amount)} 万元人民币"
+    }
+
+    private fun mapAssetHistory(
+        records: List<SettingsRepository.AssetSnapshotRecord>
+    ): List<AssetHistoryRecord> {
+        return records.sortedByDescending { it.savedAt }
+            .map { record ->
+                AssetHistoryRecord(
+                    id = record.id,
+                    savedAt = record.savedAt,
+                    totalAmountWan = record.totalAmountWan,
+                    amounts = record.amounts,
+                )
+            }
+    }
+
+    private fun currentTimestamp(): String {
+        val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
+        return formatter.format(Date())
     }
 
     fun loadSavedNotes() {
