@@ -5,6 +5,7 @@ import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
@@ -198,9 +199,11 @@ class MainScreenContentRobolectricSmokeTest {
         composeRule.onNodeWithText("资产系统").performClick()
         composeRule.waitForIdle()
 
-        composeRule.onAllNodesWithText("资产统计").assertCountEquals(1)
         composeRule.onAllNodesWithText("Watchlist Preview").assertCountEquals(1)
         composeRule.onAllNodesWithText("RSS Insight").assertCountEquals(1)
+        composeRule.onAllNodesWithText("资产统计").assertCountEquals(1)
+        composeRule.onAllNodesWithTag("asset_amount_bank_current_deposit", useUnmergedTree = true)
+            .assertCountEquals(0)
         composeRule.onAllNodesWithText("Notes").assertCountEquals(0)
 
         assertEquals(1, financeRefreshClicks)
@@ -256,6 +259,7 @@ class MainScreenContentRobolectricSmokeTest {
 
         composeRule.onNodeWithText("笔记系统").performClick()
         composeRule.onNodeWithText("资产系统").performClick()
+        composeRule.onNodeWithText("资产统计").performClick()
         composeRule.waitForIdle()
 
         composeRule.onNodeWithTag("asset_amount_bank_current_deposit", useUnmergedTree = true)

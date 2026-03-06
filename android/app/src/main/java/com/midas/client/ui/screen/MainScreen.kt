@@ -80,6 +80,11 @@ private enum class WorkspaceSection(val title: String) {
     FINANCE("资产系统"),
 }
 
+private enum class AssetPanelTab(val title: String) {
+    MARKET("Watchlist+RSS"),
+    ASSET_STATS("资产统计"),
+}
+
 private enum class CaptureSourceTab(val title: String) {
     BILIBILI("Bilibili"),
     XHS("Xiaohongshu"),
@@ -1180,6 +1185,8 @@ private fun FinanceSignalsPanel(
     onSaveAssetStats: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var selectedAssetTab by remember { mutableStateOf(AssetPanelTab.MARKET) }
+
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -1207,88 +1214,56 @@ private fun FinanceSignalsPanel(
             }
         }
 
-        GlassCard(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text("资产统计", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    "按分类上报资产金额（单位：元）。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    "资产合计：${formatAmountCny(state.assetTotalAmount)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                state.assetDrafts.forEach { draft ->
-                    OutlinedTextField(
-                        value = draft.amountInput,
-                        onValueChange = { value ->
-                            onAssetAmountChange(draft.key, value)
-                        },
-                        label = { Text(draft.label) },
-                        placeholder = { Text("例如：120000") },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("asset_amount_${draft.key}"),
-                        singleLine = true,
-                    )
-                }
-                MidasButton(
-                    onClick = onSaveAssetStats,
-                    enabled = !state.isSavingAssetStats,
-                    tone = ButtonTone.SUCCESS,
+        GlassTabBar(
+            selectedTabIndex = selectedAssetTab.ordinal,
+            labels = AssetPanelTab.entries.map { it.title },
+            onSelect = { index -> selectedAssetTab = AssetPanelTab.entries[index] },
+        )
+
+        if (selectedAssetTab == AssetPanelTab.MARKET) {
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    SingleLineActionText(if (state.isSavingAssetStats) "保存中..." else "保存资产统计")
-                }
-                if (state.assetErrorMessage.isNotBlank()) {
-                    Text(text = state.assetErrorMessage, color = ErrorStatusColor)
-                }
-                if (state.assetStatusMessage.isNotBlank()) {
-                    Text(text = state.assetStatusMessage, color = SuccessStatusColor)
-                }
-            }
-        }
+                    Text("Watchlist Preview", style = MaterialTheme.typography.titleSmall)
+                    when {
+                        state.isLoading && state.watchlistPreview.isEmpty() -> {
+                            Text("正在拉取行情数据...", style = MaterialTheme.typography.bodySmall)
+                        }
 
-        GlassCard(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text("Watchlist Preview", style = MaterialTheme.typography.titleSmall)
-                when {
-                    state.isLoading && state.watchlistPreview.isEmpty() -> {
-                        Text("正在拉取行情数据...", style = MaterialTheme.typography.bodySmall)
-                    }
+                        state.watchlistPreview.isEmpty() -> {
+                            Text("暂无可展示的行情标的。", style = MaterialTheme.typography.bodySmall)
+                        }
 
-                    state.watchlistPreview.isEmpty() -> {
-                        Text("暂无可展示的行情标的。", style = MaterialTheme.typography.bodySmall)
-                    }
-
-                    else -> {
-                        state.watchlistPreview.forEach { item ->
-                            FinanceWatchlistRow(item = item)
+                        else -> {
+                            state.watchlistPreview.forEach { item ->
+                                FinanceWatchlistRow(item = item)
+                            }
                         }
                     }
                 }
             }
-        }
 
-        GlassCard(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text("RSS Insight", style = MaterialTheme.typography.titleSmall)
-                FinanceInsightBody(
-                    insightText = state.aiInsightText.ifBlank {
-                        "市场与舆情暂无异常信号，维持常规观察。"
-                    },
-                )
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("RSS Insight", style = MaterialTheme.typography.titleSmall)
+                    FinanceInsightBody(
+                        insightText = state.aiInsightText.ifBlank {
+                            "市场与舆情暂无异常信号，维持常规观察。"
+                        },
+                    )
+                }
             }
+        } else {
+            AssetStatsCard(
+                state = state,
+                onAssetAmountChange = onAssetAmountChange,
+                onSaveAssetStats = onSaveAssetStats,
+            )
         }
 
         if (state.errorMessage.isNotBlank()) {
@@ -1302,6 +1277,59 @@ private fun FinanceSignalsPanel(
 
 private fun formatAmountCny(amount: Double): String {
     return "¥${"%,.2f".format(Locale.US, amount)}"
+}
+
+@Composable
+private fun AssetStatsCard(
+    state: FinanceSignalsUiState,
+    onAssetAmountChange: (String, String) -> Unit,
+    onSaveAssetStats: () -> Unit,
+) {
+    GlassCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("资产分类录入", style = MaterialTheme.typography.titleSmall)
+            Text(
+                "按分类上报资产金额（单位：元）。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Text(
+                "资产合计：${formatAmountCny(state.assetTotalAmount)}",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            state.assetDrafts.forEach { draft ->
+                OutlinedTextField(
+                    value = draft.amountInput,
+                    onValueChange = { value ->
+                        onAssetAmountChange(draft.key, value)
+                    },
+                    label = { Text(draft.label) },
+                    placeholder = { Text("例如：120000") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("asset_amount_${draft.key}"),
+                    singleLine = true,
+                )
+            }
+            MidasButton(
+                onClick = onSaveAssetStats,
+                enabled = !state.isSavingAssetStats,
+                tone = ButtonTone.SUCCESS,
+            ) {
+                SingleLineActionText(if (state.isSavingAssetStats) "保存中..." else "保存资产统计")
+            }
+            if (state.assetErrorMessage.isNotBlank()) {
+                Text(text = state.assetErrorMessage, color = ErrorStatusColor)
+            }
+            if (state.assetStatusMessage.isNotBlank()) {
+                Text(text = state.assetStatusMessage, color = SuccessStatusColor)
+            }
+        }
+    }
 }
 
 @Composable
