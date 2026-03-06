@@ -59,6 +59,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSummaryData
+import com.midas.client.data.model.FinanceWatchlistItem
 import com.midas.client.data.model.NotesMergeCandidateItem
 import com.midas.client.data.model.NotesMergePreviewData
 import com.midas.client.data.model.XiaohongshuSavedNote
@@ -260,12 +261,14 @@ fun MainScreen(viewModel: MainViewModel) {
     val bilibili by viewModel.bilibiliState.collectAsStateWithLifecycle()
     val xiaohongshu by viewModel.xiaohongshuState.collectAsStateWithLifecycle()
     val notes by viewModel.notesState.collectAsStateWithLifecycle()
+    val finance by viewModel.financeState.collectAsStateWithLifecycle()
 
     MainScreenContent(
         settings = settings,
         bilibili = bilibili,
         xiaohongshu = xiaohongshu,
         notes = notes,
+        finance = finance,
         onAppForeground = viewModel::onAppForeground,
         onBaseUrlChange = viewModel::onBaseUrlInputChange,
         onSaveBaseUrl = viewModel::saveBaseUrl,
@@ -289,6 +292,7 @@ fun MainScreen(viewModel: MainViewModel) {
         onCommitCurrentMerge = viewModel::commitCurrentMerge,
         onRollbackLastMerge = viewModel::rollbackLastMerge,
         onFinalizeLastMerge = viewModel::finalizeLastMerge,
+        onRefreshFinanceSignals = viewModel::loadFinanceSignals,
     )
 }
 
@@ -299,6 +303,7 @@ fun MainScreenContent(
     bilibili: BilibiliUiState,
     xiaohongshu: XiaohongshuUiState,
     notes: NotesUiState,
+    finance: FinanceSignalsUiState = FinanceSignalsUiState(),
     onAppForeground: () -> Unit,
     onBaseUrlChange: (String) -> Unit,
     onSaveBaseUrl: () -> Unit,
@@ -322,6 +327,7 @@ fun MainScreenContent(
     onCommitCurrentMerge: () -> Unit,
     onRollbackLastMerge: () -> Unit,
     onFinalizeLastMerge: () -> Unit,
+    onRefreshFinanceSignals: () -> Unit = {},
     enableLifecycleAutoRefresh: Boolean = true,
     enableCyclicTabs: Boolean = true,
     animateTabSwitch: Boolean = true,
@@ -466,9 +472,8 @@ fun MainScreenContent(
                 }
 
                 else -> FinanceSignalsPanel(
-                    notes = notes,
-                    bilibili = bilibili,
-                    xiaohongshu = xiaohongshu,
+                    state = finance,
+                    onRefresh = onRefreshFinanceSignals,
                     modifier = contentModifier,
                 )
             }
@@ -1139,37 +1144,34 @@ private fun XiaohongshuSummaryCard(
 
 @Composable
 private fun FinanceSignalsPanel(
-    notes: NotesUiState,
-    bilibili: BilibiliUiState,
-    xiaohongshu: XiaohongshuUiState,
+    state: FinanceSignalsUiState,
+    onRefresh: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val totalNotes = notes.bilibiliNotes.size + notes.xiaohongshuNotes.size
-    val recentCaptureCount = listOfNotNull(
-        bilibili.result?.videoUrl,
-        xiaohongshu.summaries.firstOrNull()?.noteId,
-    ).size
-
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         Text("Finance Signals", style = MaterialTheme.typography.titleMedium)
-        Text(
-            text = "财经模块先落占位版，后续接入真实行情与个股跟踪。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-
-        GlassCard(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                text = if (state.updateTime.isNotBlank()) {
+                    "更新时间：${state.updateTime}"
+                } else {
+                    "更新时间：等待数据"
+                },
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            MidasButton(
+                onClick = onRefresh,
+                enabled = !state.isLoading,
+                tone = ButtonTone.NEUTRAL,
             ) {
-                Text("Workspace Snapshot", style = MaterialTheme.typography.titleSmall)
-                Text("当前笔记总数：$totalNotes", style = MaterialTheme.typography.bodyMedium)
-                Text("最近采集结果：$recentCaptureCount 条", style = MaterialTheme.typography.bodyMedium)
-                Text("待接入：实时指数、关注列表、日报推送。", style = MaterialTheme.typography.bodySmall)
+                SingleLineActionText(if (state.isLoading) "刷新中..." else "刷新")
             }
         }
 
@@ -1179,10 +1181,21 @@ private fun FinanceSignalsPanel(
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 Text("Watchlist Preview", style = MaterialTheme.typography.titleSmall)
-                Text("AAPL  191.20  +0.72%", style = MaterialTheme.typography.bodySmall)
-                Text("MSFT  438.15  +0.36%", style = MaterialTheme.typography.bodySmall)
-                Text("TSLA  177.82  -0.94%", style = MaterialTheme.typography.bodySmall)
-                Text("NVDA  894.11  +1.44%", style = MaterialTheme.typography.bodySmall)
+                when {
+                    state.isLoading && state.watchlistPreview.isEmpty() -> {
+                        Text("正在拉取行情数据...", style = MaterialTheme.typography.bodySmall)
+                    }
+
+                    state.watchlistPreview.isEmpty() -> {
+                        Text("暂无可展示的行情标的。", style = MaterialTheme.typography.bodySmall)
+                    }
+
+                    else -> {
+                        state.watchlistPreview.forEach { item ->
+                            FinanceWatchlistRow(item = item)
+                        }
+                    }
+                }
             }
         }
 
@@ -1191,14 +1204,131 @@ private fun FinanceSignalsPanel(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("AI Insight (Placeholder)", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    text = "Risk sentiment is improving while yields remain elevated. " +
-                        "后续会把这段替换成真实行情与历史笔记融合总结。",
-                    style = MaterialTheme.typography.bodySmall,
+                Text("RSS Insight", style = MaterialTheme.typography.titleSmall)
+                FinanceInsightBody(
+                    insightText = state.aiInsightText.ifBlank {
+                        "市场与舆情暂无异常信号，维持常规观察。"
+                    },
                 )
             }
         }
+
+        if (state.errorMessage.isNotBlank()) {
+            Text(text = state.errorMessage, color = ErrorStatusColor)
+        }
+        if (state.statusMessage.isNotBlank()) {
+            Text(text = state.statusMessage, color = SuccessStatusColor)
+        }
+    }
+}
+
+@Composable
+private fun FinanceWatchlistRow(item: FinanceWatchlistItem) {
+    val priceText = item.price?.let { "%.2f".format(it) } ?: "N/A"
+    val normalizedChange = item.changePct.trim().ifBlank { "N/A" }
+    val normalizedHint = item.alertHint.trim()
+    val changeColor = when {
+        normalizedChange.startsWith("+") -> SuccessStatusColor
+        normalizedChange.startsWith("-") -> ErrorStatusColor
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        val symbolPart = if (normalizedHint.isNotBlank()) {
+            "${item.symbol} (${normalizedHint})"
+        } else {
+            item.symbol
+        }
+        val namePart = if (item.name.isNotBlank()) "${item.name} ${symbolPart}" else symbolPart
+        Text(
+            text = namePart,
+            style = MaterialTheme.typography.bodySmall,
+            modifier = Modifier.weight(1f),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+        )
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            Text(priceText, style = MaterialTheme.typography.bodySmall)
+            Text(
+                normalizedChange,
+                style = MaterialTheme.typography.bodySmall,
+                color = changeColor,
+            )
+        }
+    }
+}
+
+private data class FinanceInsightSection(
+    val title: String,
+    val items: List<String>,
+)
+
+@Composable
+private fun FinanceInsightBody(insightText: String) {
+    val sections = parseFinanceInsightSections(insightText)
+    if (sections.isEmpty()) {
+        Text(insightText, style = MaterialTheme.typography.bodySmall)
+        return
+    }
+
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        sections.forEachIndexed { index, section ->
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (section.title.isNotBlank()) {
+                    Text(
+                        text = section.title,
+                        style = MaterialTheme.typography.bodySmall,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
+                if (section.items.isEmpty()) {
+                    Text("暂无命中。", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    section.items.forEach { item ->
+                        Text("• $item", style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            }
+            if (index < sections.lastIndex) {
+                HorizontalDivider()
+            }
+        }
+    }
+}
+
+private fun parseFinanceInsightSections(rawText: String): List<FinanceInsightSection> {
+    val normalized = rawText
+        .replace('\n', ' ')
+        .replace('\r', ' ')
+        .trim()
+    if (normalized.isBlank()) {
+        return emptyList()
+    }
+
+    val sections = normalized.split("|")
+        .map { it.trim() }
+        .filter { it.isNotBlank() }
+    if (sections.isEmpty()) {
+        return listOf(FinanceInsightSection(title = "摘要", items = listOf(normalized)))
+    }
+
+    return sections.map { sectionText ->
+        val colonIndex = sectionText.indexOf('：').takeIf { it > 0 }
+            ?: sectionText.indexOf(':').takeIf { it > 0 }
+        if (colonIndex == null) {
+            return@map FinanceInsightSection(title = "摘要", items = listOf(sectionText))
+        }
+        val title = sectionText.substring(0, colonIndex).trim()
+        val body = sectionText.substring(colonIndex + 1).trim()
+        val items = body.split("；")
+            .map { it.trim() }
+            .filter { it.isNotBlank() }
+        FinanceInsightSection(title = title, items = items)
     }
 }
 

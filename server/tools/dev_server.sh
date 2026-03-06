@@ -6,6 +6,7 @@ SERVER_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TMP_DIR="$SERVER_DIR/.tmp"
 PID_FILE="$TMP_DIR/local_server.pid"
 LOG_FILE="$TMP_DIR/local_server.log"
+FINANCE_SCRIPT="$SCRIPT_DIR/finance_signals.sh"
 DETACHED_START_DEFAULT="${MIDAS_DEV_SERVER_DETACHED_START:-1}"
 DETACHED_WAIT_SECONDS="${MIDAS_DEV_SERVER_DETACHED_WAIT_SECONDS:-45}"
 
@@ -60,6 +61,9 @@ show_status() {
     show_bind_status "$pid"
   else
     echo "[dev_server] STOPPED"
+  fi
+  if [[ -x "$FINANCE_SCRIPT" ]]; then
+    "$FINANCE_SCRIPT" status
   fi
 }
 
@@ -309,6 +313,14 @@ show_mobile_tip() {
   fi
 }
 
+ensure_finance_worker() {
+  if [[ ! -x "$FINANCE_SCRIPT" ]]; then
+    echo "[dev_server] finance worker script not executable: $FINANCE_SCRIPT"
+    return 1
+  fi
+  "$FINANCE_SCRIPT" start
+}
+
 start_server() {
   parse_start_args "$@"
   if is_running; then
@@ -317,6 +329,7 @@ start_server() {
     read -r current_host current_port <<<"$(get_bind_from_pid "$pid")"
     if [[ "$current_host" == "$START_HOST" && "$current_port" == "$START_PORT" ]]; then
       echo "[dev_server] already running with requested bind."
+      ensure_finance_worker
       if [[ "$START_HOST" == "0.0.0.0" && "$START_AUTO_TS_PROXY" == "1" ]]; then
         configure_tailscale_proxy "$START_PORT"
       fi
@@ -340,6 +353,7 @@ start_server() {
       --host "$START_HOST" \
       --port "$START_PORT"
   fi
+  ensure_finance_worker
   show_mobile_tip "$START_HOST" "$START_PORT"
   if [[ "$START_HOST" == "0.0.0.0" && "$START_AUTO_TS_PROXY" == "1" ]]; then
     configure_tailscale_proxy "$START_PORT"

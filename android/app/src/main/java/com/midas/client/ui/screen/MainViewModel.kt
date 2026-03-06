@@ -5,6 +5,7 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSummaryData
+import com.midas.client.data.model.FinanceWatchlistItem
 import com.midas.client.data.model.NotesMergeCandidateItem
 import com.midas.client.data.model.NotesMergeCommitData
 import com.midas.client.data.model.NotesMergePreviewData
@@ -81,6 +82,15 @@ data class NotesUiState(
     val xiaohongshuNotes: List<XiaohongshuSavedNote> = emptyList(),
 )
 
+data class FinanceSignalsUiState(
+    val isLoading: Boolean = false,
+    val updateTime: String = "",
+    val watchlistPreview: List<FinanceWatchlistItem> = emptyList(),
+    val aiInsightText: String = "",
+    val errorMessage: String = "",
+    val statusMessage: String = "",
+)
+
 class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val settingsRepository = SettingsRepository(application)
     private val apiRepository = MidasRepository()
@@ -99,15 +109,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val _notesState = MutableStateFlow(NotesUiState())
     val notesState: StateFlow<NotesUiState> = _notesState.asStateFlow()
 
+    private val _financeState = MutableStateFlow(FinanceSignalsUiState())
+    val financeState: StateFlow<FinanceSignalsUiState> = _financeState.asStateFlow()
+
     private var autoSaveConfigJob: Job? = null
 
     init {
         loadEditableConfig()
         loadSavedNotes()
+        loadFinanceSignals()
     }
 
     fun onAppForeground() {
         loadSavedNotes()
+        loadFinanceSignals()
     }
 
     fun onBaseUrlInputChange(newValue: String) {
@@ -130,6 +145,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             )
         }
         loadEditableConfig()
+        loadFinanceSignals()
     }
 
     fun testConnection() {
@@ -1094,6 +1110,63 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 message = result.message,
                                 context = ErrorContext.NOTES_MERGE,
                             ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun loadFinanceSignals() {
+        val baseUrl = requireBaseUrl {
+            _financeState.update {
+                it.copy(
+                    isLoading = false,
+                    errorMessage = "请先填写服务端地址。",
+                    statusMessage = "",
+                )
+            }
+        } ?: return
+        viewModelScope.launch {
+            _financeState.update {
+                it.copy(
+                    isLoading = true,
+                    errorMessage = "",
+                    statusMessage = "",
+                )
+            }
+            when (val result = apiRepository.getFinanceSignals(baseUrl)) {
+                is AppResult.Success -> {
+                    val insight = result.data.aiInsightText.ifBlank {
+                        "市场与舆情暂无异常信号，维持常规观察。"
+                    }
+                    val status = if (result.data.updateTime.isNotBlank()) {
+                        "最近更新：${result.data.updateTime}"
+                    } else {
+                        "已拉取财经信号面板数据。"
+                    }
+                    _financeState.update {
+                        it.copy(
+                            isLoading = false,
+                            updateTime = result.data.updateTime,
+                            watchlistPreview = result.data.watchlistPreview,
+                            aiInsightText = insight,
+                            errorMessage = "",
+                            statusMessage = status,
+                        )
+                    }
+                }
+
+                is AppResult.Error -> {
+                    _financeState.update {
+                        it.copy(
+                            isLoading = false,
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.CONNECTION,
+                            ),
+                            statusMessage = "",
                         )
                     }
                 }

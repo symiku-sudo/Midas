@@ -9,6 +9,20 @@ class HealthData(BaseModel):
     status: str = "ok"
 
 
+class FinanceWatchlistItem(BaseModel):
+    name: str = ""
+    symbol: str
+    price: float | None = None
+    change_pct: str = "N/A"
+    alert_hint: str = ""
+
+
+class FinanceSignalsData(BaseModel):
+    update_time: str
+    watchlist_preview: list[FinanceWatchlistItem]
+    ai_insight_text: str
+
+
 class BilibiliSummaryRequest(BaseModel):
     video_url: str = Field(min_length=3, max_length=2000)
 

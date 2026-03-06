@@ -39,6 +39,32 @@ Failure:
 }
 ```
 
+## `GET /api/finance/signals`
+
+用途：读取 Finance Signals 面板所需状态（由 `server/finance_signals/main.py` 持续写入本地 JSON）。
+
+Success `data`:
+
+```json
+{
+  "update_time": "2026-03-05 12:00:00",
+  "watchlist_preview": [
+    {
+      "name": "布伦特原油",
+      "symbol": "BZ=F",
+      "price": 91.23,
+      "change_pct": "+1.2%",
+      "alert_hint": ">90"
+    }
+  ],
+  "ai_insight_text": "行情警报：布伦特原油（BZ=F）触发：价格突破 90。"
+}
+```
+
+说明：
+- 若状态文件尚未生成，接口会返回空列表和初始化提示文案，HTTP 仍为 `200`。
+- 若状态文件内容损坏，接口返回 `UPSTREAM_ERROR`。
+
 ## `POST /api/bilibili/summarize`
 
 Request:

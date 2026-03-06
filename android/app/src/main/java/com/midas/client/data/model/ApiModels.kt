@@ -22,6 +22,20 @@ data class HealthData(
     val status: String
 )
 
+data class FinanceWatchlistItem(
+    val name: String = "",
+    val symbol: String,
+    val price: Double? = null,
+    @Json(name = "change_pct") val changePct: String = "N/A",
+    @Json(name = "alert_hint") val alertHint: String = "",
+)
+
+data class FinanceSignalsData(
+    @Json(name = "update_time") val updateTime: String,
+    @Json(name = "watchlist_preview") val watchlistPreview: List<FinanceWatchlistItem>,
+    @Json(name = "ai_insight_text") val aiInsightText: String,
+)
+
 data class BilibiliSummaryRequest(
     @Json(name = "video_url") val videoUrl: String
 )

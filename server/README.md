@@ -3,6 +3,7 @@
 ## What is implemented
 
 - `GET /health`
+- `GET /api/finance/signals`
 - `POST /api/bilibili/summarize`
 - `POST /api/notes/bilibili/save`
 - `GET /api/notes/bilibili`
@@ -80,6 +81,23 @@ curl -X POST http://127.0.0.1:8000/api/notes/xiaohongshu/synced/prune
 ```bash
 server/.venv/bin/python server/tools/prune_unsaved_synced_notes.py --dry-run --show-ids
 ```
+
+## Finance Signals Worker
+
+用于持续生成前端 `Finance Signals` 面板需要的本地状态文件（默认 `server/finance_signals/finance_status.json`），并由 `GET /api/finance/signals` 提供给客户端：
+
+```bash
+cd server
+tools/finance_signals.sh start
+tools/finance_signals.sh status
+tools/finance_signals.sh check
+tools/finance_signals.sh logs 120
+tools/finance_signals.sh stop
+```
+
+说明：
+- 运行参数全部来自 `finance_signals/financial_config.yaml`。
+- `check` 会校验 `finance_status.json` 是否存在且更新时间未过期（阈值由 `runtime.health_max_staleness_seconds` 控制）。
 
 ## Refresh XHS auth config
 
@@ -167,6 +185,11 @@ python -m playwright install chromium
 
 ```bash
 curl http://127.0.0.1:8000/health
+```
+
+```bash
+# 读取 Finance Signals 面板状态
+curl http://127.0.0.1:8000/api/finance/signals
 ```
 
 ```bash
@@ -307,6 +330,7 @@ tools/run_local_stack.sh --profile mock
 ```
 
 - 执行顺序：`selfcheck -> 启动服务 -> smoke_test`。
+- 执行顺序：`selfcheck -> 启动服务 -> smoke_test -> 启动/复用 finance_signals worker`。
 - 默认 `selfcheck` 失败仅告警继续；如果你想严格阻断：
 
 ```bash
@@ -318,3 +342,5 @@ tools/run_local_stack.sh --profile mock --strict-selfcheck
 ```bash
 tools/stop_local_stack.sh
 ```
+
+- `stop_local_stack.sh` 会同时停止 `uvicorn` 与 `finance_signals` worker。

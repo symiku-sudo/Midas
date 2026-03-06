@@ -38,6 +38,7 @@ from app.models.schemas import (
 )
 from app.services.bilibili import BilibiliSummarizer
 from app.services.editable_config import EditableConfigService
+from app.services.finance_signals import FinanceSignalsService
 from app.services.note_library import NoteLibraryService
 from app.services.xiaohongshu import XiaohongshuSyncService
 from tools import xhs_capture_to_config as xhs_capture_tool
@@ -68,12 +69,18 @@ def _get_editable_config_service() -> EditableConfigService:
     return EditableConfigService()
 
 
+@lru_cache(maxsize=1)
+def _get_finance_signals_service() -> FinanceSignalsService:
+    return FinanceSignalsService()
+
+
 def _reload_runtime_services() -> None:
     clear_settings_cache()
     _get_summarizer.cache_clear()
     _get_xiaohongshu_sync_service.cache_clear()
     _get_note_library_service.cache_clear()
     _get_editable_config_service.cache_clear()
+    _get_finance_signals_service.cache_clear()
 
 
 def _count_cookie_pairs(raw_cookie: str) -> int:
@@ -158,6 +165,13 @@ async def _probe_xiaohongshu_web_identity(
 async def health(request: Request) -> dict:
     data = HealthData().model_dump()
     return success_response(data=data, request_id=request.state.request_id)
+
+
+@router.get("/api/finance/signals")
+async def get_finance_signals(request: Request) -> dict:
+    service = _get_finance_signals_service()
+    data = service.get_dashboard_state()
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 
 @router.post("/api/bilibili/summarize")

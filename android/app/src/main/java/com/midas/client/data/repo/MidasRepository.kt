@@ -8,6 +8,7 @@ import com.midas.client.data.model.BilibiliSummaryData
 import com.midas.client.data.model.BilibiliSummaryRequest
 import com.midas.client.data.model.EditableConfigData
 import com.midas.client.data.model.EditableConfigUpdateRequest
+import com.midas.client.data.model.FinanceSignalsData
 import com.midas.client.data.model.HealthData
 import com.midas.client.data.model.NotesMergeCommitData
 import com.midas.client.data.model.NotesMergeCommitRequest
@@ -49,6 +50,10 @@ class MidasRepository {
 
     suspend fun testConnection(baseUrl: String): AppResult<HealthData> {
         return request(baseUrl) { health() }
+    }
+
+    suspend fun getFinanceSignals(baseUrl: String): AppResult<FinanceSignalsData> {
+        return request(baseUrl) { getFinanceSignals() }
     }
 
     suspend fun summarizeBilibili(baseUrl: String, videoUrl: String): AppResult<BilibiliSummaryData> {

@@ -10,11 +10,13 @@ from fastapi.testclient import TestClient
 
 from app.api.routes import (
     _get_editable_config_service,
+    _get_finance_signals_service,
     _get_note_library_service,
     _get_xiaohongshu_sync_service,
 )
 from app.core.config import get_settings
 from app.main import app
+from app.models.schemas import FinanceSignalsData, FinanceWatchlistItem
 from app.repositories.note_repo import NoteLibraryRepository
 
 client = TestClient(app)
@@ -36,6 +38,7 @@ def _timestamped_backup_files() -> list[Path]:
 
 def _reset_xiaohongshu_state() -> None:
     _get_editable_config_service.cache_clear()
+    _get_finance_signals_service.cache_clear()
     _get_note_library_service.cache_clear()
     _get_xiaohongshu_sync_service.cache_clear()
     get_settings.cache_clear()
@@ -55,6 +58,41 @@ def test_health_ok() -> None:
     assert body["code"] == "OK"
     assert body["data"]["status"] == "ok"
     assert body["request_id"]
+
+
+def test_finance_signals_ok(monkeypatch) -> None:
+    class _FakeFinanceSignalsService:
+        def get_dashboard_state(self) -> FinanceSignalsData:
+            return FinanceSignalsData(
+                update_time="2026-03-05 12:00:00",
+                watchlist_preview=[
+                    FinanceWatchlistItem(
+                        name="布伦特原油",
+                        symbol="BZ=F",
+                        price=91.23,
+                        change_pct="+1.2%",
+                        alert_hint=">90",
+                    )
+                ],
+                ai_insight_text="行情警报：布伦特原油（BZ=F）触发阈值。",
+            )
+
+    monkeypatch.setattr(
+        routes_module,
+        "_get_finance_signals_service",
+        lambda: _FakeFinanceSignalsService(),
+    )
+
+    resp = client.get("/api/finance/signals")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["code"] == "OK"
+    assert body["data"]["update_time"] == "2026-03-05 12:00:00"
+    assert body["data"]["watchlist_preview"][0]["symbol"] == "BZ=F"
+    assert body["data"]["watchlist_preview"][0]["price"] == 91.23
+    assert body["data"]["watchlist_preview"][0]["alert_hint"] == ">90"
+    assert body["data"]["ai_insight_text"]
 
 
 def test_bilibili_invalid_url() -> None:

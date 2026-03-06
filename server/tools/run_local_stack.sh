@@ -6,6 +6,7 @@ SERVER_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 TMP_DIR="$SERVER_DIR/.tmp"
 PID_FILE="$TMP_DIR/local_server.pid"
 LOG_FILE="$TMP_DIR/local_server.log"
+FINANCE_SCRIPT="$SERVER_DIR/tools/finance_signals.sh"
 
 HOST="127.0.0.1"
 PORT="8000"
@@ -139,7 +140,7 @@ if [[ -f "$PID_FILE" ]]; then
   rm -f "$PID_FILE"
 fi
 
-echo "[1/3] Running selfcheck..."
+echo "[1/4] Running selfcheck..."
 set +e
 "$PYTHON_BIN" "$SERVER_DIR/tools/selfcheck.py"
 SELFCHECK_CODE=$?
@@ -153,7 +154,7 @@ if [[ "$SELFCHECK_CODE" -ne 0 ]]; then
   echo "[run_local_stack] selfcheck has failures; continue anyway (non-strict mode)."
 fi
 
-echo "[2/3] Starting uvicorn on $HOST:$PORT ..."
+echo "[2/4] Starting uvicorn on $HOST:$PORT ..."
 if command -v setsid >/dev/null 2>&1; then
   setsid "$UVICORN_BIN" app.main:app --app-dir "$SERVER_DIR" --host "$HOST" --port "$PORT" > "$LOG_FILE" 2>&1 < /dev/null &
 else
@@ -198,7 +199,7 @@ if [[ "$READY" -ne 1 ]]; then
   exit 1
 fi
 
-echo "[3/3] Running smoke test profile=$PROFILE ..."
+echo "[3/4] Running smoke test profile=$PROFILE ..."
 if ! "$PYTHON_BIN" "$SERVER_DIR/tools/smoke_test.py" \
   --base-url "http://127.0.0.1:$PORT" \
   --profile "$PROFILE"; then
@@ -209,8 +210,21 @@ if ! "$PYTHON_BIN" "$SERVER_DIR/tools/smoke_test.py" \
   exit 1
 fi
 
+echo "[4/4] Ensuring finance worker..."
+if [[ ! -x "$FINANCE_SCRIPT" ]]; then
+  echo "[run_local_stack] finance script not executable: $FINANCE_SCRIPT"
+  cleanup_on_fail
+  exit 1
+fi
+if ! "$FINANCE_SCRIPT" start; then
+  echo "[run_local_stack] finance worker start failed."
+  cleanup_on_fail
+  exit 1
+fi
+
 echo
 echo "[run_local_stack] Server is up and smoke passed."
 echo "- PID: $SERVER_PID"
 echo "- Log: $LOG_FILE"
+echo "- Finance: worker ensured via tools/finance_signals.sh"
 echo "- Stop: $SERVER_DIR/tools/stop_local_stack.sh"

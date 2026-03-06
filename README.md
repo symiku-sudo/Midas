@@ -6,6 +6,7 @@
 
 - 服务端（FastAPI）：已完成
   - `GET /health`
+  - `GET /api/finance/signals`
   - `POST /api/bilibili/summarize`（`video_url` 支持完整链接或直接传 `BV` 号）
   - `POST /api/xiaohongshu/summarize-url`
   - `POST /api/xiaohongshu/auth/update`
@@ -15,6 +16,7 @@
   - 连接测试
   - B 站总结请求与 Markdown 展示
   - 小红书按 URL 单篇总结与结果展示
+  - Finance Signals 面板（Watchlist Preview + RSS Insight）实时读取服务端状态
   - 笔记库智能合并（候选、预览、回退、确认破坏性收尾）
 
 ## 目录
@@ -56,6 +58,8 @@ tools/run_local_stack.sh --profile mock
 cd server
 tools/stop_local_stack.sh
 ```
+
+`run_local_stack.sh` 会在服务冒烟通过后自动启动/复用 `finance_signals` worker，`stop_local_stack.sh` 会一并停止该 worker。
 
 更简化的统一入口：
 

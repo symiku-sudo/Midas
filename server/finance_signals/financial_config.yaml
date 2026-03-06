@@ -1,0 +1,103 @@
+scheduler:
+  market_interval_seconds: 60
+  news_interval_seconds: 300
+
+output:
+  status_file: "finance_status.json"
+  time_format: "%Y-%m-%d %H:%M:%S"
+  json_indent: 2
+  ensure_ascii: false
+
+runtime:
+  health_max_staleness_seconds: 420
+  health_startup_grace_seconds: 120
+
+ai_insight:
+  safe_text: "市场与舆情暂无异常信号，维持常规观察。"
+  section_separator: " | "
+  max_market_alerts_in_text: 4
+  max_news_items_in_text: 3
+
+market_data:
+  history_period_days: 180
+  history_interval: "1d"
+  default_drawdown_lookback_days: 120
+  price_round_digits: 2
+  change_round_digits: 2
+  instruments:
+    - name: "布伦特原油"
+      symbol: "BZ=F"
+      rule:
+        type: "price_gte"
+        threshold: 90
+        description: "价格突破 90"
+    - name: "现货黄金"
+      symbol: "GC=F"
+      rule:
+        type: "change_pct_lte"
+        threshold: -1.5
+        description: "单日跌幅 <= -1.5%"
+    - name: "VIX恐慌指数"
+      symbol: "^VIX"
+      rule:
+        type: "price_gte"
+        threshold: 30
+        description: "指数突破 30"
+    - name: "纳指100"
+      symbol: "^NDX"
+      rule:
+        type: "drawdown_pct_gte"
+        threshold: 10
+        lookback_days: 120
+        description: "较阶段高点回撤 > 10%"
+
+news:
+  sources:
+    - name: "中东地缘风险"
+      url: "https://news.google.com/rss/search?q=%E4%BC%8A%E6%9C%97+OR+%E4%BB%A5%E8%89%B2%E5%88%97+OR+%E9%9C%8D%E5%B0%94%E6%9C%A8%E5%85%B9&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
+  poll:
+    max_items_per_source: 40
+    max_matched_items: 8
+  keywords:
+    crisis_up:
+      - "封锁霍尔木兹海峡"
+      - "关闭霍尔木兹海峡"
+      - "油轮遇袭"
+      - "船只遇袭"
+      - "基地遇袭"
+      - "导弹袭击"
+      - "空袭"
+      - "报复性打击"
+      - "军事升级"
+      - "冲突升级"
+      - "断供"
+    crisis_down:
+      - "停火协议"
+      - "重启谈判"
+      - "恢复谈判"
+      - "和谈"
+      - "斡旋"
+      - "停火"
+      - "调停"
+      - "达成协议"
+      - "局势缓和"
+      - "降级"
+    exclude_title_if_contains:
+      - "六张图看清"
+      - "关键航道"
+      - "在哪"
+      - "是什么"
+      - "怎么办"
+      - "怎样了"
+      - "我们目前知道什么"
+    negation_prefixes:
+      - "未"
+      - "并未"
+      - "没有"
+      - "并没有"
+      - "不会"
+      - "尚未"
+      - "未曾"
+      - "无意"
+      - "否认"
+      - "并非"

@@ -8,6 +8,7 @@ import com.midas.client.data.model.BilibiliSummaryData
 import com.midas.client.data.model.BilibiliSummaryRequest
 import com.midas.client.data.model.EditableConfigData
 import com.midas.client.data.model.EditableConfigUpdateRequest
+import com.midas.client.data.model.FinanceSignalsData
 import com.midas.client.data.model.HealthData
 import com.midas.client.data.model.NotesMergeCommitData
 import com.midas.client.data.model.NotesMergeCommitRequest
@@ -39,6 +40,9 @@ import retrofit2.http.Path
 interface MidasApiService {
     @GET("health")
     suspend fun health(): Response<ApiEnvelope<HealthData>>
+
+    @GET("api/finance/signals")
+    suspend fun getFinanceSignals(): Response<ApiEnvelope<FinanceSignalsData>>
 
     @POST("api/bilibili/summarize")
     suspend fun summarizeBilibili(
