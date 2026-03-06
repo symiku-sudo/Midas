@@ -127,6 +127,7 @@ class LLMService:
             ) as client:
                 resp = await client.post(url, headers=headers, json=payload)
         except httpx.HTTPError as exc:
+            logger.warning("LLM upstream request failed: %s", repr(exc))
             raise AppError(
                 code=ErrorCode.UPSTREAM_ERROR,
                 message="LLM 服务连接失败。",

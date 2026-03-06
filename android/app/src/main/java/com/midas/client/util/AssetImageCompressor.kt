@@ -17,6 +17,12 @@ data class CompressedImagePayload(
 object AssetImageCompressor {
     private const val MAX_IMAGE_SIDE_PX = 1600
     private const val JPEG_QUALITY = 72
+    private const val MIN_JPEG_QUALITY = 42
+    private const val JPEG_QUALITY_STEP = 8
+    private const val TARGET_MAX_BYTES = 450 * 1024
+    private const val DOWNSCALE_FACTOR = 0.85f
+    private const val MAX_DOWNSCALE_ROUNDS = 3
+    private const val MIN_IMAGE_SIDE_PX = 640
 
     fun compressToJpeg(
         context: Context,
@@ -30,17 +36,34 @@ object AssetImageCompressor {
             targetSide = MAX_IMAGE_SIDE_PX,
         )
         val bitmap = decodeBitmap(context, uri, sampleSize) ?: return null
-        val scaled = scaleBitmapIfNeeded(bitmap, MAX_IMAGE_SIDE_PX)
+        var scaled = scaleBitmapIfNeeded(bitmap, MAX_IMAGE_SIDE_PX)
         if (scaled !== bitmap) {
             bitmap.recycle()
         }
-        val output = ByteArrayOutputStream()
-        val ok = scaled.compress(Bitmap.CompressFormat.JPEG, JPEG_QUALITY, output)
-        scaled.recycle()
-        if (!ok) {
-            return null
+
+        var bestBytes: ByteArray? = null
+        var round = 0
+        while (round <= MAX_DOWNSCALE_ROUNDS) {
+            val attempt = compressWithQualityFallback(scaled)
+            if (attempt != null && attempt.isNotEmpty()) {
+                bestBytes = attempt
+                if (attempt.size <= TARGET_MAX_BYTES) {
+                    break
+                }
+            }
+            val longSide = max(scaled.width, scaled.height)
+            if (longSide <= MIN_IMAGE_SIDE_PX) {
+                break
+            }
+            val targetWidth = max((scaled.width * DOWNSCALE_FACTOR).toInt(), 1)
+            val targetHeight = max((scaled.height * DOWNSCALE_FACTOR).toInt(), 1)
+            val downscaled = Bitmap.createScaledBitmap(scaled, targetWidth, targetHeight, true)
+            scaled.recycle()
+            scaled = downscaled
+            round += 1
         }
-        val bytes = output.toByteArray()
+        scaled.recycle()
+        val bytes = bestBytes ?: return null
         if (bytes.isEmpty()) {
             return null
         }
@@ -52,6 +75,29 @@ object AssetImageCompressor {
             bytes = bytes,
             mimeType = "image/jpeg",
         )
+    }
+
+    private fun compressWithQualityFallback(bitmap: Bitmap): ByteArray? {
+        var quality = JPEG_QUALITY
+        var best: ByteArray? = null
+        while (quality >= MIN_JPEG_QUALITY) {
+            val bytes = compressJpeg(bitmap, quality) ?: return best
+            best = bytes
+            if (bytes.size <= TARGET_MAX_BYTES) {
+                return bytes
+            }
+            quality -= JPEG_QUALITY_STEP
+        }
+        return best
+    }
+
+    private fun compressJpeg(bitmap: Bitmap, quality: Int): ByteArray? {
+        val output = ByteArrayOutputStream()
+        val ok = bitmap.compress(Bitmap.CompressFormat.JPEG, quality, output)
+        if (!ok) {
+            return null
+        }
+        return output.toByteArray()
     }
 
     private fun readBounds(context: Context, uri: Uri): Pair<Int, Int>? {

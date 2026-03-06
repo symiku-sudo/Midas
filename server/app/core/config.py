@@ -127,6 +127,7 @@ class CommentInsightsConfig(BaseModel):
 class AssetImageFillConfig(BaseModel):
     max_images: int = 5
     max_image_bytes: int = 4_000_000
+    fallback_single_image_on_upstream_error: bool = True
 
 
 class RuntimeConfig(BaseModel):

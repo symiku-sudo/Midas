@@ -73,9 +73,15 @@ class AssetImageFillService:
             encoded = base64.b64encode(content).decode("ascii")
             image_data_urls.append(f"data:{content_type};base64,{encoded}")
 
-        llm_amounts = await self._llm.extract_asset_amounts_from_images(
-            image_data_urls=image_data_urls,
-        )
+        try:
+            llm_amounts = await self._llm.extract_asset_amounts_from_images(
+                image_data_urls=image_data_urls,
+            )
+        except AppError as exc:
+            if not self._should_fallback_single_image(exc, image_count=len(image_data_urls)):
+                raise
+            llm_amounts = await self._extract_with_single_image_fallback(image_data_urls)
+
         normalized_amounts = {
             key: self._normalize_amount(llm_amounts.get(key, 0.0))
             for key in ASSET_CATEGORY_KEYS
@@ -86,6 +92,34 @@ class AssetImageFillService:
             category_amounts=normalized_amounts,
             total_amount_wan=total_amount_wan,
         )
+
+    def _should_fallback_single_image(self, exc: AppError, *, image_count: int) -> bool:
+        if image_count <= 1:
+            return False
+        if not self._settings.asset_image_fill.fallback_single_image_on_upstream_error:
+            return False
+        return exc.code == ErrorCode.UPSTREAM_ERROR
+
+    async def _extract_with_single_image_fallback(
+        self,
+        image_data_urls: list[str],
+    ) -> dict[str, float]:
+        accumulated = {key: 0.0 for key in ASSET_CATEGORY_KEYS}
+        for index, image_data_url in enumerate(image_data_urls, start=1):
+            try:
+                result = await self._llm.extract_asset_amounts_from_images(
+                    image_data_urls=[image_data_url],
+                )
+            except AppError as exc:
+                raise AppError(
+                    code=exc.code,
+                    message=f"第 {index} 张图片识别失败：{exc.message}",
+                    status_code=exc.status_code,
+                    details=exc.details,
+                ) from exc
+            for key in ASSET_CATEGORY_KEYS:
+                accumulated[key] += self._normalize_amount(result.get(key, 0.0))
+        return accumulated
 
     def _normalize_amount(self, raw: object) -> float:
         if isinstance(raw, bool):
