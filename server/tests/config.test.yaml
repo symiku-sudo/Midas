@@ -28,6 +28,10 @@ comment_insights:
   max_highlight_items: 3
   max_comment_length: 120
 
+asset_image_fill:
+  max_images: 5
+  max_image_bytes: 4000000
+
 runtime:
   temp_dir: .tmp
   log_level: INFO

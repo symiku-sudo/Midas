@@ -273,6 +273,60 @@ class MainScreenContentRobolectricSmokeTest {
     }
 
     @Test
+    fun assetPanel_fillFromImages_shouldTriggerCallback() {
+        var fillClicks = 0
+
+        composeRule.setContent {
+            MaterialTheme {
+                MainScreenContent(
+                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
+                    bilibili = BilibiliUiState(),
+                    xiaohongshu = XiaohongshuUiState(),
+                    notes = NotesUiState(),
+                    onAppForeground = {},
+                    onBaseUrlChange = {},
+                    onSaveBaseUrl = {},
+                    onTestConnection = {},
+                    onConfigTextChange = { _, _ -> },
+                    onConfigBooleanChange = { _, _ -> },
+                    onResetConfig = {},
+                    onBilibiliVideoUrlChange = {},
+                    onSubmitBilibiliSummary = {},
+                    onSaveBilibiliNote = {},
+                    onXiaohongshuUrlChange = {},
+                    onSummarizeXiaohongshuUrl = {},
+                    onRefreshXiaohongshuAuthConfig = {},
+                    onSaveSingleXiaohongshuNote = {},
+                    onNotesKeywordChange = {},
+                    onRefreshNotes = {},
+                    onDeleteBilibiliNote = {},
+                    onDeleteXiaohongshuNote = {},
+                    onSuggestMergeCandidates = {},
+                    onPreviewMergeCandidate = { _ -> },
+                    onCommitCurrentMerge = {},
+                    onRollbackLastMerge = {},
+                    onFinalizeLastMerge = {},
+                    onFillAssetStatsFromImages = { fillClicks += 1 },
+                    enableLifecycleAutoRefresh = false,
+                    enableCyclicTabs = false,
+                    animateTabSwitch = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("笔记系统").performClick()
+        composeRule.onNodeWithText("资产系统").performClick()
+        composeRule.onNodeWithText("资产统计").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("asset_fill_from_images_button", useUnmergedTree = true)
+            .performScrollTo()
+            .performClick()
+        composeRule.waitForIdle()
+        assertEquals(1, fillClicks)
+    }
+
+    @Test
     fun assetPanel_copyAndHistory_shouldTriggerCallbacks() {
         val historyId = "history-1"
         var copyClicks = 0

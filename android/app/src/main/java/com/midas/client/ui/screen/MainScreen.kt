@@ -5,6 +5,8 @@ import android.content.ClipboardManager
 import android.net.Uri
 import android.content.Intent
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -270,6 +272,10 @@ fun MainScreen(viewModel: MainViewModel) {
     val xiaohongshu by viewModel.xiaohongshuState.collectAsStateWithLifecycle()
     val notes by viewModel.notesState.collectAsStateWithLifecycle()
     val finance by viewModel.financeState.collectAsStateWithLifecycle()
+    val assetImagePickerLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetMultipleContents(),
+        onResult = { uris -> viewModel.onAssetImagesSelected(uris) },
+    )
 
     MainScreenContent(
         settings = settings,
@@ -305,6 +311,7 @@ fun MainScreen(viewModel: MainViewModel) {
         onSaveAssetStats = viewModel::saveAssetStats,
         onDeleteAssetHistoryRecord = viewModel::deleteAssetHistoryRecord,
         onAssetSummaryCopied = viewModel::markAssetSummaryCopied,
+        onFillAssetStatsFromImages = { assetImagePickerLauncher.launch("image/*") },
     )
 }
 
@@ -344,6 +351,7 @@ fun MainScreenContent(
     onSaveAssetStats: () -> Unit = {},
     onDeleteAssetHistoryRecord: (String) -> Unit = {},
     onAssetSummaryCopied: () -> Unit = {},
+    onFillAssetStatsFromImages: () -> Unit = {},
     enableLifecycleAutoRefresh: Boolean = true,
     enableCyclicTabs: Boolean = true,
     animateTabSwitch: Boolean = true,
@@ -469,6 +477,7 @@ fun MainScreenContent(
                     onSaveAssetStats = onSaveAssetStats,
                     onDeleteAssetHistoryRecord = onDeleteAssetHistoryRecord,
                     onAssetSummaryCopied = onAssetSummaryCopied,
+                    onFillAssetStatsFromImages = onFillAssetStatsFromImages,
                     modifier = contentModifier,
                 )
             } else {
@@ -1193,6 +1202,7 @@ private fun FinanceSignalsPanel(
     onSaveAssetStats: () -> Unit,
     onDeleteAssetHistoryRecord: (String) -> Unit,
     onAssetSummaryCopied: () -> Unit,
+    onFillAssetStatsFromImages: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var selectedAssetTab by remember { mutableStateOf(AssetPanelTab.MARKET) }
@@ -1275,6 +1285,7 @@ private fun FinanceSignalsPanel(
                 onSaveAssetStats = onSaveAssetStats,
                 onDeleteAssetHistoryRecord = onDeleteAssetHistoryRecord,
                 onAssetSummaryCopied = onAssetSummaryCopied,
+                onFillAssetStatsFromImages = onFillAssetStatsFromImages,
             )
         }
 
@@ -1298,6 +1309,7 @@ private fun AssetStatsCard(
     onSaveAssetStats: () -> Unit,
     onDeleteAssetHistoryRecord: (String) -> Unit,
     onAssetSummaryCopied: () -> Unit,
+    onFillAssetStatsFromImages: () -> Unit,
 ) {
     val context = LocalContext.current
     var selectedHistoryId by remember { mutableStateOf<String?>(null) }
@@ -1348,7 +1360,7 @@ private fun AssetStatsCard(
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 MidasButton(
                     onClick = onSaveAssetStats,
-                    enabled = !state.isSavingAssetStats,
+                    enabled = !state.isSavingAssetStats && !state.isFillingAssetFromImages,
                     tone = ButtonTone.SUCCESS,
                 ) {
                     SingleLineActionText(if (state.isSavingAssetStats) "保存中..." else "保存资产统计")
@@ -1360,11 +1372,24 @@ private fun AssetStatsCard(
                         clipboard?.setPrimaryClip(ClipData.newPlainText("asset_summary", text))
                         onAssetSummaryCopied()
                     },
+                    enabled = !state.isFillingAssetFromImages,
                     tone = ButtonTone.NEUTRAL,
                 ) {
                     SingleLineActionText("复制资产情况")
                 }
             }
+            MidasButton(
+                onClick = onFillAssetStatsFromImages,
+                enabled = !state.isFillingAssetFromImages && !state.isSavingAssetStats,
+                modifier = Modifier.testTag("asset_fill_from_images_button"),
+            ) {
+                SingleLineActionText(if (state.isFillingAssetFromImages) "识别中..." else "图片识别回填")
+            }
+            Text(
+                text = "支持最多上传 5 张图片，回填后不会自动保存。",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
             if (state.assetErrorMessage.isNotBlank()) {
                 Text(text = state.assetErrorMessage, color = ErrorStatusColor)
             }

@@ -1,6 +1,7 @@
 package com.midas.client.data.network
 
 import com.midas.client.data.model.ApiEnvelope
+import com.midas.client.data.model.AssetImageFillData
 import com.midas.client.data.model.BilibiliNoteSaveRequest
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSavedNotesData
@@ -33,9 +34,12 @@ import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
+import retrofit2.http.Multipart
+import retrofit2.http.Part
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
+import okhttp3.MultipartBody
 
 interface MidasApiService {
     @GET("health")
@@ -43,6 +47,12 @@ interface MidasApiService {
 
     @GET("api/finance/signals")
     suspend fun getFinanceSignals(): Response<ApiEnvelope<FinanceSignalsData>>
+
+    @Multipart
+    @POST("api/assets/fill-from-images")
+    suspend fun fillAssetStatsFromImages(
+        @Part images: List<MultipartBody.Part>
+    ): Response<ApiEnvelope<AssetImageFillData>>
 
     @POST("api/bilibili/summarize")
     suspend fun summarizeBilibili(

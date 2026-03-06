@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any
@@ -8,6 +9,7 @@ import httpx
 
 from app.core.config import Settings
 from app.core.errors import AppError, ErrorCode
+from app.services.asset_categories import ASSET_CATEGORY_KEYS, ASSET_CATEGORY_SPECS
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +57,16 @@ _COMMENT_INSIGHT_PROMPT = (
     "### 公众态度、### 高赞分析、### 样本说明。"
     "其中“高赞分析”需给出要点列表，并引用高赞观点。"
     "严禁编造评论中不存在的事实。"
+)
+
+_ASSET_IMAGE_FILL_PROMPT = (
+    "你是资产识别助手。"
+    "任务：根据用户上传的资产截图，提取并汇总为“万元人民币”。"
+    "严禁输出 Markdown 或解释文字，只能输出 JSON。"
+    "JSON 顶层必须是对象，并包含 category_amounts 字段。"
+    "category_amounts 必须是对象，键只能是规定分类键，值必须是非负数字。"
+    "若某分类在图片中未出现，返回 0。"
+    "金额单位统一换算为万元人民币（例如 120000 元 -> 12.00）。"
 )
 
 
@@ -394,6 +406,69 @@ class LLMService:
             server_error_message="LLM 评论洞察生成失败。",
         )
 
+    async def extract_asset_amounts_from_images(
+        self,
+        *,
+        image_data_urls: list[str],
+    ) -> dict[str, float]:
+        normalized_image_refs = [
+            item.strip()
+            for item in image_data_urls
+            if isinstance(item, str)
+            and item.strip()
+            and (
+                item.strip().startswith("data:image/")
+                or item.strip().startswith("http://")
+                or item.strip().startswith("https://")
+            )
+        ]
+        if not normalized_image_refs:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message="未检测到可用的图片输入。",
+                status_code=400,
+            )
+
+        if not self._settings.llm.enabled:
+            return {key: 0.0 for key in ASSET_CATEGORY_KEYS}
+
+        api_key = self._require_api_key()
+        category_lines = "\n".join(
+            f"- {key}: {label}" for key, label in ASSET_CATEGORY_SPECS
+        )
+        example_json = (
+            '{"category_amounts":{"stock":0,"equity_fund":0,"gold":0,'
+            '"bond_and_bond_fund":0,"money_market_fund":0,'
+            '"bank_fixed_deposit":0,"bank_current_deposit":0,"housing_fund":0}}'
+        )
+        user_text = (
+            "请根据图片识别并汇总资产金额。\n"
+            "必须仅返回 JSON，不要输出其它文字。\n"
+            "JSON 示例：\n"
+            f"{example_json}\n"
+            "分类键说明：\n"
+            f"{category_lines}\n"
+            "金额单位统一为万元人民币，保留两位小数。"
+        )
+        user_content = self._build_multimodal_user_content(
+            user_text=user_text,
+            image_urls=normalized_image_refs,
+        )
+        payload = {
+            "model": self._settings.llm.model,
+            "temperature": 0.0,
+            "messages": [
+                {"role": "system", "content": _ASSET_IMAGE_FILL_PROMPT},
+                {"role": "user", "content": user_content},
+            ],
+        }
+        raw = await self._request_chat_completion(
+            payload,
+            api_key=api_key,
+            server_error_message="LLM 资产图片识别失败。",
+        )
+        return self._parse_asset_amounts_response(raw)
+
     async def merge_notes(
         self,
         *,
@@ -598,3 +673,93 @@ class LLMService:
             return "\n".join(chunks).strip()
 
         return ""
+
+    def _parse_asset_amounts_response(self, raw_text: str) -> dict[str, float]:
+        parsed = self._extract_json_object(raw_text)
+        if not isinstance(parsed, dict):
+            raise AppError(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message="资产图片识别结果不是有效 JSON 对象。",
+                status_code=502,
+            )
+        category_amounts_raw = parsed.get("category_amounts")
+        if isinstance(category_amounts_raw, dict):
+            source = category_amounts_raw
+        else:
+            source = parsed
+        return {
+            key: self._coerce_non_negative_amount(source.get(key, 0.0))
+            for key in ASSET_CATEGORY_KEYS
+        }
+
+    def _extract_json_object(self, raw_text: str) -> dict[str, Any] | None:
+        text = raw_text.strip()
+        if not text:
+            return None
+        direct = self._safe_parse_json_object(text)
+        if direct is not None:
+            return direct
+
+        fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+        if fenced:
+            parsed = self._safe_parse_json_object(fenced.group(1))
+            if parsed is not None:
+                return parsed
+
+        start = text.find("{")
+        if start < 0:
+            return None
+        depth = 0
+        in_string = False
+        escaping = False
+        for idx in range(start, len(text)):
+            ch = text[idx]
+            if in_string:
+                if escaping:
+                    escaping = False
+                elif ch == "\\":
+                    escaping = True
+                elif ch == "\"":
+                    in_string = False
+                continue
+            if ch == "\"":
+                in_string = True
+                continue
+            if ch == "{":
+                depth += 1
+                continue
+            if ch == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start : idx + 1]
+                    return self._safe_parse_json_object(candidate)
+        return None
+
+    def _safe_parse_json_object(self, text: str) -> dict[str, Any] | None:
+        try:
+            parsed = json.loads(text)
+        except json.JSONDecodeError:
+            return None
+        if isinstance(parsed, dict):
+            return parsed
+        return None
+
+    def _coerce_non_negative_amount(self, raw: object) -> float:
+        value = 0.0
+        if isinstance(raw, bool):
+            value = float(int(raw))
+        elif isinstance(raw, (int, float)):
+            value = float(raw)
+        elif isinstance(raw, str):
+            normalized = raw.strip()
+            for token in ("万元人民币", "万元", "万", "人民币", "元"):
+                normalized = normalized.replace(token, "")
+            normalized = normalized.replace(",", "").strip()
+            if normalized:
+                try:
+                    value = float(normalized)
+                except ValueError:
+                    value = 0.0
+        if not value or not value.isfinite() or value < 0:
+            return 0.0
+        return round(value, 2)

@@ -65,6 +65,38 @@ Success `data`:
 - 若状态文件尚未生成，接口会返回空列表和初始化提示文案，HTTP 仍为 `200`。
 - 若状态文件内容损坏，接口返回 `UPSTREAM_ERROR`。
 
+## `POST /api/assets/fill-from-images`
+
+用途：接收资产截图（最多 5 张），由服务端调用多模态 LLM 提取金额并按资产分类汇总，供客户端回填输入框。
+
+Request：
+- `Content-Type: multipart/form-data`
+- 表单字段：`images`（可重复，上传 1~5 张图片）
+
+Success `data`:
+
+```json
+{
+  "image_count": 3,
+  "category_amounts": {
+    "stock": 12.34,
+    "equity_fund": 5.20,
+    "gold": 1.00,
+    "bond_and_bond_fund": 0.00,
+    "money_market_fund": 2.10,
+    "bank_fixed_deposit": 20.00,
+    "bank_current_deposit": 3.50,
+    "housing_fund": 8.88
+  },
+  "total_amount_wan": 53.02
+}
+```
+
+说明：
+- 金额单位统一为“万元人民币”。
+- `category_amounts` 始终返回完整分类键集合，缺失项返回 `0.00`。
+- 服务端仅返回识别结果，不会触发保存动作；客户端需由用户手动确认并保存。
+
 ## `POST /api/bilibili/summarize`
 
 Request:

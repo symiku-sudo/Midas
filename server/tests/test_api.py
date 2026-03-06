@@ -18,6 +18,7 @@ from app.core.config import get_settings
 from app.main import app
 from app.models.schemas import FinanceSignalsData, FinanceWatchlistItem
 from app.repositories.note_repo import NoteLibraryRepository
+from app.services.asset_categories import ASSET_CATEGORY_KEYS
 
 client = TestClient(app)
 
@@ -93,6 +94,21 @@ def test_finance_signals_ok(monkeypatch) -> None:
     assert body["data"]["watchlist_preview"][0]["price"] == 91.23
     assert body["data"]["watchlist_preview"][0]["alert_hint"] == ">90"
     assert body["data"]["ai_insight_text"]
+
+
+def test_asset_fill_from_images_returns_structured_amounts() -> None:
+    files = [
+        ("images", ("asset-1.jpg", b"\xff\xd8\xff\xdbmock1", "image/jpeg")),
+        ("images", ("asset-2.jpg", b"\xff\xd8\xff\xdbmock2", "image/jpeg")),
+    ]
+    resp = client.post("/api/assets/fill-from-images", files=files)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    data = body["data"]
+    assert data["image_count"] == 2
+    assert set(data["category_amounts"].keys()) == set(ASSET_CATEGORY_KEYS)
+    assert data["total_amount_wan"] == 0.0
 
 
 def test_bilibili_invalid_url() -> None:

@@ -1,6 +1,7 @@
 package com.midas.client.data.repo
 
 import com.midas.client.data.model.ApiEnvelope
+import com.midas.client.data.model.AssetImageFillData
 import com.midas.client.data.model.BilibiliNoteSaveRequest
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSavedNotesData
@@ -32,8 +33,17 @@ import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.data.network.MidasApiFactory
 import com.midas.client.data.network.MidasApiService
 import com.midas.client.util.AppResult
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import retrofit2.Response
+
+data class AssetImageUpload(
+    val fileName: String,
+    val bytes: ByteArray,
+    val mimeType: String = "image/jpeg",
+)
 
 class MidasRepository {
     private suspend fun <T> request(
@@ -54,6 +64,30 @@ class MidasRepository {
 
     suspend fun getFinanceSignals(baseUrl: String): AppResult<FinanceSignalsData> {
         return request(baseUrl) { getFinanceSignals() }
+    }
+
+    suspend fun fillAssetStatsFromImages(
+        baseUrl: String,
+        images: List<AssetImageUpload>,
+    ): AppResult<AssetImageFillData> {
+        if (images.isEmpty()) {
+            return AppResult.Error(code = "INVALID_INPUT", message = "请至少上传 1 张图片。")
+        }
+        val parts = images.mapIndexedNotNull { index, image ->
+            if (image.bytes.isEmpty()) {
+                return@mapIndexedNotNull null
+            }
+            val mime = image.mimeType.trim().ifBlank { "image/jpeg" }
+            val mediaType = runCatching { mime.toMediaType() }
+                .getOrDefault("image/jpeg".toMediaType())
+            val fileName = image.fileName.trim().ifBlank { "asset_${index + 1}.jpg" }
+            val body = image.bytes.toRequestBody(mediaType)
+            MultipartBody.Part.createFormData("images", fileName, body)
+        }
+        if (parts.isEmpty()) {
+            return AppResult.Error(code = "INVALID_INPUT", message = "图片内容为空，请重新选择。")
+        }
+        return request(baseUrl) { fillAssetStatsFromImages(parts) }
     }
 
     suspend fun summarizeBilibili(baseUrl: String, videoUrl: String): AppResult<BilibiliSummaryData> {

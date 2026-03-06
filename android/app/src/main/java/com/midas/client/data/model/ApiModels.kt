@@ -36,6 +36,12 @@ data class FinanceSignalsData(
     @Json(name = "ai_insight_text") val aiInsightText: String,
 )
 
+data class AssetImageFillData(
+    @Json(name = "image_count") val imageCount: Int,
+    @Json(name = "category_amounts") val categoryAmounts: Map<String, Double>,
+    @Json(name = "total_amount_wan") val totalAmountWan: Double,
+)
+
 data class BilibiliSummaryRequest(
     @Json(name = "video_url") val videoUrl: String
 )

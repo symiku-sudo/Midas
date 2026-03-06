@@ -1,6 +1,7 @@
 package com.midas.client.ui.screen
 
 import android.app.Application
+import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.midas.client.data.model.BilibiliSavedNote
@@ -11,14 +12,17 @@ import com.midas.client.data.model.NotesMergeCommitData
 import com.midas.client.data.model.NotesMergePreviewData
 import com.midas.client.data.model.XiaohongshuSavedNote
 import com.midas.client.data.model.XiaohongshuSummaryItem
+import com.midas.client.data.repo.AssetImageUpload
 import com.midas.client.data.repo.MidasRepository
 import com.midas.client.data.repo.SettingsRepository
+import com.midas.client.util.AssetImageCompressor
 import com.midas.client.util.AppResult
 import com.midas.client.util.EditableConfigField
 import com.midas.client.util.EditableConfigFormMapper
 import com.midas.client.util.ErrorContext
 import com.midas.client.util.ErrorMessageMapper
 import com.midas.client.util.UrlNormalizer
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -26,10 +30,12 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import kotlin.math.round
 
 data class SettingsUiState(
     val baseUrlInput: String = "",
@@ -114,6 +120,7 @@ private val assetCategorySpecs = listOf(
     AssetCategorySpec(key = "bank_current_deposit", label = "银行活期存款"),
     AssetCategorySpec(key = "housing_fund", label = "公积金"),
 )
+private const val MAX_ASSET_IMAGE_UPLOAD = 5
 
 private fun defaultAssetDrafts(): List<AssetCategoryDraft> {
     return assetCategorySpecs.map { spec ->
@@ -133,6 +140,7 @@ data class FinanceSignalsUiState(
     val assetDrafts: List<AssetCategoryDraft> = defaultAssetDrafts(),
     val assetTotalAmount: Double = 0.0,
     val isSavingAssetStats: Boolean = false,
+    val isFillingAssetFromImages: Boolean = false,
     val assetErrorMessage: String = "",
     val assetStatusMessage: String = "",
     val assetHistory: List<AssetHistoryRecord> = emptyList(),
@@ -193,6 +201,95 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun onAssetImagesSelected(uris: List<Uri>) {
+        val selectedUris = uris
+        if (selectedUris.isEmpty()) {
+            return
+        }
+        val baseUrl = requireBaseUrl {
+            _financeState.update {
+                it.copy(
+                    isFillingAssetFromImages = false,
+                    assetErrorMessage = "请先填写服务端地址。",
+                    assetStatusMessage = "",
+                )
+            }
+        } ?: return
+
+        val trimmedUris = selectedUris.take(MAX_ASSET_IMAGE_UPLOAD)
+        val ignoredCount = selectedUris.size - trimmedUris.size
+        viewModelScope.launch {
+            _financeState.update {
+                it.copy(
+                    isFillingAssetFromImages = true,
+                    assetErrorMessage = "",
+                    assetStatusMessage = if (ignoredCount > 0) {
+                        "最多支持 $MAX_ASSET_IMAGE_UPLOAD 张图片，已忽略 $ignoredCount 张。"
+                    } else {
+                        "正在识别资产图片..."
+                    },
+                )
+            }
+            val app = getApplication<Application>()
+            val compressed = withContext(Dispatchers.IO) {
+                trimmedUris.mapIndexedNotNull { index, uri ->
+                    AssetImageCompressor.compressToJpeg(
+                        context = app,
+                        uri = uri,
+                        fallbackName = "asset_image_${index + 1}.jpg",
+                    )
+                }
+            }
+            if (compressed.isEmpty()) {
+                _financeState.update {
+                    it.copy(
+                        isFillingAssetFromImages = false,
+                        assetErrorMessage = "图片压缩失败，请更换清晰截图后重试。",
+                        assetStatusMessage = "",
+                    )
+                }
+                return@launch
+            }
+
+            val uploadPayload = compressed.map { item ->
+                AssetImageUpload(
+                    fileName = item.fileName,
+                    bytes = item.bytes,
+                    mimeType = item.mimeType,
+                )
+            }
+            when (val result = apiRepository.fillAssetStatsFromImages(baseUrl, uploadPayload)) {
+                is AppResult.Success -> {
+                    val nextDrafts = buildAssetDraftsForAutoFill(result.data.categoryAmounts)
+                    val total = computeAssetTotalAmount(nextDrafts)
+                    _financeState.update {
+                        it.copy(
+                            isFillingAssetFromImages = false,
+                            assetDrafts = nextDrafts,
+                            assetTotalAmount = total,
+                            assetErrorMessage = "",
+                            assetStatusMessage = "图片识别完成（${result.data.imageCount} 张），请确认后手动保存。",
+                        )
+                    }
+                }
+
+                is AppResult.Error -> {
+                    _financeState.update {
+                        it.copy(
+                            isFillingAssetFromImages = false,
+                            assetErrorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.ASSET,
+                            ),
+                            assetStatusMessage = "",
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     fun saveAssetStats() {
         val drafts = _financeState.value.assetDrafts
         val invalidLabels = mutableListOf<String>()
@@ -217,6 +314,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             _financeState.update {
                 it.copy(
                     isSavingAssetStats = false,
+                    isFillingAssetFromImages = false,
                     assetErrorMessage = "以下分类金额格式不正确：$fields",
                     assetStatusMessage = "",
                 )
@@ -227,6 +325,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _financeState.update {
             it.copy(
                 isSavingAssetStats = true,
+                isFillingAssetFromImages = false,
                 assetErrorMessage = "",
                 assetStatusMessage = "",
             )
@@ -248,6 +347,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         _financeState.update {
             it.copy(
                 isSavingAssetStats = false,
+                isFillingAssetFromImages = false,
                 assetDrafts = normalizedDrafts,
                 assetTotalAmount = total,
                 assetErrorMessage = "",
@@ -1371,6 +1471,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun buildAssetDraftsForAutoFill(amounts: Map<String, Double>): List<AssetCategoryDraft> {
+        return assetCategorySpecs.map { spec ->
+            val normalized = normalizeAmount2(amounts[spec.key] ?: 0.0)
+            AssetCategoryDraft(
+                key = spec.key,
+                label = spec.label,
+                amountInput = formatAmountFixed2(normalized),
+            )
+        }
+    }
+
     private fun computeAssetTotalAmount(drafts: List<AssetCategoryDraft>): Double {
         return drafts.sumOf { draft ->
             val value = draft.amountInput.trim().replace(",", "")
@@ -1388,6 +1499,17 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return amount.toLong().toString()
         }
         return "%.2f".format(Locale.US, amount).trimEnd('0').trimEnd('.')
+    }
+
+    private fun formatAmountFixed2(amount: Double): String {
+        return "%.2f".format(Locale.US, normalizeAmount2(amount))
+    }
+
+    private fun normalizeAmount2(amount: Double): Double {
+        if (!amount.isFinite() || amount < 0.0) {
+            return 0.0
+        }
+        return round(amount * 100.0) / 100.0
     }
 
     private fun formatAmountWan(amount: Double): String {

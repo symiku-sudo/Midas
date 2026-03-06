@@ -6,12 +6,13 @@ from functools import lru_cache
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, File, Request, UploadFile
 
 from app.core.config import clear_settings_cache, get_settings
 from app.core.errors import AppError, ErrorCode
 from app.core.response import success_response
 from app.models.schemas import (
+    AssetImageFillData,
     BilibiliNoteSaveRequest,
     BilibiliSummaryRequest,
     EditableConfigData,
@@ -37,6 +38,7 @@ from app.models.schemas import (
     XiaohongshuSyncedNotesPruneData,
 )
 from app.services.bilibili import BilibiliSummarizer
+from app.services.asset_image_fill import AssetImageFillService
 from app.services.editable_config import EditableConfigService
 from app.services.finance_signals import FinanceSignalsService
 from app.services.note_library import NoteLibraryService
@@ -74,6 +76,12 @@ def _get_finance_signals_service() -> FinanceSignalsService:
     return FinanceSignalsService()
 
 
+@lru_cache(maxsize=1)
+def _get_asset_image_fill_service() -> AssetImageFillService:
+    settings = get_settings()
+    return AssetImageFillService(settings)
+
+
 def _reload_runtime_services() -> None:
     clear_settings_cache()
     _get_summarizer.cache_clear()
@@ -81,6 +89,7 @@ def _reload_runtime_services() -> None:
     _get_note_library_service.cache_clear()
     _get_editable_config_service.cache_clear()
     _get_finance_signals_service.cache_clear()
+    _get_asset_image_fill_service.cache_clear()
 
 
 def _count_cookie_pairs(raw_cookie: str) -> int:
@@ -172,6 +181,16 @@ async def get_finance_signals(request: Request) -> dict:
     service = _get_finance_signals_service()
     data = service.get_dashboard_state()
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/assets/fill-from-images")
+async def fill_asset_stats_from_images(
+    request: Request,
+    images: list[UploadFile] = File(...),
+) -> dict:
+    service = _get_asset_image_fill_service()
+    result: AssetImageFillData = await service.extract_from_uploads(images)
+    return success_response(data=result.model_dump(), request_id=request.state.request_id)
 
 
 @router.post("/api/bilibili/summarize")

@@ -124,6 +124,11 @@ class CommentInsightsConfig(BaseModel):
     max_comment_length: int = 180
 
 
+class AssetImageFillConfig(BaseModel):
+    max_images: int = 5
+    max_image_bytes: int = 4_000_000
+
+
 class RuntimeConfig(BaseModel):
     temp_dir: str = ".tmp"
     log_level: str = "INFO"
@@ -145,6 +150,9 @@ class Settings(BaseModel):
     xiaohongshu: XiaohongshuConfig = Field(default_factory=XiaohongshuConfig)
     comment_insights: CommentInsightsConfig = Field(
         default_factory=CommentInsightsConfig
+    )
+    asset_image_fill: AssetImageFillConfig = Field(
+        default_factory=AssetImageFillConfig
     )
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
     notes_merge: NotesMergeConfig = Field(default_factory=NotesMergeConfig)

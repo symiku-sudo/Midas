@@ -23,6 +23,12 @@ class FinanceSignalsData(BaseModel):
     ai_insight_text: str
 
 
+class AssetImageFillData(BaseModel):
+    image_count: int = Field(ge=1)
+    category_amounts: dict[str, float]
+    total_amount_wan: float = Field(ge=0)
+
+
 class BilibiliSummaryRequest(BaseModel):
     video_url: str = Field(min_length=3, max_length=2000)
 

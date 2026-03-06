@@ -4,6 +4,7 @@
 
 - `GET /health`
 - `GET /api/finance/signals`
+- `POST /api/assets/fill-from-images`
 - `POST /api/bilibili/summarize`
 - `POST /api/notes/bilibili/save`
 - `GET /api/notes/bilibili`
@@ -190,6 +191,13 @@ curl http://127.0.0.1:8000/health
 ```bash
 # 读取 Finance Signals 面板状态
 curl http://127.0.0.1:8000/api/finance/signals
+```
+
+```bash
+# 上传资产截图（最多 5 张）并返回分类汇总（单位：万元人民币）
+curl -X POST http://127.0.0.1:8000/api/assets/fill-from-images \
+  -F "images=@/path/to/asset-1.jpg" \
+  -F "images=@/path/to/asset-2.png"
 ```
 
 ```bash
