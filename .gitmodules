@@ -1,0 +1,3 @@
+[submodule "tools/ntfy-notify"]
+	path = tools/ntfy-notify
+	url = https://github.com/symiku-sudo/ntfy-notify.git

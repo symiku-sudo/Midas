@@ -9,16 +9,16 @@ LEGACY_REPO_DIR="$PARENT_DIR/ntfy-notify"
 
 if [[ -n "${NTFY_NOTIFY_REPO_DIR:-}" ]]; then
   REPO_DIR="$NTFY_NOTIFY_REPO_DIR"
-elif [[ -f "$SUBMODULE_REPO_DIR/ntfy_notify.sh" ]]; then
+elif [[ -f "$SUBMODULE_REPO_DIR/ntfy_selfhost.sh" ]]; then
   REPO_DIR="$SUBMODULE_REPO_DIR"
 else
   REPO_DIR="$LEGACY_REPO_DIR"
 fi
 
-TARGET="$REPO_DIR/ntfy_notify.sh"
+TARGET="$REPO_DIR/ntfy_selfhost.sh"
 
 if [[ ! -f "$TARGET" ]]; then
-  echo "[midas ntfy] external notifier not found: $TARGET"
+  echo "[midas ntfy] external selfhost tool not found: $TARGET"
   echo "[midas ntfy] run: git submodule update --init --recursive"
   echo "[midas ntfy] or set NTFY_NOTIFY_REPO_DIR=<path-to-ntfy-notify>"
   exit 1

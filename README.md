@@ -112,6 +112,34 @@ tools/release.sh
 - `--skip-build`：跳过 Gradle 构建，仅导出现有 APK
 - `--share-tailnet`：额外启动 APK 分享并输出 Tailscale 下载链接
 - `--share-port <port>`：分享端口（默认 `8765`）
+- `--notify-ntfy`：流程完成后发送一条 ntfy 通知（best-effort）
+
+### 5) 基于 Tailscale 自建 ntfy（内网通知）
+
+> 说明：通知工具已拆分为子模块 `tools/ntfy-notify`；`midas/tools/ntfy_*.sh` 为代理入口。
+
+首次拉取仓库后请初始化子模块：
+
+```bash
+git submodule update --init --recursive
+```
+
+快速初始化：
+
+```bash
+tools/ntfy_selfhost.sh init --tailnet-host <tailnet-host-or-ip> --topic midas-task
+tools/ntfy_selfhost.sh install-binary   # 仅当本机没有 Docker/Compose
+tools/ntfy_selfhost.sh start
+```
+
+更多命令（鉴权、Token、Android 侧操作）见：
+- `tools/ntfy/README.md`
+
+发送测试消息（复用生成的配置）：
+
+```bash
+tools/ntfy_notify.sh --config .tmp/ntfy/notify.env
+```
 
 ## 说明
 
