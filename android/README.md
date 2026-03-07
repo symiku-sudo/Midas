@@ -65,6 +65,23 @@ rm -rf .gradle app/build build .kotlin
 
 > 说明：客户端默认地址 `http://10.0.2.2:8000/`（Android 模拟器访问宿主机）。
 
+## ntfy（Tailscale 内网通知）
+
+如果你已按仓库根目录的 `tools/ntfy_selfhost.sh` 部署好自建 ntfy，Android 端建议按下面配置：
+
+1. 打开 Tailscale 并保持加入同一 tailnet。
+2. 安装 ntfy App（优先 F-Droid 版本）。
+3. 在 ntfy App 添加服务器：`http://<tailnet-host-or-ip>:8085`。
+4. 订阅你的 topic（例如 `midas-task`）。
+5. 若服务端启用鉴权，配置账号或 Bearer Token。
+6. 关闭 `Tailscale` 与 `ntfy` 的电池优化（允许后台运行）。
+
+发送端可直接用：
+
+```bash
+tools/ntfy_notify.sh --config .tmp/ntfy/notify.env
+```
+
 ## 结构
 
 - `app/src/main/java/com/midas/client/data/`：数据模型、网络层、仓储

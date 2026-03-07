@@ -11,6 +11,7 @@ OUTPUT_DIR=""
 SKIP_BUILD="0"
 SHARE_TAILNET="0"
 SHARE_PORT="8765"
+NOTIFY_NTFY="${MIDAS_RELEASE_NOTIFY_NTFY:-0}"
 
 usage() {
   cat <<'EOF'
@@ -25,6 +26,7 @@ Options:
   --skip-build            Skip Gradle assemble and export existing APK only
   --share-tailnet         Share latest APK over Tailscale URL (best effort)
   --share-port <port>     Share HTTP port for APK file (default: 8765)
+  --notify-ntfy           Send ntfy notification when flow completes (best effort)
   -h, --help              Show help
 
 Flow:
@@ -32,6 +34,7 @@ Flow:
   2) restart mobile server
   3) export APK
   4) (optional) share APK via tailnet URL
+  5) (optional) send ntfy notification
 EOF
 }
 
@@ -77,6 +80,10 @@ while [[ $# -gt 0 ]]; do
       fi
       SHARE_PORT="$2"
       shift 2
+      ;;
+    --notify-ntfy)
+      NOTIFY_NTFY="1"
+      shift
       ;;
     -h|--help)
       usage
@@ -138,6 +145,17 @@ if [[ "$SHARE_TAILNET" == "1" ]]; then
     --apk "$SHARE_APK_PATH" \
     --port "$SHARE_PORT"; then
     echo "[release] warning: tailnet APK share failed (release artifact still exported)."
+  fi
+fi
+
+if [[ "$NOTIFY_NTFY" == "1" ]]; then
+  echo "[release] notify via ntfy..."
+  notify_cmd=("$ROOT_DIR/tools/ntfy_notify.sh")
+  if [[ -z "${NTFY_CONFIG_FILE:-}" ]] && [[ -f "$ROOT_DIR/.tmp/ntfy/notify.env" ]]; then
+    notify_cmd+=(--config "$ROOT_DIR/.tmp/ntfy/notify.env")
+  fi
+  if ! "${notify_cmd[@]}"; then
+    echo "[release] warning: ntfy notify failed."
   fi
 fi
 
