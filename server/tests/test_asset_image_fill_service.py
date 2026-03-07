@@ -5,6 +5,8 @@ import pytest
 from app.core.config import get_settings
 from app.core.errors import AppError, ErrorCode
 from app.services.asset_image_fill import AssetImageFillService
+from app.services.asset_categories import ASSET_CATEGORY_KEYS
+from app.services.llm import LLMService
 
 
 class _FakeUpload:
@@ -64,3 +66,16 @@ async def test_extract_from_uploads_should_fallback_to_single_image_when_batch_f
     assert result.category_amounts["stock"] == 2.22
     assert result.total_amount_wan == 2.22
     assert llm.calls == [2, 1, 1]
+
+
+def test_parse_asset_amounts_response_accepts_float_values() -> None:
+    settings = get_settings().model_copy(deep=True)
+    llm_service = LLMService(settings=settings)
+
+    parsed = llm_service._parse_asset_amounts_response(
+        '{"category_amounts":{"stock":123.456,"gold":5.2}}'
+    )
+
+    assert set(parsed.keys()) == set(ASSET_CATEGORY_KEYS)
+    assert parsed["stock"] == 123.46
+    assert parsed["gold"] == 5.2

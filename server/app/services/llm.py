@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 from typing import Any
 
@@ -761,6 +762,6 @@ class LLMService:
                     value = float(normalized)
                 except ValueError:
                     value = 0.0
-        if not value or not value.isfinite() or value < 0:
+        if value < 0 or not math.isfinite(value):
             return 0.0
         return round(value, 2)
