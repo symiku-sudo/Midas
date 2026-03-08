@@ -115,10 +115,10 @@ news:
       "中国网": 4
   alerting:
     enabled: true
-    ntfy_config_file: "../.tmp/ntfy/notify.env"
+    ntfy_config_file: "../../.tmp/ntfy/notify.env"
     state_file: "finance_alert_state.json"
     cooldown_seconds: 1800
-    min_high_risk_score: 140
+    min_high_risk_score: 120
     min_high_risk_hits: 2
     max_items_in_notification: 3
     task_name: "finance-signals-high-risk"

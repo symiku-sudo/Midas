@@ -619,7 +619,7 @@ def maybe_send_high_risk_notification(
     if notify_script:
         notify_script_path = resolve_config_relative_path(config, str(notify_script))
     else:
-        notify_script_path = Path(__file__).resolve().parents[1] / "tools" / "ntfy_notify.sh"
+        notify_script_path = Path(__file__).resolve().parents[2] / "tools" / "ntfy_notify.sh"
     ntfy_config_file = resolve_config_relative_path(
         config,
         str(alerting_cfg.get("ntfy_config_file", "../.tmp/ntfy/notify.env")),
