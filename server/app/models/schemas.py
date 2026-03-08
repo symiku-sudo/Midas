@@ -58,6 +58,25 @@ class AssetImageFillData(BaseModel):
     total_amount_wan: float = Field(ge=0)
 
 
+class AssetSnapshotRecord(BaseModel):
+    id: str = Field(min_length=1, max_length=128)
+    saved_at: str = Field(min_length=1, max_length=32)
+    total_amount_wan: float = Field(ge=0)
+    amounts: dict[str, float] = Field(default_factory=dict)
+
+
+class AssetSnapshotHistoryData(BaseModel):
+    total: int
+    items: list[AssetSnapshotRecord]
+
+
+class AssetSnapshotSaveRequest(BaseModel):
+    id: str = Field(default="", max_length=128)
+    saved_at: str = Field(default="", max_length=32)
+    total_amount_wan: float = Field(default=0, ge=0)
+    amounts: dict[str, float] = Field(default_factory=dict)
+
+
 class BilibiliSummaryRequest(BaseModel):
     video_url: str = Field(min_length=3, max_length=2000)
 

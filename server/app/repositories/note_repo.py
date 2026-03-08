@@ -87,6 +87,18 @@ class NoteLibraryRepository:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS asset_snapshot_history (
+                    id TEXT PRIMARY KEY,
+                    saved_at TEXT NOT NULL,
+                    total_amount_wan REAL NOT NULL,
+                    amounts_json TEXT NOT NULL DEFAULT '{}',
+                    created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
             conn.commit()
 
     def save_bilibili_note(
@@ -116,6 +128,65 @@ class NoteLibraryRepository:
                 ),
             )
             conn.commit()
+
+    def upsert_asset_snapshot(
+        self,
+        *,
+        record_id: str,
+        saved_at: str,
+        total_amount_wan: float,
+        amounts: dict[str, float],
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO asset_snapshot_history
+                (id, saved_at, total_amount_wan, amounts_json, updated_at)
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(id) DO UPDATE SET
+                    saved_at = excluded.saved_at,
+                    total_amount_wan = excluded.total_amount_wan,
+                    amounts_json = excluded.amounts_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    record_id,
+                    saved_at,
+                    total_amount_wan,
+                    json.dumps(amounts, ensure_ascii=False, sort_keys=True),
+                ),
+            )
+            conn.commit()
+
+    def list_asset_snapshots(self) -> list[dict[str, Any]]:
+        with self._connect() as conn:
+            rows = conn.execute(
+                """
+                SELECT id, saved_at, total_amount_wan, amounts_json
+                FROM asset_snapshot_history
+                ORDER BY saved_at DESC, updated_at DESC, id DESC
+                """
+            ).fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            payload = dict(row)
+            try:
+                amounts = json.loads(str(payload.get("amounts_json", "{}")))
+            except Exception:
+                amounts = {}
+            payload["amounts"] = amounts if isinstance(amounts, dict) else {}
+            payload.pop("amounts_json", None)
+            items.append(payload)
+        return items
+
+    def delete_asset_snapshot(self, record_id: str) -> int:
+        with self._connect() as conn:
+            cursor = conn.execute(
+                "DELETE FROM asset_snapshot_history WHERE id = ?",
+                (record_id,),
+            )
+            conn.commit()
+            return int(cursor.rowcount)
 
     def backup_database(self) -> Path:
         suffix = self._db_path.suffix or ".db"

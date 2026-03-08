@@ -12,6 +12,9 @@ from app.core.config import clear_settings_cache, get_settings
 from app.core.errors import AppError, ErrorCode
 from app.core.response import success_response
 from app.models.schemas import (
+    AssetSnapshotHistoryData,
+    AssetSnapshotSaveRequest,
+    AssetSnapshotRecord,
     AssetImageFillData,
     BilibiliNoteSaveRequest,
     BilibiliSummaryRequest,
@@ -39,6 +42,7 @@ from app.models.schemas import (
 )
 from app.services.bilibili import BilibiliSummarizer
 from app.services.asset_image_fill import AssetImageFillService
+from app.services.asset_snapshots import AssetSnapshotService
 from app.services.editable_config import EditableConfigService
 from app.services.finance_signals import FinanceSignalsService
 from app.services.note_library import NoteLibraryService
@@ -82,6 +86,12 @@ def _get_asset_image_fill_service() -> AssetImageFillService:
     return AssetImageFillService(settings)
 
 
+@lru_cache(maxsize=1)
+def _get_asset_snapshot_service() -> AssetSnapshotService:
+    settings = get_settings()
+    return AssetSnapshotService(settings)
+
+
 def _reload_runtime_services() -> None:
     clear_settings_cache()
     _get_summarizer.cache_clear()
@@ -90,6 +100,7 @@ def _reload_runtime_services() -> None:
     _get_editable_config_service.cache_clear()
     _get_finance_signals_service.cache_clear()
     _get_asset_image_fill_service.cache_clear()
+    _get_asset_snapshot_service.cache_clear()
 
 
 def _count_cookie_pairs(raw_cookie: str) -> int:
@@ -191,6 +202,33 @@ async def fill_asset_stats_from_images(
     service = _get_asset_image_fill_service()
     result: AssetImageFillData = await service.extract_from_uploads(images)
     return success_response(data=result.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/assets/snapshots")
+async def list_asset_snapshots(request: Request) -> dict:
+    service = _get_asset_snapshot_service()
+    data: AssetSnapshotHistoryData = service.list_history()
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/assets/snapshots")
+async def save_asset_snapshot(payload: AssetSnapshotSaveRequest, request: Request) -> dict:
+    service = _get_asset_snapshot_service()
+    data: AssetSnapshotRecord = service.save_snapshot(
+        record_id=payload.id,
+        saved_at=payload.saved_at,
+        total_amount_wan=payload.total_amount_wan,
+        amounts=payload.amounts,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.delete("/api/assets/snapshots/{record_id}")
+async def delete_asset_snapshot(record_id: str, request: Request) -> dict:
+    service = _get_asset_snapshot_service()
+    deleted_count = service.delete_snapshot(record_id)
+    data = NotesDeleteData(deleted_count=deleted_count)
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 
 @router.post("/api/bilibili/summarize")

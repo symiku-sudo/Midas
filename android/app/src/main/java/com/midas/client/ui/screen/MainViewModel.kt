@@ -4,6 +4,7 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.midas.client.data.model.AssetSnapshotRecordData
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSummaryData
 import com.midas.client.data.model.FinanceWatchlistItem
@@ -173,17 +174,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private var autoSaveConfigJob: Job? = null
     private var financeSignalsJob: Job? = null
+    private var assetHistoryJob: Job? = null
 
     init {
         loadLocalAssetStats()
         loadEditableConfig()
         loadSavedNotes()
         loadFinanceSignals()
+        loadAssetSnapshotHistory()
     }
 
     fun onAppForeground() {
         loadSavedNotes()
         loadFinanceSignals()
+        loadAssetSnapshotHistory()
     }
 
     fun onAssetAmountInputChange(categoryKey: String, newValue: String) {
@@ -294,6 +298,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveAssetStats() {
+        val baseUrl = requireBaseUrl {
+            _financeState.update {
+                it.copy(
+                    isSavingAssetStats = false,
+                    isFillingAssetFromImages = false,
+                    assetErrorMessage = "请先填写服务端地址。",
+                    assetStatusMessage = "",
+                )
+            }
+        } ?: return
         val drafts = _financeState.value.assetDrafts
         val invalidLabels = mutableListOf<String>()
         val amounts = linkedMapOf<String, Double>()
@@ -335,32 +349,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
 
         val total = amounts.values.sum()
-        val snapshot = SettingsRepository.AssetSnapshotRecord(
-            id = UUID.randomUUID().toString(),
-            savedAt = currentTimestamp(),
-            totalAmountWan = total,
-            amounts = amounts,
-        )
+        val snapshotId = UUID.randomUUID().toString()
+        val savedAt = currentTimestamp()
+        viewModelScope.launch {
+            when (
+                val result = apiRepository.saveAssetSnapshot(
+                    baseUrl = baseUrl,
+                    id = snapshotId,
+                    savedAt = savedAt,
+                    totalAmountWan = total,
+                    amounts = amounts,
+                )
+            ) {
+                is AppResult.Success -> {
+                    settingsRepository.saveAssetCategoryAmounts(amounts)
+                    val nextHistory = mergeAssetHistory(
+                        current = _financeState.value.assetHistory,
+                        incoming = listOf(result.data.toUiRecord()),
+                    )
+                    settingsRepository.saveAssetSnapshotHistory(nextHistory.toSettingsRecords())
+                    val normalizedDrafts = buildAssetDrafts(amounts)
+                    _financeState.update {
+                        it.copy(
+                            isSavingAssetStats = false,
+                            isFillingAssetFromImages = false,
+                            assetDrafts = normalizedDrafts,
+                            assetTotalAmount = total,
+                            assetErrorMessage = "",
+                            assetHistory = nextHistory,
+                            assetStatusMessage = if (amounts.isEmpty()) {
+                                "已清空资产统计。"
+                            } else {
+                                "已保存资产统计：${amounts.size} 类，合计 ${formatAmountWan(total)}。"
+                            },
+                        )
+                    }
+                }
 
-        settingsRepository.saveAssetCategoryAmounts(amounts)
-        val existingHistory = settingsRepository.getAssetSnapshotHistory()
-        val nextHistory = listOf(snapshot) + existingHistory
-        settingsRepository.saveAssetSnapshotHistory(nextHistory)
-        val normalizedDrafts = buildAssetDrafts(amounts)
-        _financeState.update {
-            it.copy(
-                isSavingAssetStats = false,
-                isFillingAssetFromImages = false,
-                assetDrafts = normalizedDrafts,
-                assetTotalAmount = total,
-                assetErrorMessage = "",
-                assetHistory = mapAssetHistory(nextHistory),
-                assetStatusMessage = if (amounts.isEmpty()) {
-                    "已清空资产统计。"
-                } else {
-                    "已保存资产统计：${amounts.size} 类，合计 ${formatAmountWan(total)}。"
-                },
-            )
+                is AppResult.Error -> {
+                    _financeState.update {
+                        it.copy(
+                            isSavingAssetStats = false,
+                            isFillingAssetFromImages = false,
+                            assetErrorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.ASSET,
+                            ),
+                            assetStatusMessage = "",
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -369,24 +409,50 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         if (trimmed.isBlank()) {
             return
         }
-        val current = settingsRepository.getAssetSnapshotHistory()
-        val next = current.filterNot { it.id == trimmed }
-        if (next.size == current.size) {
+        val baseUrl = requireBaseUrl {
             _financeState.update {
                 it.copy(
-                    assetErrorMessage = "未找到可删除的历史记录。",
+                    assetErrorMessage = "请先填写服务端地址。",
                     assetStatusMessage = "",
                 )
             }
-            return
-        }
-        settingsRepository.saveAssetSnapshotHistory(next)
-        _financeState.update {
-            it.copy(
-                assetHistory = mapAssetHistory(next),
-                assetErrorMessage = "",
-                assetStatusMessage = "已删除 1 条历史记录。",
-            )
+        } ?: return
+        viewModelScope.launch {
+            when (val result = apiRepository.deleteAssetSnapshot(baseUrl, trimmed)) {
+                is AppResult.Success -> {
+                    if (result.data.deletedCount <= 0) {
+                        _financeState.update {
+                            it.copy(
+                                assetErrorMessage = "未找到可删除的历史记录。",
+                                assetStatusMessage = "",
+                            )
+                        }
+                        return@launch
+                    }
+                    val next = _financeState.value.assetHistory.filterNot { it.id == trimmed }
+                    settingsRepository.saveAssetSnapshotHistory(next.toSettingsRecords())
+                    _financeState.update {
+                        it.copy(
+                            assetHistory = next,
+                            assetErrorMessage = "",
+                            assetStatusMessage = "已删除 1 条历史记录。",
+                        )
+                    }
+                }
+
+                is AppResult.Error -> {
+                    _financeState.update {
+                        it.copy(
+                            assetErrorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.ASSET,
+                            ),
+                            assetStatusMessage = "",
+                        )
+                    }
+                }
+            }
         }
     }
 
@@ -420,6 +486,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         loadEditableConfig()
         loadFinanceSignals()
+        loadAssetSnapshotHistory()
     }
 
     fun testConnection() {
@@ -1473,6 +1540,82 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private fun loadAssetSnapshotHistory() {
+        val baseUrl = settingsRepository.getServerBaseUrl().trim()
+        if (baseUrl.isBlank()) {
+            return
+        }
+        if (assetHistoryJob?.isActive == true) {
+            return
+        }
+        assetHistoryJob = viewModelScope.launch {
+            try {
+                when (val result = apiRepository.listAssetSnapshots(baseUrl)) {
+                    is AppResult.Success -> {
+                        var serverHistory = result.data.items.map { it.toUiRecord() }
+                        val localHistory = mapAssetHistory(settingsRepository.getAssetSnapshotHistory())
+                        if (localHistory.isNotEmpty()) {
+                            val serverIds = serverHistory.map { it.id }.toSet()
+                            val pendingMigration = localHistory.filter { it.id !in serverIds }
+                            if (pendingMigration.isNotEmpty()) {
+                                pendingMigration.forEach { record ->
+                                    when (
+                                        apiRepository.saveAssetSnapshot(
+                                            baseUrl = baseUrl,
+                                            id = record.id,
+                                            savedAt = record.savedAt,
+                                            totalAmountWan = record.totalAmountWan,
+                                            amounts = record.amounts,
+                                        )
+                                    ) {
+                                        is AppResult.Success -> Unit
+                                        is AppResult.Error -> return@launch
+                                    }
+                                }
+                                when (val refreshed = apiRepository.listAssetSnapshots(baseUrl)) {
+                                    is AppResult.Success -> {
+                                        serverHistory = refreshed.data.items.map { it.toUiRecord() }
+                                    }
+                                    is AppResult.Error -> return@launch
+                                }
+                            }
+                        }
+
+                        settingsRepository.saveAssetSnapshotHistory(serverHistory.toSettingsRecords())
+                        val localAmounts = settingsRepository.getAssetCategoryAmounts()
+                        if (localAmounts.isEmpty() && serverHistory.isNotEmpty()) {
+                            val latest = serverHistory.first()
+                            settingsRepository.saveAssetCategoryAmounts(latest.amounts)
+                            val drafts = buildAssetDrafts(latest.amounts)
+                            _financeState.update {
+                                it.copy(
+                                    assetDrafts = drafts,
+                                    assetTotalAmount = computeAssetTotalAmount(drafts),
+                                    assetHistory = serverHistory,
+                                    assetErrorMessage = "",
+                                )
+                            }
+                        } else {
+                            _financeState.update {
+                                it.copy(
+                                    assetHistory = serverHistory,
+                                    assetErrorMessage = "",
+                                )
+                            }
+                        }
+                    }
+
+                    is AppResult.Error -> {
+                        // Keep local cache visible; history is now server-backed but local cache
+                        // remains as a read fallback until the server is reachable.
+                    }
+                }
+            } finally {
+                assetHistoryJob = null
+            }
+        }
+    }
+
     private fun buildAssetDrafts(amounts: Map<String, Double>): List<AssetCategoryDraft> {
         return assetCategorySpecs.map { spec ->
             val value = amounts[spec.key]
@@ -1541,6 +1684,39 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     amounts = record.amounts,
                 )
             }
+    }
+
+    private fun mergeAssetHistory(
+        current: List<AssetHistoryRecord>,
+        incoming: List<AssetHistoryRecord>,
+    ): List<AssetHistoryRecord> {
+        val byId = linkedMapOf<String, AssetHistoryRecord>()
+        (incoming + current).forEach { record ->
+            if (record.id.isNotBlank()) {
+                byId[record.id] = record
+            }
+        }
+        return byId.values.sortedByDescending { it.savedAt }
+    }
+
+    private fun AssetSnapshotRecordData.toUiRecord(): AssetHistoryRecord {
+        return AssetHistoryRecord(
+            id = id,
+            savedAt = savedAt,
+            totalAmountWan = totalAmountWan,
+            amounts = amounts,
+        )
+    }
+
+    private fun List<AssetHistoryRecord>.toSettingsRecords(): List<SettingsRepository.AssetSnapshotRecord> {
+        return map { record ->
+            SettingsRepository.AssetSnapshotRecord(
+                id = record.id,
+                savedAt = record.savedAt,
+                totalAmountWan = record.totalAmountWan,
+                amounts = record.amounts,
+            )
+        }
     }
 
     private fun currentTimestamp(): String {

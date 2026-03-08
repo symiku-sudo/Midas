@@ -2,6 +2,9 @@ package com.midas.client.data.network
 
 import com.midas.client.data.model.ApiEnvelope
 import com.midas.client.data.model.AssetImageFillData
+import com.midas.client.data.model.AssetSnapshotHistoryData
+import com.midas.client.data.model.AssetSnapshotRecordData
+import com.midas.client.data.model.AssetSnapshotSaveRequest
 import com.midas.client.data.model.BilibiliNoteSaveRequest
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSavedNotesData
@@ -53,6 +56,19 @@ interface MidasApiService {
     suspend fun fillAssetStatsFromImages(
         @Part images: List<MultipartBody.Part>
     ): Response<ApiEnvelope<AssetImageFillData>>
+
+    @GET("api/assets/snapshots")
+    suspend fun listAssetSnapshots(): Response<ApiEnvelope<AssetSnapshotHistoryData>>
+
+    @POST("api/assets/snapshots")
+    suspend fun saveAssetSnapshot(
+        @Body request: AssetSnapshotSaveRequest
+    ): Response<ApiEnvelope<AssetSnapshotRecordData>>
+
+    @DELETE("api/assets/snapshots/{recordId}")
+    suspend fun deleteAssetSnapshot(
+        @Path("recordId") recordId: String
+    ): Response<ApiEnvelope<NotesDeleteData>>
 
     @POST("api/bilibili/summarize")
     suspend fun summarizeBilibili(

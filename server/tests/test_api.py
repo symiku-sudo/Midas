@@ -9,6 +9,7 @@ import app.api.routes as routes_module
 from fastapi.testclient import TestClient
 
 from app.api.routes import (
+    _get_asset_snapshot_service,
     _get_editable_config_service,
     _get_finance_signals_service,
     _get_note_library_service,
@@ -46,6 +47,7 @@ def _reset_xiaohongshu_state() -> None:
     _get_editable_config_service.cache_clear()
     _get_finance_signals_service.cache_clear()
     _get_note_library_service.cache_clear()
+    _get_asset_snapshot_service.cache_clear()
     _get_xiaohongshu_sync_service.cache_clear()
     get_settings.cache_clear()
     db_path = _notes_db_path()
@@ -141,6 +143,43 @@ def test_asset_fill_from_images_returns_structured_amounts() -> None:
     assert data["image_count"] == 2
     assert set(data["category_amounts"].keys()) == set(ASSET_CATEGORY_KEYS)
     assert data["total_amount_wan"] == 0.0
+
+
+def test_asset_snapshot_history_crud() -> None:
+    _reset_xiaohongshu_state()
+
+    save = client.post(
+        "/api/assets/snapshots",
+        json={
+            "id": "asset-history-1",
+            "saved_at": "2026-03-08 14:40:00",
+            "total_amount_wan": 15.5,
+            "amounts": {
+                "stock": 12.0,
+                "gold": 3.5,
+            },
+        },
+    )
+    assert save.status_code == 200
+    save_body = save.json()
+    assert save_body["ok"] is True
+    assert save_body["data"]["id"] == "asset-history-1"
+    assert save_body["data"]["amounts"]["gold"] == 3.5
+
+    listed = client.get("/api/assets/snapshots")
+    assert listed.status_code == 200
+    listed_body = listed.json()
+    assert listed_body["ok"] is True
+    assert listed_body["data"]["total"] == 1
+    assert listed_body["data"]["items"][0]["id"] == "asset-history-1"
+
+    deleted = client.delete("/api/assets/snapshots/asset-history-1")
+    assert deleted.status_code == 200
+    assert deleted.json()["data"]["deleted_count"] == 1
+
+    listed_after = client.get("/api/assets/snapshots")
+    assert listed_after.status_code == 200
+    assert listed_after.json()["data"]["total"] == 0
 
 
 def test_bilibili_invalid_url() -> None:

@@ -44,6 +44,25 @@ data class AssetImageFillData(
     @Json(name = "total_amount_wan") val totalAmountWan: Double,
 )
 
+data class AssetSnapshotRecordData(
+    val id: String,
+    @Json(name = "saved_at") val savedAt: String,
+    @Json(name = "total_amount_wan") val totalAmountWan: Double,
+    val amounts: Map<String, Double>,
+)
+
+data class AssetSnapshotHistoryData(
+    val total: Int,
+    val items: List<AssetSnapshotRecordData>,
+)
+
+data class AssetSnapshotSaveRequest(
+    val id: String = "",
+    @Json(name = "saved_at") val savedAt: String = "",
+    @Json(name = "total_amount_wan") val totalAmountWan: Double,
+    val amounts: Map<String, Double>,
+)
+
 data class BilibiliSummaryRequest(
     @Json(name = "video_url") val videoUrl: String
 )

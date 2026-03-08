@@ -2,6 +2,9 @@ package com.midas.client.data.repo
 
 import com.midas.client.data.model.ApiEnvelope
 import com.midas.client.data.model.AssetImageFillData
+import com.midas.client.data.model.AssetSnapshotHistoryData
+import com.midas.client.data.model.AssetSnapshotRecordData
+import com.midas.client.data.model.AssetSnapshotSaveRequest
 import com.midas.client.data.model.BilibiliNoteSaveRequest
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSavedNotesData
@@ -88,6 +91,36 @@ class MidasRepository {
             return AppResult.Error(code = "INVALID_INPUT", message = "图片内容为空，请重新选择。")
         }
         return request(baseUrl) { fillAssetStatsFromImages(parts) }
+    }
+
+    suspend fun listAssetSnapshots(baseUrl: String): AppResult<AssetSnapshotHistoryData> {
+        return request(baseUrl) { listAssetSnapshots() }
+    }
+
+    suspend fun saveAssetSnapshot(
+        baseUrl: String,
+        id: String,
+        savedAt: String,
+        totalAmountWan: Double,
+        amounts: Map<String, Double>,
+    ): AppResult<AssetSnapshotRecordData> {
+        return request(baseUrl) {
+            saveAssetSnapshot(
+                AssetSnapshotSaveRequest(
+                    id = id,
+                    savedAt = savedAt,
+                    totalAmountWan = totalAmountWan,
+                    amounts = amounts,
+                )
+            )
+        }
+    }
+
+    suspend fun deleteAssetSnapshot(
+        baseUrl: String,
+        recordId: String,
+    ): AppResult<NotesDeleteData> {
+        return request(baseUrl) { deleteAssetSnapshot(recordId) }
     }
 
     suspend fun summarizeBilibili(baseUrl: String, videoUrl: String): AppResult<BilibiliSummaryData> {

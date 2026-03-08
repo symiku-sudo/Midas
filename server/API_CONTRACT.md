@@ -127,6 +127,91 @@ Success `data`:
 - `category_amounts` 始终返回完整分类键集合，缺失项返回 `0.00`。
 - 服务端仅返回识别结果，不会触发保存动作；客户端需由用户手动确认并保存。
 
+## `GET /api/assets/snapshots`
+
+用途：读取服务端持久化的资产快照历史。卸载重装/换设备后，客户端可据此恢复历史记录。
+
+Success `data`:
+
+```json
+{
+  "total": 2,
+  "items": [
+    {
+      "id": "asset-history-2",
+      "saved_at": "2026-03-08 14:40:00",
+      "total_amount_wan": 15.5,
+      "amounts": {
+        "stock": 12.0,
+        "gold": 3.5
+      }
+    },
+    {
+      "id": "asset-history-1",
+      "saved_at": "2026-03-07 21:10:00",
+      "total_amount_wan": 14.2,
+      "amounts": {
+        "stock": 11.0,
+        "gold": 3.2
+      }
+    }
+  ]
+}
+```
+
+说明：
+- 排序规则：`saved_at` 近到远。
+- 资产分类金额单位统一为“万元人民币”。
+
+## `POST /api/assets/snapshots`
+
+用途：保存或迁移一条资产快照历史记录。`id` 已存在时会执行幂等更新，便于客户端把本地旧历史补传到服务端。
+
+Request:
+
+```json
+{
+  "id": "asset-history-2",
+  "saved_at": "2026-03-08 14:40:00",
+  "total_amount_wan": 15.5,
+  "amounts": {
+    "stock": 12.0,
+    "gold": 3.5
+  }
+}
+```
+
+Success `data`:
+
+```json
+{
+  "id": "asset-history-2",
+  "saved_at": "2026-03-08 14:40:00",
+  "total_amount_wan": 15.5,
+  "amounts": {
+    "stock": 12.0,
+    "gold": 3.5
+  }
+}
+```
+
+说明：
+- `id` / `saved_at` 允许客户端显式传入，便于迁移本地旧记录。
+- 若 `id` 为空，服务端会自动生成。
+- 若 `total_amount_wan <= 0` 且 `amounts` 非空，服务端会自动按分类求和。
+
+## `DELETE /api/assets/snapshots/{record_id}`
+
+用途：删除一条服务端资产快照历史。
+
+Success `data`:
+
+```json
+{
+  "deleted_count": 1
+}
+```
+
 ## `POST /api/bilibili/summarize`
 
 Request:

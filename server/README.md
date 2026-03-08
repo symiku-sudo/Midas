@@ -5,6 +5,9 @@
 - `GET /health`
 - `GET /api/finance/signals`
 - `POST /api/assets/fill-from-images`
+- `GET /api/assets/snapshots`
+- `POST /api/assets/snapshots`
+- `DELETE /api/assets/snapshots/{record_id}`
 - `POST /api/bilibili/summarize`
 - `POST /api/notes/bilibili/save`
 - `GET /api/notes/bilibili`
@@ -204,6 +207,23 @@ curl http://127.0.0.1:8000/api/finance/signals
 curl -X POST http://127.0.0.1:8000/api/assets/fill-from-images \
   -F "images=@/path/to/asset-1.jpg" \
   -F "images=@/path/to/asset-2.png"
+```
+
+```bash
+# 读取资产历史快照（服务端持久化）
+curl http://127.0.0.1:8000/api/assets/snapshots
+```
+
+```bash
+# 保存一条资产历史快照
+curl -X POST http://127.0.0.1:8000/api/assets/snapshots \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "id":"asset-history-1",
+    "saved_at":"2026-03-08 14:40:00",
+    "total_amount_wan":15.5,
+    "amounts":{"stock":12.0,"gold":3.5}
+  }'
 ```
 
 ```bash

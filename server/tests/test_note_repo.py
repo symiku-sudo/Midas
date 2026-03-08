@@ -71,3 +71,36 @@ def test_xiaohongshu_saved_at_is_returned_in_utc8(tmp_path: Path) -> None:
 
     fetched = repo.get_xiaohongshu_notes_by_ids(["x1"])
     assert fetched[0]["saved_at"] == "2026-03-01 08:00:00"
+
+
+def test_asset_snapshots_can_upsert_list_and_delete(tmp_path: Path) -> None:
+    db_path = tmp_path / "notes.db"
+    repo = NoteLibraryRepository(str(db_path))
+
+    repo.upsert_asset_snapshot(
+        record_id="asset-1",
+        saved_at="2026-03-08 10:00:00",
+        total_amount_wan=12.5,
+        amounts={"stock": 10.0, "gold": 2.5},
+    )
+    repo.upsert_asset_snapshot(
+        record_id="asset-2",
+        saved_at="2026-03-08 11:00:00",
+        total_amount_wan=15.0,
+        amounts={"stock": 12.0, "gold": 3.0},
+    )
+    repo.upsert_asset_snapshot(
+        record_id="asset-1",
+        saved_at="2026-03-08 12:00:00",
+        total_amount_wan=18.0,
+        amounts={"stock": 15.0, "gold": 3.0},
+    )
+
+    listed = repo.list_asset_snapshots()
+    assert [item["id"] for item in listed] == ["asset-1", "asset-2"]
+    assert listed[0]["saved_at"] == "2026-03-08 12:00:00"
+    assert listed[0]["amounts"] == {"stock": 15.0, "gold": 3.0}
+
+    deleted = repo.delete_asset_snapshot("asset-2")
+    assert deleted == 1
+    assert [item["id"] for item in repo.list_asset_snapshots()] == ["asset-1"]
