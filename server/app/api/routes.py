@@ -12,6 +12,8 @@ from app.core.config import clear_settings_cache, get_settings
 from app.core.errors import AppError, ErrorCode
 from app.core.response import success_response
 from app.models.schemas import (
+    AssetCurrentData,
+    AssetCurrentUpdateRequest,
     AssetSnapshotHistoryData,
     AssetSnapshotSaveRequest,
     AssetSnapshotRecord,
@@ -202,6 +204,23 @@ async def fill_asset_stats_from_images(
     service = _get_asset_image_fill_service()
     result: AssetImageFillData = await service.extract_from_uploads(images)
     return success_response(data=result.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/assets/current")
+async def get_asset_current(request: Request) -> dict:
+    service = _get_asset_snapshot_service()
+    data: AssetCurrentData = service.get_current()
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.put("/api/assets/current")
+async def save_asset_current(payload: AssetCurrentUpdateRequest, request: Request) -> dict:
+    service = _get_asset_snapshot_service()
+    data: AssetCurrentData = service.save_current(
+        total_amount_wan=payload.total_amount_wan,
+        amounts=payload.amounts,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 
 @router.get("/api/assets/snapshots")

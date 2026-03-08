@@ -70,9 +70,19 @@ class AssetSnapshotHistoryData(BaseModel):
     items: list[AssetSnapshotRecord]
 
 
+class AssetCurrentData(BaseModel):
+    total_amount_wan: float = Field(ge=0)
+    amounts: dict[str, float] = Field(default_factory=dict)
+
+
 class AssetSnapshotSaveRequest(BaseModel):
     id: str = Field(default="", max_length=128)
     saved_at: str = Field(default="", max_length=32)
+    total_amount_wan: float = Field(default=0, ge=0)
+    amounts: dict[str, float] = Field(default_factory=dict)
+
+
+class AssetCurrentUpdateRequest(BaseModel):
     total_amount_wan: float = Field(default=0, ge=0)
     amounts: dict[str, float] = Field(default_factory=dict)
 

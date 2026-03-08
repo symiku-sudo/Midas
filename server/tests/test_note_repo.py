@@ -104,3 +104,30 @@ def test_asset_snapshots_can_upsert_list_and_delete(tmp_path: Path) -> None:
     deleted = repo.delete_asset_snapshot("asset-2")
     assert deleted == 1
     assert [item["id"] for item in repo.list_asset_snapshots()] == ["asset-1"]
+
+
+def test_asset_current_can_upsert_and_read(tmp_path: Path) -> None:
+    db_path = tmp_path / "notes.db"
+    repo = NoteLibraryRepository(str(db_path))
+
+    assert repo.get_asset_current() is None
+
+    repo.upsert_asset_current(
+        total_amount_wan=18.6,
+        amounts={"stock": 15.1, "gold": 3.5},
+    )
+    current = repo.get_asset_current()
+    assert current == {
+        "total_amount_wan": 18.6,
+        "amounts": {"gold": 3.5, "stock": 15.1},
+    }
+
+    repo.upsert_asset_current(
+        total_amount_wan=9.0,
+        amounts={"money_market_fund": 9.0},
+    )
+    current_after = repo.get_asset_current()
+    assert current_after == {
+        "total_amount_wan": 9.0,
+        "amounts": {"money_market_fund": 9.0},
+    }

@@ -5,7 +5,7 @@ from datetime import datetime
 
 from app.core.config import Settings
 from app.core.errors import AppError, ErrorCode
-from app.models.schemas import AssetSnapshotHistoryData, AssetSnapshotRecord
+from app.models.schemas import AssetCurrentData, AssetSnapshotHistoryData, AssetSnapshotRecord
 from app.repositories.note_repo import NoteLibraryRepository
 from app.services.asset_categories import ASSET_CATEGORY_KEYS
 
@@ -21,6 +21,40 @@ class AssetSnapshotService:
     def list_history(self) -> AssetSnapshotHistoryData:
         items = [AssetSnapshotRecord(**item) for item in self._repository.list_asset_snapshots()]
         return AssetSnapshotHistoryData(total=len(items), items=items)
+
+    def get_current(self) -> AssetCurrentData:
+        current = self._repository.get_asset_current()
+        if current is None:
+            return AssetCurrentData(total_amount_wan=0.0, amounts={})
+        return AssetCurrentData(
+            total_amount_wan=float(current.get("total_amount_wan", 0.0) or 0.0),
+            amounts=self._normalize_amounts(dict(current.get("amounts", {}))),
+        )
+
+    def save_current(
+        self,
+        *,
+        total_amount_wan: float = 0.0,
+        amounts: dict[str, float],
+    ) -> AssetCurrentData:
+        normalized_amounts = self._normalize_amounts(amounts)
+        normalized_total = total_amount_wan
+        if normalized_total <= 0 and normalized_amounts:
+            normalized_total = round(sum(normalized_amounts.values()), 4)
+        if normalized_total < 0:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message="总资产金额不能为负数。",
+            )
+        self._repository.upsert_asset_current(
+            total_amount_wan=normalized_total,
+            amounts=normalized_amounts,
+        )
+        self._repository.backup_database()
+        return AssetCurrentData(
+            total_amount_wan=normalized_total,
+            amounts=normalized_amounts,
+        )
 
     def save_snapshot(
         self,

@@ -174,6 +174,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     private var autoSaveConfigJob: Job? = null
     private var financeSignalsJob: Job? = null
+    private var assetCurrentJob: Job? = null
     private var assetHistoryJob: Job? = null
 
     init {
@@ -181,12 +182,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         loadEditableConfig()
         loadSavedNotes()
         loadFinanceSignals()
+        loadAssetCurrent()
         loadAssetSnapshotHistory()
     }
 
     fun onAppForeground() {
         loadSavedNotes()
         loadFinanceSignals()
+        loadAssetCurrent()
         loadAssetSnapshotHistory()
     }
 
@@ -352,37 +355,60 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         val snapshotId = UUID.randomUUID().toString()
         val savedAt = currentTimestamp()
         viewModelScope.launch {
-            when (
-                val result = apiRepository.saveAssetSnapshot(
-                    baseUrl = baseUrl,
-                    id = snapshotId,
-                    savedAt = savedAt,
-                    totalAmountWan = total,
-                    amounts = amounts,
-                )
-            ) {
+            when (val currentResult = apiRepository.saveAssetCurrent(baseUrl, total, amounts)) {
                 is AppResult.Success -> {
-                    settingsRepository.saveAssetCategoryAmounts(amounts)
-                    val nextHistory = mergeAssetHistory(
-                        current = _financeState.value.assetHistory,
-                        incoming = listOf(result.data.toUiRecord()),
-                    )
-                    settingsRepository.saveAssetSnapshotHistory(nextHistory.toSettingsRecords())
-                    val normalizedDrafts = buildAssetDrafts(amounts)
-                    _financeState.update {
-                        it.copy(
-                            isSavingAssetStats = false,
-                            isFillingAssetFromImages = false,
-                            assetDrafts = normalizedDrafts,
-                            assetTotalAmount = total,
-                            assetErrorMessage = "",
-                            assetHistory = nextHistory,
-                            assetStatusMessage = if (amounts.isEmpty()) {
-                                "已清空资产统计。"
-                            } else {
-                                "已保存资产统计：${amounts.size} 类，合计 ${formatAmountWan(total)}。"
-                            },
+                    when (
+                        val snapshotResult = apiRepository.saveAssetSnapshot(
+                            baseUrl = baseUrl,
+                            id = snapshotId,
+                            savedAt = savedAt,
+                            totalAmountWan = total,
+                            amounts = amounts,
                         )
+                    ) {
+                        is AppResult.Success -> {
+                            settingsRepository.saveAssetCategoryAmounts(currentResult.data.amounts)
+                            val nextHistory = mergeAssetHistory(
+                                current = _financeState.value.assetHistory,
+                                incoming = listOf(snapshotResult.data.toUiRecord()),
+                            )
+                            settingsRepository.saveAssetSnapshotHistory(nextHistory.toSettingsRecords())
+                            val normalizedDrafts = buildAssetDrafts(currentResult.data.amounts)
+                            _financeState.update {
+                                it.copy(
+                                    isSavingAssetStats = false,
+                                    isFillingAssetFromImages = false,
+                                    assetDrafts = normalizedDrafts,
+                                    assetTotalAmount = currentResult.data.totalAmountWan,
+                                    assetErrorMessage = "",
+                                    assetHistory = nextHistory,
+                                    assetStatusMessage = if (amounts.isEmpty()) {
+                                        "已清空资产统计。"
+                                    } else {
+                                        "已保存资产统计：${amounts.size} 类，合计 ${formatAmountWan(total)}。"
+                                    },
+                                )
+                            }
+                        }
+
+                        is AppResult.Error -> {
+                            settingsRepository.saveAssetCategoryAmounts(currentResult.data.amounts)
+                            val normalizedDrafts = buildAssetDrafts(currentResult.data.amounts)
+                            _financeState.update {
+                                it.copy(
+                                    isSavingAssetStats = false,
+                                    isFillingAssetFromImages = false,
+                                    assetDrafts = normalizedDrafts,
+                                    assetTotalAmount = currentResult.data.totalAmountWan,
+                                    assetErrorMessage = ErrorMessageMapper.format(
+                                        code = snapshotResult.code,
+                                        message = snapshotResult.message,
+                                        context = ErrorContext.ASSET,
+                                    ),
+                                    assetStatusMessage = "当前资产已保存，但历史快照保存失败。",
+                                )
+                            }
+                        }
                     }
                 }
 
@@ -392,8 +418,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             isSavingAssetStats = false,
                             isFillingAssetFromImages = false,
                             assetErrorMessage = ErrorMessageMapper.format(
-                                code = result.code,
-                                message = result.message,
+                                code = currentResult.code,
+                                message = currentResult.message,
                                 context = ErrorContext.ASSET,
                             ),
                             assetStatusMessage = "",
@@ -486,6 +512,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
         loadEditableConfig()
         loadFinanceSignals()
+        loadAssetCurrent()
         loadAssetSnapshotHistory()
     }
 
@@ -1612,6 +1639,62 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } finally {
                 assetHistoryJob = null
+            }
+        }
+    }
+
+    private fun loadAssetCurrent() {
+        val baseUrl = settingsRepository.getServerBaseUrl().trim()
+        if (baseUrl.isBlank()) {
+            return
+        }
+        if (assetCurrentJob?.isActive == true) {
+            return
+        }
+        assetCurrentJob = viewModelScope.launch {
+            try {
+                when (val result = apiRepository.getAssetCurrent(baseUrl)) {
+                    is AppResult.Success -> {
+                        var currentAmounts = result.data.amounts
+                        var currentTotal = result.data.totalAmountWan
+                        val localAmounts = settingsRepository.getAssetCategoryAmounts()
+                        if (currentAmounts.isEmpty() && localAmounts.isNotEmpty()) {
+                            when (
+                                val migrated = apiRepository.saveAssetCurrent(
+                                    baseUrl = baseUrl,
+                                    totalAmountWan = localAmounts.values.sum(),
+                                    amounts = localAmounts,
+                                )
+                            ) {
+                                is AppResult.Success -> {
+                                    currentAmounts = migrated.data.amounts
+                                    currentTotal = migrated.data.totalAmountWan
+                                }
+                                is AppResult.Error -> return@launch
+                            }
+                        }
+
+                        settingsRepository.saveAssetCategoryAmounts(currentAmounts)
+                        val drafts = buildAssetDrafts(currentAmounts)
+                        _financeState.update {
+                            it.copy(
+                                assetDrafts = drafts,
+                                assetTotalAmount = if (currentAmounts.isEmpty()) {
+                                    computeAssetTotalAmount(drafts)
+                                } else {
+                                    currentTotal
+                                },
+                                assetErrorMessage = "",
+                            )
+                        }
+                    }
+
+                    is AppResult.Error -> {
+                        // Keep local cached amounts visible when server is temporarily unreachable.
+                    }
+                }
+            } finally {
+                assetCurrentJob = null
             }
         }
     }

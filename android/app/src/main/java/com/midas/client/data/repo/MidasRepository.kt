@@ -1,6 +1,8 @@
 package com.midas.client.data.repo
 
 import com.midas.client.data.model.ApiEnvelope
+import com.midas.client.data.model.AssetCurrentData
+import com.midas.client.data.model.AssetCurrentUpdateRequest
 import com.midas.client.data.model.AssetImageFillData
 import com.midas.client.data.model.AssetSnapshotHistoryData
 import com.midas.client.data.model.AssetSnapshotRecordData
@@ -91,6 +93,25 @@ class MidasRepository {
             return AppResult.Error(code = "INVALID_INPUT", message = "图片内容为空，请重新选择。")
         }
         return request(baseUrl) { fillAssetStatsFromImages(parts) }
+    }
+
+    suspend fun getAssetCurrent(baseUrl: String): AppResult<AssetCurrentData> {
+        return request(baseUrl) { getAssetCurrent() }
+    }
+
+    suspend fun saveAssetCurrent(
+        baseUrl: String,
+        totalAmountWan: Double,
+        amounts: Map<String, Double>,
+    ): AppResult<AssetCurrentData> {
+        return request(baseUrl) {
+            saveAssetCurrent(
+                AssetCurrentUpdateRequest(
+                    totalAmountWan = totalAmountWan,
+                    amounts = amounts,
+                )
+            )
+        }
     }
 
     suspend fun listAssetSnapshots(baseUrl: String): AppResult<AssetSnapshotHistoryData> {

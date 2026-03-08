@@ -99,6 +99,16 @@ class NoteLibraryRepository:
                 )
                 """
             )
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS asset_stats_current (
+                    profile_id TEXT PRIMARY KEY,
+                    total_amount_wan REAL NOT NULL,
+                    amounts_json TEXT NOT NULL DEFAULT '{}',
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                )
+                """
+            )
             conn.commit()
 
     def save_bilibili_note(
@@ -187,6 +197,51 @@ class NoteLibraryRepository:
             )
             conn.commit()
             return int(cursor.rowcount)
+
+    def get_asset_current(self) -> dict[str, Any] | None:
+        with self._connect() as conn:
+            row = conn.execute(
+                """
+                SELECT total_amount_wan, amounts_json
+                FROM asset_stats_current
+                WHERE profile_id = 'default'
+                """
+            ).fetchone()
+        if row is None:
+            return None
+        payload = dict(row)
+        try:
+            amounts = json.loads(str(payload.get("amounts_json", "{}")))
+        except Exception:
+            amounts = {}
+        return {
+            "total_amount_wan": float(payload.get("total_amount_wan", 0.0) or 0.0),
+            "amounts": amounts if isinstance(amounts, dict) else {},
+        }
+
+    def upsert_asset_current(
+        self,
+        *,
+        total_amount_wan: float,
+        amounts: dict[str, float],
+    ) -> None:
+        with self._connect() as conn:
+            conn.execute(
+                """
+                INSERT INTO asset_stats_current
+                (profile_id, total_amount_wan, amounts_json, updated_at)
+                VALUES ('default', ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(profile_id) DO UPDATE SET
+                    total_amount_wan = excluded.total_amount_wan,
+                    amounts_json = excluded.amounts_json,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    total_amount_wan,
+                    json.dumps(amounts, ensure_ascii=False, sort_keys=True),
+                ),
+            )
+            conn.commit()
 
     def backup_database(self) -> Path:
         suffix = self._db_path.suffix or ".db"

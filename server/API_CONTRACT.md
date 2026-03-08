@@ -127,6 +127,58 @@ Success `data`:
 - `category_amounts` 始终返回完整分类键集合，缺失项返回 `0.00`。
 - 服务端仅返回识别结果，不会触发保存动作；客户端需由用户手动确认并保存。
 
+## `GET /api/assets/current`
+
+用途：读取服务端持久化的“当前资产金额”。客户端卸载重装或切换设备后，会先以该接口恢复当前填写值。
+
+Success `data`:
+
+```json
+{
+  "total_amount_wan": 15.5,
+  "amounts": {
+    "stock": 12.0,
+    "gold": 3.5
+  }
+}
+```
+
+说明：
+- 资产分类金额单位统一为“万元人民币”。
+- 首次尚未保存时，接口返回 `total_amount_wan=0` 和空 `amounts`。
+
+## `PUT /api/assets/current`
+
+用途：保存当前资产金额。该接口只更新“当前值”，不会追加历史快照；若客户端希望保留时间序列历史，应额外调用 `POST /api/assets/snapshots`。
+
+Request:
+
+```json
+{
+  "total_amount_wan": 15.5,
+  "amounts": {
+    "stock": 12.0,
+    "gold": 3.5
+  }
+}
+```
+
+Success `data`:
+
+```json
+{
+  "total_amount_wan": 15.5,
+  "amounts": {
+    "stock": 12.0,
+    "gold": 3.5
+  }
+}
+```
+
+说明：
+- 若 `total_amount_wan <= 0` 且 `amounts` 非空，服务端会自动按分类求和。
+- 仅允许已定义的资产分类键。
+
 ## `GET /api/assets/snapshots`
 
 用途：读取服务端持久化的资产快照历史。卸载重装/换设备后，客户端可据此恢复历史记录。

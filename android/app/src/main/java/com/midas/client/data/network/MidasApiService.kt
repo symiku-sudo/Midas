@@ -1,6 +1,8 @@
 package com.midas.client.data.network
 
 import com.midas.client.data.model.ApiEnvelope
+import com.midas.client.data.model.AssetCurrentData
+import com.midas.client.data.model.AssetCurrentUpdateRequest
 import com.midas.client.data.model.AssetImageFillData
 import com.midas.client.data.model.AssetSnapshotHistoryData
 import com.midas.client.data.model.AssetSnapshotRecordData
@@ -56,6 +58,14 @@ interface MidasApiService {
     suspend fun fillAssetStatsFromImages(
         @Part images: List<MultipartBody.Part>
     ): Response<ApiEnvelope<AssetImageFillData>>
+
+    @GET("api/assets/current")
+    suspend fun getAssetCurrent(): Response<ApiEnvelope<AssetCurrentData>>
+
+    @PUT("api/assets/current")
+    suspend fun saveAssetCurrent(
+        @Body request: AssetCurrentUpdateRequest
+    ): Response<ApiEnvelope<AssetCurrentData>>
 
     @GET("api/assets/snapshots")
     suspend fun listAssetSnapshots(): Response<ApiEnvelope<AssetSnapshotHistoryData>>

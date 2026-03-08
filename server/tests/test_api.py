@@ -182,6 +182,47 @@ def test_asset_snapshot_history_crud() -> None:
     assert listed_after.json()["data"]["total"] == 0
 
 
+def test_asset_current_crud() -> None:
+    _reset_xiaohongshu_state()
+
+    empty = client.get("/api/assets/current")
+    assert empty.status_code == 200
+    empty_body = empty.json()
+    assert empty_body["ok"] is True
+    assert empty_body["data"] == {
+        "total_amount_wan": 0.0,
+        "amounts": {},
+    }
+
+    saved = client.put(
+        "/api/assets/current",
+        json={
+            "total_amount_wan": 15.5,
+            "amounts": {
+                "stock": 12.0,
+                "gold": 3.5,
+            },
+        },
+    )
+    assert saved.status_code == 200
+    saved_body = saved.json()
+    assert saved_body["ok"] is True
+    assert saved_body["data"]["total_amount_wan"] == 15.5
+    assert saved_body["data"]["amounts"]["stock"] == 12.0
+
+    fetched = client.get("/api/assets/current")
+    assert fetched.status_code == 200
+    fetched_body = fetched.json()
+    assert fetched_body["ok"] is True
+    assert fetched_body["data"] == {
+        "total_amount_wan": 15.5,
+        "amounts": {
+            "gold": 3.5,
+            "stock": 12.0,
+        },
+    }
+
+
 def test_bilibili_invalid_url() -> None:
     resp = client.post(
         "/api/bilibili/summarize",

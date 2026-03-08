@@ -51,6 +51,11 @@ data class AssetSnapshotRecordData(
     val amounts: Map<String, Double>,
 )
 
+data class AssetCurrentData(
+    @Json(name = "total_amount_wan") val totalAmountWan: Double,
+    val amounts: Map<String, Double>,
+)
+
 data class AssetSnapshotHistoryData(
     val total: Int,
     val items: List<AssetSnapshotRecordData>,
@@ -59,6 +64,11 @@ data class AssetSnapshotHistoryData(
 data class AssetSnapshotSaveRequest(
     val id: String = "",
     @Json(name = "saved_at") val savedAt: String = "",
+    @Json(name = "total_amount_wan") val totalAmountWan: Double,
+    val amounts: Map<String, Double>,
+)
+
+data class AssetCurrentUpdateRequest(
     @Json(name = "total_amount_wan") val totalAmountWan: Double,
     val amounts: Map<String, Double>,
 )
