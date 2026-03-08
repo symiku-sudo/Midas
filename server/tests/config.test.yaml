@@ -36,6 +36,11 @@ asset_image_fill:
 runtime:
   temp_dir: .tmp
   log_level: INFO
+  backup:
+    enabled: true
+    interval_seconds: 21600
+    startup_delay_seconds: 0
+    keep_latest_files: 10
 
 notes_merge:
   semantic_similarity_enabled: false

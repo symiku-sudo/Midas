@@ -131,3 +131,30 @@ def test_asset_current_can_upsert_and_read(tmp_path: Path) -> None:
         "total_amount_wan": 9.0,
         "amounts": {"money_market_fund": 9.0},
     }
+
+
+def test_backup_database_prunes_old_timestamp_backups(tmp_path: Path) -> None:
+    db_path = tmp_path / "notes.db"
+    repo = NoteLibraryRepository(str(db_path))
+    repo.save_bilibili_note(
+        note_id="b1",
+        title="测试",
+        video_url="https://www.bilibili.com/video/BV1xx411c7mD",
+        summary_markdown="# 测试",
+        elapsed_ms=1,
+        transcript_chars=2,
+    )
+
+    for _ in range(12):
+        repo.backup_database(keep_latest_files=10)
+
+    backup_dir = db_path.parent / "backups"
+    timestamped = sorted(
+        [
+            path.name
+            for path in backup_dir.glob("notes_*.db")
+            if path.name != "notes_latest.db"
+        ]
+    )
+    assert len(timestamped) == 10
+    assert (backup_dir / "notes_latest.db").exists()

@@ -618,7 +618,9 @@ class NoteLibraryService:
 
     def _backup_database_after_note_save(self) -> None:
         try:
-            backup_path = self._repository.backup_database()
+            backup_path = self._repository.backup_database(
+                keep_latest_files=self._settings.runtime.backup.keep_latest_files
+            )
             logger.info("Note database backup created: %s", backup_path)
         except Exception:
             logger.exception("Failed to backup note database after save.")

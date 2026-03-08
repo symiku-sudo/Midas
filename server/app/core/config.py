@@ -131,8 +131,15 @@ class AssetImageFillConfig(BaseModel):
 
 
 class RuntimeConfig(BaseModel):
+    class BackupConfig(BaseModel):
+        enabled: bool = True
+        interval_seconds: int = 21600
+        startup_delay_seconds: int = 30
+        keep_latest_files: int = 10
+
     temp_dir: str = ".tmp"
     log_level: str = "INFO"
+    backup: BackupConfig = Field(default_factory=BackupConfig)
 
 
 class NotesMergeConfig(BaseModel):

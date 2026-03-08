@@ -111,6 +111,25 @@ tools/finance_signals.sh stop
 - 可通过 `market_data.alerting.*` 配置 Watchlist 行情阈值告警；其状态会写入 `market_alert_debug`。
 - Worker 会额外写出 `news_last_fetch_time`、`news_stale`（由 API 服务端计算）、`news_debug.entries_scanned/up_hits_count/down_hits_count/top_unmatched_titles`，便于定位召回漏检。
 
+## Periodic DB backup
+
+服务端现在会在后台定期备份 SQLite 数据库到 `server/.tmp/backups/`。默认配置：
+
+```yaml
+runtime:
+  backup:
+    enabled: true
+    interval_seconds: 21600
+    startup_delay_seconds: 30
+    keep_latest_files: 10
+```
+
+说明：
+- 仍保留“保存成功后立即备份”的原有行为。
+- 周期备份是额外兜底，主要覆盖“长时间无写入、但希望保留近期副本”的场景。
+- 实际数据库路径来自 `xiaohongshu.db_path`；默认是 `server/.tmp/midas.db`。
+- `keep_latest_files` 只统计时间戳备份文件；`midas_latest.db` 始终保留。
+
 ## Refresh XHS auth config
 
 若 `config.yaml` 已配置默认抓包路径，可直接刷新 auth 配置：

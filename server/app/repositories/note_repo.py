@@ -243,7 +243,7 @@ class NoteLibraryRepository:
             )
             conn.commit()
 
-    def backup_database(self) -> Path:
+    def backup_database(self, *, keep_latest_files: int | None = None) -> Path:
         suffix = self._db_path.suffix or ".db"
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         backup_path = self._backup_dir / f"{self._db_path.stem}_{timestamp}{suffix}"
@@ -255,7 +255,29 @@ class NoteLibraryRepository:
 
         latest_path = self._backup_dir / f"{self._db_path.stem}_latest{suffix}"
         shutil.copy2(backup_path, latest_path)
+        self._prune_timestamp_backups(keep_latest_files=keep_latest_files, suffix=suffix)
         return backup_path
+
+    def _prune_timestamp_backups(
+        self,
+        *,
+        keep_latest_files: int | None,
+        suffix: str,
+    ) -> None:
+        if keep_latest_files is None:
+            return
+        keep_count = max(int(keep_latest_files), 0)
+        backups = sorted(
+            [
+                path
+                for path in self._backup_dir.glob(f"{self._db_path.stem}_*{suffix}")
+                if path.name != f"{self._db_path.stem}_latest{suffix}"
+            ],
+            key=lambda path: (path.stat().st_mtime_ns, path.name),
+            reverse=True,
+        )
+        for path in backups[keep_count:]:
+            path.unlink(missing_ok=True)
 
     def list_bilibili_notes(self) -> list[dict[str, Any]]:
         with self._connect() as conn:

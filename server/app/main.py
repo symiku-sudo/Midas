@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -12,12 +14,28 @@ from app.core.errors import AppError, ErrorCode
 from app.core.logging import setup_logging
 from app.core.response import error_response
 from app.middleware.request_id import RequestIDMiddleware
+from app.services.database_backup import PeriodicDatabaseBackupService
 
 settings = get_settings()
 setup_logging(settings.runtime.log_level)
 logger = logging.getLogger(__name__)
 
-app = FastAPI(title="Midas Server", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    backup_service = PeriodicDatabaseBackupService(settings)
+    stop_event = asyncio.Event()
+    backup_task = asyncio.create_task(backup_service.run(stop_event))
+    app.state.periodic_backup_service = backup_service
+    app.state.periodic_backup_task = backup_task
+    try:
+        yield
+    finally:
+        stop_event.set()
+        await backup_task
+
+
+app = FastAPI(title="Midas Server", version="0.1.0", lifespan=lifespan)
 app.add_middleware(RequestIDMiddleware)
 app.include_router(router)
 

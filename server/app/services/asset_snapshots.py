@@ -16,6 +16,7 @@ class AssetSnapshotService:
         settings: Settings,
         repository: NoteLibraryRepository | None = None,
     ) -> None:
+        self._settings = settings
         self._repository = repository or NoteLibraryRepository(settings.xiaohongshu.db_path)
 
     def list_history(self) -> AssetSnapshotHistoryData:
@@ -50,7 +51,9 @@ class AssetSnapshotService:
             total_amount_wan=normalized_total,
             amounts=normalized_amounts,
         )
-        self._repository.backup_database()
+        self._repository.backup_database(
+            keep_latest_files=self._settings.runtime.backup.keep_latest_files
+        )
         return AssetCurrentData(
             total_amount_wan=normalized_total,
             amounts=normalized_amounts,
@@ -82,7 +85,9 @@ class AssetSnapshotService:
             total_amount_wan=normalized_total,
             amounts=normalized_amounts,
         )
-        self._repository.backup_database()
+        self._repository.backup_database(
+            keep_latest_files=self._settings.runtime.backup.keep_latest_files
+        )
         return AssetSnapshotRecord(
             id=normalized_id,
             saved_at=normalized_saved_at,
@@ -99,7 +104,9 @@ class AssetSnapshotService:
             )
         deleted = self._repository.delete_asset_snapshot(normalized_id)
         if deleted > 0:
-            self._repository.backup_database()
+            self._repository.backup_database(
+                keep_latest_files=self._settings.runtime.backup.keep_latest_files
+            )
         return deleted
 
     def _normalize_amounts(self, amounts: dict[str, float]) -> dict[str, float]:
