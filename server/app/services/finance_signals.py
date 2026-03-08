@@ -8,7 +8,12 @@ from typing import Any
 import yaml
 
 from app.core.errors import AppError, ErrorCode
-from app.models.schemas import FinanceNewsDebugData, FinanceSignalsData, FinanceWatchlistItem
+from app.models.schemas import (
+    FinanceMarketAlertDebugData,
+    FinanceNewsDebugData,
+    FinanceSignalsData,
+    FinanceWatchlistItem,
+)
 
 
 class FinanceSignalsService:
@@ -27,6 +32,7 @@ class FinanceSignalsService:
                 watchlist_preview=[],
                 ai_insight_text="财经信号尚未初始化，请先启动 finance_signals 任务。",
                 news_debug=FinanceNewsDebugData(),
+                market_alert_debug=FinanceMarketAlertDebugData(),
             )
 
         try:
@@ -103,6 +109,25 @@ class FinanceSignalsService:
                 last_alert_summary=str(news_debug_raw.get("last_alert_summary", "")).strip(),
                 last_alert_status=str(news_debug_raw.get("last_alert_status", "")).strip(),
             )
+        market_alert_debug_raw = payload.get("market_alert_debug")
+        market_alert_debug = FinanceMarketAlertDebugData()
+        if isinstance(market_alert_debug_raw, dict):
+            market_alert_debug = FinanceMarketAlertDebugData(
+                alert_enabled=bool(market_alert_debug_raw.get("enabled", False)),
+                alert_sent=bool(market_alert_debug_raw.get("sent", False)),
+                last_alert_time=str(
+                    market_alert_debug_raw.get("last_alert_time", "")
+                ).strip(),
+                last_alert_signature=str(
+                    market_alert_debug_raw.get("last_alert_signature", "")
+                ).strip(),
+                last_alert_summary=str(
+                    market_alert_debug_raw.get("last_alert_summary", "")
+                ).strip(),
+                last_alert_status=str(
+                    market_alert_debug_raw.get("last_alert_status", "")
+                ).strip(),
+            )
 
         return FinanceSignalsData(
             update_time=str(payload.get("update_time", "")).strip(),
@@ -111,6 +136,7 @@ class FinanceSignalsService:
             watchlist_preview=watchlist,
             ai_insight_text=ai_insight_text,
             news_debug=news_debug,
+            market_alert_debug=market_alert_debug,
         )
 
     def _resolve_status_path(self) -> Path:

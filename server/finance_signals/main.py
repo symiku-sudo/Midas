@@ -562,17 +562,46 @@ def build_high_risk_alert_payload(
     return {
         "signature": signature,
         "summary": summary,
+        "notification_summary": f"高危舆情触发：score={round(float(picked[0].get('score', 0.0)), 2)} hits={len(qualifying_hits)}",
         "picked_hits": picked,
         "top_score": round(float(picked[0].get("score", 0.0)), 2),
         "hit_count": len(qualifying_hits),
     }
 
 
-def maybe_send_high_risk_notification(
+def build_market_alert_payload(
     *,
     config: dict[str, Any],
+    market_alerts: list[str],
+) -> dict[str, Any] | None:
+    alerting_cfg = config.get("market_data", {}).get("alerting")
+    if not isinstance(alerting_cfg, dict) or not bool(alerting_cfg.get("enabled", False)):
+        return None
+
+    min_market_alerts = max(int(alerting_cfg.get("min_market_alerts", 1)), 1)
+    if len(market_alerts) < min_market_alerts:
+        return None
+
+    max_items = max(int(alerting_cfg.get("max_items_in_notification", 3)), 1)
+    picked = market_alerts[:max_items]
+    signature = "|".join(picked)
+    summary = "；".join(picked)
+    return {
+        "signature": signature,
+        "summary": summary,
+        "notification_summary": f"Watchlist 行情阈值触发：alerts={len(market_alerts)}",
+        "alert_count": len(market_alerts),
+    }
+
+
+def deliver_alert_notification(
+    *,
+    config: dict[str, Any],
+    alerting_cfg: dict[str, Any] | None,
     alert_payload: dict[str, Any] | None,
     fetch_time: str,
+    default_state_file: str,
+    default_task_name: str,
 ) -> dict[str, Any]:
     base_status = {
         "enabled": False,
@@ -582,7 +611,6 @@ def maybe_send_high_risk_notification(
         "last_alert_summary": "",
         "last_alert_status": "disabled",
     }
-    alerting_cfg = config.get("news", {}).get("alerting")
     if not isinstance(alerting_cfg, dict) or not bool(alerting_cfg.get("enabled", False)):
         return base_status
     base_status["enabled"] = True
@@ -593,7 +621,7 @@ def maybe_send_high_risk_notification(
 
     state_path = resolve_config_relative_path(
         config,
-        str(alerting_cfg.get("state_file", "finance_alert_state.json")),
+        str(alerting_cfg.get("state_file", default_state_file)),
     )
     state = load_json_file(state_path)
     cooldown_seconds = max(int(alerting_cfg.get("cooldown_seconds", 1800)), 0)
@@ -622,14 +650,14 @@ def maybe_send_high_risk_notification(
         notify_script_path = Path(__file__).resolve().parents[2] / "tools" / "ntfy_notify.sh"
     ntfy_config_file = resolve_config_relative_path(
         config,
-        str(alerting_cfg.get("ntfy_config_file", "../.tmp/ntfy/notify.env")),
+        str(alerting_cfg.get("ntfy_config_file", "../../.tmp/ntfy/notify.env")),
     )
 
     if not notify_script_path.exists() or not ntfy_config_file.exists():
         base_status["last_alert_status"] = "notify_not_configured"
         return base_status
 
-    task_name = str(alerting_cfg.get("task_name", "finance-signals-high-risk")).strip()
+    task_name = str(alerting_cfg.get("task_name", default_task_name)).strip()
     command = [
         str(notify_script_path),
         "--config",
@@ -639,7 +667,7 @@ def maybe_send_high_risk_notification(
         "--status",
         "WARN",
         "--summary",
-        f"高危舆情触发：score={alert_payload['top_score']} hits={alert_payload['hit_count']}",
+        str(alert_payload.get("notification_summary", "")).strip() or task_name,
         "--extra",
         f"signature={alert_payload['signature']}",
         "--extra",
@@ -665,6 +693,38 @@ def maybe_send_high_risk_notification(
         "last_alert_summary": alert_payload["summary"],
         "last_alert_status": "sent",
     }
+
+
+def maybe_send_high_risk_notification(
+    *,
+    config: dict[str, Any],
+    alert_payload: dict[str, Any] | None,
+    fetch_time: str,
+) -> dict[str, Any]:
+    return deliver_alert_notification(
+        config=config,
+        alerting_cfg=config.get("news", {}).get("alerting"),
+        alert_payload=alert_payload,
+        fetch_time=fetch_time,
+        default_state_file="finance_alert_state.json",
+        default_task_name="finance-signals-high-risk",
+    )
+
+
+def maybe_send_market_alert_notification(
+    *,
+    config: dict[str, Any],
+    alert_payload: dict[str, Any] | None,
+    fetch_time: str,
+) -> dict[str, Any]:
+    return deliver_alert_notification(
+        config=config,
+        alerting_cfg=config.get("market_data", {}).get("alerting"),
+        alert_payload=alert_payload,
+        fetch_time=fetch_time,
+        default_state_file="../.tmp/finance_market_alert_state.json",
+        default_task_name="finance-signals-market-alert",
+    )
 
 
 def _is_negated_hit(text: str, key: str, negation_prefixes: list[str]) -> bool:
@@ -1025,6 +1085,17 @@ async def update_dashboard_state(
                 "last_alert_status": "",
             },
         ),
+        "market_alert_debug": shared_state.get(
+            "market_alert_debug",
+            {
+                "enabled": False,
+                "sent": False,
+                "last_alert_time": "",
+                "last_alert_signature": "",
+                "last_alert_summary": "",
+                "last_alert_status": "",
+            },
+        ),
     }
 
     output_path = resolve_output_path(config)
@@ -1053,13 +1124,32 @@ async def market_loop(
     while True:
         try:
             watchlist_preview, market_alerts = await run_market_job(config)
+            fetch_time = now_text(config)
+            market_alert_debug = await asyncio.to_thread(
+                maybe_send_market_alert_notification,
+                config=config,
+                alert_payload=build_market_alert_payload(
+                    config=config,
+                    market_alerts=market_alerts,
+                ),
+                fetch_time=fetch_time,
+            )
             async with state_lock:
                 shared_state["watchlist_preview"] = watchlist_preview
                 shared_state["market_alerts"] = market_alerts
+                shared_state["market_alert_debug"] = market_alert_debug
             await update_dashboard_state(config=config, shared_state=shared_state, file_lock=file_lock)
         except Exception as exc:  # noqa: BLE001
             async with state_lock:
                 shared_state["market_alerts"] = [f"行情任务异常：{exc}"]
+                shared_state["market_alert_debug"] = {
+                    "enabled": False,
+                    "sent": False,
+                    "last_alert_time": "",
+                    "last_alert_signature": "",
+                    "last_alert_summary": "",
+                    "last_alert_status": "error",
+                }
             await update_dashboard_state(config=config, shared_state=shared_state, file_lock=file_lock)
         await asyncio.sleep(interval)
 
@@ -1142,6 +1232,14 @@ async def main() -> None:
     shared_state: dict[str, Any] = {
         "watchlist_preview": [],
         "market_alerts": [],
+        "market_alert_debug": {
+            "enabled": False,
+            "sent": False,
+            "last_alert_time": "",
+            "last_alert_signature": "",
+            "last_alert_summary": "",
+            "last_alert_status": "",
+        },
         "news_hits": {"crisis_up_hits": [], "crisis_down_hits": [], "debug": {}},
         "news_last_fetch_time": "",
         "news_debug": {

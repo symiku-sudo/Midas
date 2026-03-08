@@ -68,6 +68,15 @@ def _base_config() -> dict:
             "max_market_alerts_in_text": 4,
             "max_news_items_in_text": 3,
         },
+        "market_data": {
+            "alerting": {
+                "enabled": False,
+                "state_file": "../.tmp/finance_market_alert_state.json",
+                "cooldown_seconds": 1800,
+                "min_market_alerts": 1,
+                "max_items_in_notification": 3,
+            }
+        },
     }
 
 
@@ -290,5 +299,47 @@ def test_build_high_risk_alert_payload_and_cooldown_logic(tmp_path, monkeypatch)
 
     assert first["last_alert_status"] == "sent"
     assert first["sent"] is True
+    assert second["last_alert_status"] == "cooldown_skip"
+    assert len(called) == 1
+
+
+def test_build_market_alert_payload_and_delivery_logic(tmp_path, monkeypatch) -> None:
+    config = _base_config()
+    config["_config_dir"] = str(tmp_path)
+    config["output"] = {"time_format": "%Y-%m-%d %H:%M:%S"}
+    config["market_data"]["alerting"]["enabled"] = True
+    config["market_data"]["alerting"]["ntfy_config_file"] = "notify.env"
+    config["market_data"]["alerting"]["notify_script"] = "notify_stub.sh"
+    notify_env = tmp_path / "notify.env"
+    notify_env.write_text("NTFY_TOPIC=test\n", encoding="utf-8")
+    notify_script = tmp_path / "notify_stub.sh"
+    notify_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    notify_script.chmod(0o755)
+
+    payload = worker.build_market_alert_payload(
+        config=config,
+        market_alerts=["布伦特原油（BZ=F）触发：价格突破 90", "VIX（^VIX）触发：指数突破 30"],
+    )
+    assert payload is not None
+    assert payload["alert_count"] == 2
+
+    called = []
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda command, check, capture_output, text: called.append(command),
+    )
+    first = worker.maybe_send_market_alert_notification(
+        config=config,
+        alert_payload=payload,
+        fetch_time="2026-03-08 13:40:00",
+    )
+    second = worker.maybe_send_market_alert_notification(
+        config=config,
+        alert_payload=payload,
+        fetch_time="2026-03-08 13:41:00",
+    )
+
+    assert first["last_alert_status"] == "sent"
     assert second["last_alert_status"] == "cooldown_skip"
     assert len(called) == 1

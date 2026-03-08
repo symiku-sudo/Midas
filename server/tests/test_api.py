@@ -16,7 +16,12 @@ from app.api.routes import (
 )
 from app.core.config import get_settings
 from app.main import app
-from app.models.schemas import FinanceNewsDebugData, FinanceSignalsData, FinanceWatchlistItem
+from app.models.schemas import (
+    FinanceMarketAlertDebugData,
+    FinanceNewsDebugData,
+    FinanceSignalsData,
+    FinanceWatchlistItem,
+)
 from app.repositories.note_repo import NoteLibraryRepository
 from app.services.asset_categories import ASSET_CATEGORY_KEYS
 
@@ -89,6 +94,12 @@ def test_finance_signals_ok(monkeypatch) -> None:
                     last_alert_time="2026-03-05 11:59:00",
                     last_alert_status="cooldown_skip",
                 ),
+                market_alert_debug=FinanceMarketAlertDebugData(
+                    alert_enabled=True,
+                    alert_sent=True,
+                    last_alert_time="2026-03-05 12:00:00",
+                    last_alert_status="sent",
+                ),
             )
 
     monkeypatch.setattr(
@@ -113,6 +124,8 @@ def test_finance_signals_ok(monkeypatch) -> None:
     assert body["data"]["news_debug"]["entries_filtered_by_source"] == 3
     assert body["data"]["news_debug"]["up_hits_count"] == 2
     assert body["data"]["news_debug"]["last_alert_status"] == "cooldown_skip"
+    assert body["data"]["market_alert_debug"]["alert_sent"] is True
+    assert body["data"]["market_alert_debug"]["last_alert_status"] == "sent"
 
 
 def test_asset_fill_from_images_returns_structured_amounts() -> None:

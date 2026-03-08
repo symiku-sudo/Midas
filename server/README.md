@@ -103,6 +103,7 @@ tools/finance_signals.sh stop
 - 同主题标题会做归一化去重；不同来源的命中会按 `news.ranking.source_weights` 做来源加权。
 - 可通过 `news.filters.source_allowlist/source_blocklist/domain_allowlist/domain_blocklist` 做来源白名单/黑名单控制。
 - 可通过 `news.alerting.*` 配置高危阈值告警；命中后会走 `tools/ntfy_notify.sh`，并受 `cooldown_seconds` 抑制重复告警。
+- 可通过 `market_data.alerting.*` 配置 Watchlist 行情阈值告警；其状态会写入 `market_alert_debug`。
 - Worker 会额外写出 `news_last_fetch_time`、`news_stale`（由 API 服务端计算）、`news_debug.entries_scanned/up_hits_count/down_hits_count/top_unmatched_titles`，便于定位召回漏检。
 
 ## Refresh XHS auth config

@@ -31,6 +31,15 @@ class FinanceNewsDebugData(BaseModel):
     last_alert_status: str = ""
 
 
+class FinanceMarketAlertDebugData(BaseModel):
+    alert_enabled: bool = False
+    alert_sent: bool = False
+    last_alert_time: str = ""
+    last_alert_signature: str = ""
+    last_alert_summary: str = ""
+    last_alert_status: str = ""
+
+
 class FinanceSignalsData(BaseModel):
     update_time: str
     news_last_fetch_time: str = ""
@@ -38,6 +47,9 @@ class FinanceSignalsData(BaseModel):
     watchlist_preview: list[FinanceWatchlistItem]
     ai_insight_text: str
     news_debug: FinanceNewsDebugData = Field(default_factory=FinanceNewsDebugData)
+    market_alert_debug: FinanceMarketAlertDebugData = Field(
+        default_factory=FinanceMarketAlertDebugData
+    )
 
 
 class AssetImageFillData(BaseModel):

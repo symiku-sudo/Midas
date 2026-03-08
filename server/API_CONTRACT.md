@@ -74,6 +74,14 @@ Success `data`:
     "top_unmatched_titles": [
       "美国开始使用英国军事基地对伊朗开展行动"
     ]
+  },
+  "market_alert_debug": {
+    "alert_enabled": true,
+    "alert_sent": true,
+    "last_alert_time": "2026-03-05 12:00:00",
+    "last_alert_signature": "布伦特原油（BZ=F）触发：价格突破 90",
+    "last_alert_summary": "布伦特原油（BZ=F）触发：价格突破 90",
+    "last_alert_status": "sent"
   }
 }
 ```
@@ -85,6 +93,7 @@ Success `data`:
 - `news_debug` 用于排查“有新闻但未命中 insight”的召回/排序问题。
 - `news_debug.entries_filtered_by_source` 反映白名单/黑名单过滤效果。
 - `news_debug.alert_*` 反映高危阈值告警是否已发送或被 cooldown 抑制。
+- `market_alert_debug` 反映 Watchlist 行情阈值通知的发送状态。
 
 ## `POST /api/assets/fill-from-images`
 

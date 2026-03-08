@@ -24,6 +24,14 @@ market_data:
   default_drawdown_lookback_days: 120
   price_round_digits: 2
   change_round_digits: 2
+  alerting:
+    enabled: true
+    ntfy_config_file: "../../.tmp/ntfy/notify.env"
+    state_file: "../.tmp/finance_market_alert_state.json"
+    cooldown_seconds: 1800
+    min_market_alerts: 1
+    max_items_in_notification: 3
+    task_name: "finance-signals-market-alert"
   instruments:
     - name: "布伦特原油"
       symbol: "BZ=F"
@@ -116,7 +124,7 @@ news:
   alerting:
     enabled: true
     ntfy_config_file: "../../.tmp/ntfy/notify.env"
-    state_file: "finance_alert_state.json"
+    state_file: "../.tmp/finance_alert_state.json"
     cooldown_seconds: 1800
     min_high_risk_score: 120
     min_high_risk_hits: 2
