@@ -58,6 +58,54 @@ news:
   poll:
     max_items_per_source: 40
     max_matched_items: 8
+    recency_max_age_hours: 48
+    allow_missing_published: true
+    max_unmatched_titles: 5
+    stale_after_seconds: 900
+  ranking:
+    recency_half_life_hours: 12
+    default_keyword_score: 12
+    title_keyword_bonus: 8
+    missing_timestamp_multiplier: 0.7
+    crisis_up_base_score: 100
+    crisis_down_base_score: 40
+    keyword_weights:
+      "封锁霍尔木兹海峡": 42
+      "关闭霍尔木兹海峡": 42
+      "断供": 36
+      "供应中断": 36
+      "航运受阻": 34
+      "制裁升级": 30
+      "军事升级": 28
+      "冲突升级": 28
+      "导弹袭击": 26
+      "空袭": 24
+      "袭击": 22
+      "报复性打击": 22
+      "打击": 18
+      "军事行动": 18
+      "战争": 16
+      "石油储存设施": 16
+      "石油设施": 16
+      "油库": 16
+      "停火协议": 18
+      "停火": 16
+      "停战": 16
+      "达成协议": 14
+      "缓和": 12
+      "外交斡旋": 12
+    source_weights:
+      "Reuters": 18
+      "路透": 18
+      "Bloomberg": 16
+      "彭博社": 16
+      "BBC": 12
+      "dw.com": 10
+      "新华网": 8
+      "人民网国际": 6
+      "观察者": 4
+      "观察者网": 4
+      "中国网": 4
   keywords:
     crisis_up:
       - "封锁霍尔木兹海峡"
@@ -67,10 +115,20 @@ news:
       - "基地遇袭"
       - "导弹袭击"
       - "空袭"
+      - "袭击"
       - "报复性打击"
+      - "打击"
       - "军事升级"
+      - "军事行动"
       - "冲突升级"
+      - "战争"
       - "断供"
+      - "供应中断"
+      - "航运受阻"
+      - "制裁升级"
+      - "石油储存设施"
+      - "石油设施"
+      - "油库"
     crisis_down:
       - "停火协议"
       - "重启谈判"
@@ -78,9 +136,13 @@ news:
       - "和谈"
       - "斡旋"
       - "停火"
+      - "停战"
       - "调停"
       - "达成协议"
       - "局势缓和"
+      - "缓和"
+      - "外交斡旋"
+      - "避免升级"
       - "降级"
     exclude_title_if_contains:
       - "六张图看清"

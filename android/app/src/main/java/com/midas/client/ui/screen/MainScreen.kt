@@ -44,6 +44,7 @@ import androidx.compose.material3.TabRowDefaults.tabIndicatorOffset
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -71,6 +72,7 @@ import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.ui.components.MarkdownText
 import com.midas.client.util.ConfigFieldType
 import com.midas.client.util.EditableConfigField
+import kotlinx.coroutines.delay
 import java.util.Locale
 
 private enum class MainTab(val title: String) {
@@ -353,6 +355,8 @@ fun MainScreenContent(
     onAssetSummaryCopied: () -> Unit = {},
     onFillAssetStatsFromImages: () -> Unit = {},
     enableLifecycleAutoRefresh: Boolean = true,
+    enableFinanceAutoRefresh: Boolean = true,
+    financeAutoRefreshIntervalMs: Long = 90_000L,
     enableCyclicTabs: Boolean = true,
     animateTabSwitch: Boolean = true,
 ) {
@@ -371,6 +375,16 @@ fun MainScreenContent(
         lifecycleOwner.lifecycle.addObserver(observer)
         onDispose {
             lifecycleOwner.lifecycle.removeObserver(observer)
+        }
+    }
+
+    LaunchedEffect(selectedWorkspace, enableFinanceAutoRefresh, financeAutoRefreshIntervalMs) {
+        if (!enableFinanceAutoRefresh || selectedWorkspace != WorkspaceSection.FINANCE) {
+            return@LaunchedEffect
+        }
+        while (true) {
+            delay(financeAutoRefreshIntervalMs)
+            onRefreshFinanceSignals()
         }
     }
 
@@ -1216,15 +1230,34 @@ private fun FinanceSignalsPanel(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(
-                text = if (state.updateTime.isNotBlank()) {
-                    "更新时间：${state.updateTime}"
-                } else {
-                    "更新时间：等待数据"
-                },
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                Text(
+                    text = if (state.updateTime.isNotBlank()) {
+                        "更新时间：${state.updateTime}"
+                    } else {
+                        "更新时间：等待数据"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = if (state.newsLastFetchTime.isNotBlank()) {
+                        if (state.newsIsStale) {
+                            "RSS 拉取：${state.newsLastFetchTime}（数据可能陈旧）"
+                        } else {
+                            "RSS 拉取：${state.newsLastFetchTime}"
+                        }
+                    } else {
+                        "RSS 拉取：等待数据"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (state.newsIsStale) {
+                        WarningStatusColor
+                    } else {
+                        MaterialTheme.colorScheme.onSurfaceVariant
+                    },
+                )
+            }
             MidasButton(
                 onClick = onRefresh,
                 enabled = !state.isLoading,
@@ -1533,19 +1566,39 @@ private fun FinanceWatchlistRow(item: FinanceWatchlistItem) {
         modifier = Modifier.fillMaxWidth(),
         horizontalArrangement = Arrangement.SpaceBetween,
     ) {
-        val symbolPart = if (normalizedHint.isNotBlank()) {
-            "${item.symbol} (${normalizedHint})"
-        } else {
-            item.symbol
-        }
-        val namePart = if (item.name.isNotBlank()) "${item.name} ${symbolPart}" else symbolPart
-        Text(
-            text = namePart,
-            style = MaterialTheme.typography.bodySmall,
+        Column(
             modifier = Modifier.weight(1f),
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-        )
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            Text(
+                text = if (item.name.isNotBlank()) item.name else item.symbol,
+                style = MaterialTheme.typography.bodySmall,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = item.symbol,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+                if (normalizedHint.isNotBlank()) {
+                    Text(
+                        text = "阈值 $normalizedHint",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = WarningStatusColor,
+                        modifier = Modifier
+                            .background(
+                                color = WarningStatusColor.copy(alpha = 0.12f),
+                                shape = RoundedCornerShape(999.dp),
+                            )
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                }
+            }
+        }
         Row(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {

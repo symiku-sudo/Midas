@@ -16,7 +16,7 @@ from app.api.routes import (
 )
 from app.core.config import get_settings
 from app.main import app
-from app.models.schemas import FinanceSignalsData, FinanceWatchlistItem
+from app.models.schemas import FinanceNewsDebugData, FinanceSignalsData, FinanceWatchlistItem
 from app.repositories.note_repo import NoteLibraryRepository
 from app.services.asset_categories import ASSET_CATEGORY_KEYS
 
@@ -66,6 +66,8 @@ def test_finance_signals_ok(monkeypatch) -> None:
         def get_dashboard_state(self) -> FinanceSignalsData:
             return FinanceSignalsData(
                 update_time="2026-03-05 12:00:00",
+                news_last_fetch_time="2026-03-05 11:58:00",
+                news_stale=False,
                 watchlist_preview=[
                     FinanceWatchlistItem(
                         name="布伦特原油",
@@ -76,6 +78,12 @@ def test_finance_signals_ok(monkeypatch) -> None:
                     )
                 ],
                 ai_insight_text="行情警报：布伦特原油（BZ=F）触发阈值。",
+                news_debug=FinanceNewsDebugData(
+                    entries_scanned=12,
+                    up_hits_count=2,
+                    down_hits_count=1,
+                    top_unmatched_titles=["以色列袭击伊朗石油储存设施"],
+                ),
             )
 
     monkeypatch.setattr(
@@ -90,10 +98,14 @@ def test_finance_signals_ok(monkeypatch) -> None:
     assert body["ok"] is True
     assert body["code"] == "OK"
     assert body["data"]["update_time"] == "2026-03-05 12:00:00"
+    assert body["data"]["news_last_fetch_time"] == "2026-03-05 11:58:00"
+    assert body["data"]["news_stale"] is False
     assert body["data"]["watchlist_preview"][0]["symbol"] == "BZ=F"
     assert body["data"]["watchlist_preview"][0]["price"] == 91.23
     assert body["data"]["watchlist_preview"][0]["alert_hint"] == ">90"
     assert body["data"]["ai_insight_text"]
+    assert body["data"]["news_debug"]["entries_scanned"] == 12
+    assert body["data"]["news_debug"]["up_hits_count"] == 2
 
 
 def test_asset_fill_from_images_returns_structured_amounts() -> None:

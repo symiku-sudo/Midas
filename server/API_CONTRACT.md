@@ -48,6 +48,8 @@ Success `data`:
 ```json
 {
   "update_time": "2026-03-05 12:00:00",
+  "news_last_fetch_time": "2026-03-05 11:58:00",
+  "news_stale": false,
   "watchlist_preview": [
     {
       "name": "布伦特原油",
@@ -57,13 +59,23 @@ Success `data`:
       "alert_hint": ">90"
     }
   ],
-  "ai_insight_text": "行情警报：布伦特原油（BZ=F）触发：价格突破 90。"
+  "ai_insight_text": "行情警报：布伦特原油（BZ=F）触发：价格突破 90。 | 舆情高危：《以色列袭击伊朗石油储存设施》命中[袭击,石油储存设施] | 舆情降温：《多方推动停火协议》命中[停火协议]",
+  "news_debug": {
+    "entries_scanned": 40,
+    "up_hits_count": 3,
+    "down_hits_count": 2,
+    "top_unmatched_titles": [
+      "美国开始使用英国军事基地对伊朗开展行动"
+    ]
+  }
 }
 ```
 
 说明：
 - 若状态文件尚未生成，接口会返回空列表和初始化提示文案，HTTP 仍为 `200`。
 - 若状态文件内容损坏，接口返回 `UPSTREAM_ERROR`。
+- `news_last_fetch_time` / `news_stale` 用于客户端识别 RSS 拉取是否陈旧。
+- `news_debug` 用于排查“有新闻但未命中 insight”的召回/排序问题。
 
 ## `POST /api/assets/fill-from-images`
 

@@ -99,6 +99,9 @@ tools/finance_signals.sh stop
 说明：
 - 运行参数全部来自 `finance_signals/financial_config.yaml`。
 - `check` 会校验 `finance_status.json` 是否存在且更新时间未过期（阈值由 `runtime.health_max_staleness_seconds` 控制）。
+- RSS 舆情面板现已按“关键词严重度 + 发布时间衰减”排序，并默认过滤 48 小时外旧新闻。
+- 同主题标题会做归一化去重；不同来源的命中会按 `news.ranking.source_weights` 做来源加权。
+- Worker 会额外写出 `news_last_fetch_time`、`news_stale`（由 API 服务端计算）、`news_debug.entries_scanned/up_hits_count/down_hits_count/top_unmatched_titles`，便于定位召回漏检。
 
 ## Refresh XHS auth config
 

@@ -135,6 +135,8 @@ private fun defaultAssetDrafts(): List<AssetCategoryDraft> {
 data class FinanceSignalsUiState(
     val isLoading: Boolean = false,
     val updateTime: String = "",
+    val newsLastFetchTime: String = "",
+    val newsIsStale: Boolean = false,
     val watchlistPreview: List<FinanceWatchlistItem> = emptyList(),
     val aiInsightText: String = "",
     val assetDrafts: List<AssetCategoryDraft> = defaultAssetDrafts(),
@@ -170,6 +172,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     val financeState: StateFlow<FinanceSignalsUiState> = _financeState.asStateFlow()
 
     private var autoSaveConfigJob: Job? = null
+    private var financeSignalsJob: Job? = null
 
     init {
         loadLocalAssetStats()
@@ -1398,49 +1401,59 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         } ?: return
-        viewModelScope.launch {
-            _financeState.update {
-                it.copy(
-                    isLoading = true,
-                    errorMessage = "",
-                    statusMessage = "",
-                )
-            }
-            when (val result = apiRepository.getFinanceSignals(baseUrl)) {
-                is AppResult.Success -> {
-                    val insight = result.data.aiInsightText.ifBlank {
-                        "市场与舆情暂无异常信号，维持常规观察。"
-                    }
-                    val status = if (result.data.updateTime.isNotBlank()) {
-                        "最近更新：${result.data.updateTime}"
-                    } else {
-                        "已拉取财经信号面板数据。"
-                    }
-                    _financeState.update {
-                        it.copy(
-                            isLoading = false,
-                            updateTime = result.data.updateTime,
-                            watchlistPreview = result.data.watchlistPreview,
-                            aiInsightText = insight,
-                            errorMessage = "",
-                            statusMessage = status,
-                        )
-                    }
+        if (financeSignalsJob?.isActive == true) {
+            return
+        }
+        financeSignalsJob = viewModelScope.launch {
+            try {
+                _financeState.update {
+                    it.copy(
+                        isLoading = true,
+                        errorMessage = "",
+                        statusMessage = "",
+                    )
                 }
+                when (val result = apiRepository.getFinanceSignals(baseUrl)) {
+                    is AppResult.Success -> {
+                        val insight = result.data.aiInsightText.ifBlank {
+                            "市场与舆情暂无异常信号，维持常规观察。"
+                        }
+                        val status = if (result.data.updateTime.isNotBlank()) {
+                            "最近更新：${result.data.updateTime}"
+                        } else {
+                            "已拉取财经信号面板数据。"
+                        }
+                        _financeState.update {
+                            it.copy(
+                                isLoading = false,
+                                updateTime = result.data.updateTime,
+                                newsLastFetchTime = result.data.newsLastFetchTime,
+                                newsIsStale = result.data.newsStale,
+                                watchlistPreview = result.data.watchlistPreview,
+                                aiInsightText = insight,
+                                errorMessage = "",
+                                statusMessage = status,
+                            )
+                        }
+                    }
 
-                is AppResult.Error -> {
-                    _financeState.update {
-                        it.copy(
-                            isLoading = false,
-                            errorMessage = ErrorMessageMapper.format(
-                                code = result.code,
-                                message = result.message,
-                                context = ErrorContext.CONNECTION,
-                            ),
-                            statusMessage = "",
-                        )
+                    is AppResult.Error -> {
+                        _financeState.update {
+                            it.copy(
+                                isLoading = false,
+                                newsIsStale = true,
+                                errorMessage = ErrorMessageMapper.format(
+                                    code = result.code,
+                                    message = result.message,
+                                    context = ErrorContext.CONNECTION,
+                                ),
+                                statusMessage = "",
+                            )
+                        }
                     }
                 }
+            } finally {
+                financeSignalsJob = null
             }
         }
     }

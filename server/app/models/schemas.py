@@ -17,10 +17,20 @@ class FinanceWatchlistItem(BaseModel):
     alert_hint: str = ""
 
 
+class FinanceNewsDebugData(BaseModel):
+    entries_scanned: int = 0
+    up_hits_count: int = 0
+    down_hits_count: int = 0
+    top_unmatched_titles: list[str] = Field(default_factory=list)
+
+
 class FinanceSignalsData(BaseModel):
     update_time: str
+    news_last_fetch_time: str = ""
+    news_stale: bool = False
     watchlist_preview: list[FinanceWatchlistItem]
     ai_insight_text: str
+    news_debug: FinanceNewsDebugData = Field(default_factory=FinanceNewsDebugData)
 
 
 class AssetImageFillData(BaseModel):

@@ -31,9 +31,11 @@ data class FinanceWatchlistItem(
 )
 
 data class FinanceSignalsData(
-    @Json(name = "update_time") val updateTime: String,
-    @Json(name = "watchlist_preview") val watchlistPreview: List<FinanceWatchlistItem>,
-    @Json(name = "ai_insight_text") val aiInsightText: String,
+    @Json(name = "update_time") val updateTime: String = "",
+    @Json(name = "news_last_fetch_time") val newsLastFetchTime: String = "",
+    @Json(name = "news_stale") val newsStale: Boolean = false,
+    @Json(name = "watchlist_preview") val watchlistPreview: List<FinanceWatchlistItem> = emptyList(),
+    @Json(name = "ai_insight_text") val aiInsightText: String = "",
 )
 
 data class AssetImageFillData(

@@ -17,6 +17,7 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.text.TextLayoutResult
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSummaryData
+import com.midas.client.data.model.FinanceWatchlistItem
 import com.midas.client.data.model.XiaohongshuSavedNote
 import com.midas.client.data.model.XiaohongshuSummaryItem
 import org.junit.Assert.assertEquals
@@ -687,5 +688,115 @@ class MainScreenContentRobolectricSmokeTest {
         }
         assertTrue(layoutResults.isNotEmpty())
         assertTrue(layoutResults.first().lineCount == 1)
+    }
+
+    @Test
+    fun financePanel_shouldShowStaleRssHint() {
+        composeRule.setContent {
+            MaterialTheme {
+                MainScreenContent(
+                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
+                    bilibili = BilibiliUiState(),
+                    xiaohongshu = XiaohongshuUiState(),
+                    notes = NotesUiState(),
+                    finance = FinanceSignalsUiState(
+                        updateTime = "2026-03-08 12:00:00",
+                        newsLastFetchTime = "2026-03-08 11:40:00",
+                        newsIsStale = true,
+                    ),
+                    onAppForeground = {},
+                    onBaseUrlChange = {},
+                    onSaveBaseUrl = {},
+                    onTestConnection = {},
+                    onConfigTextChange = { _, _ -> },
+                    onConfigBooleanChange = { _, _ -> },
+                    onResetConfig = {},
+                    onBilibiliVideoUrlChange = {},
+                    onSubmitBilibiliSummary = {},
+                    onSaveBilibiliNote = {},
+                    onXiaohongshuUrlChange = {},
+                    onSummarizeXiaohongshuUrl = {},
+                    onRefreshXiaohongshuAuthConfig = {},
+                    onSaveSingleXiaohongshuNote = {},
+                    onNotesKeywordChange = {},
+                    onRefreshNotes = {},
+                    onDeleteBilibiliNote = {},
+                    onDeleteXiaohongshuNote = {},
+                    onSuggestMergeCandidates = {},
+                    onPreviewMergeCandidate = { _ -> },
+                    onCommitCurrentMerge = {},
+                    onRollbackLastMerge = {},
+                    onFinalizeLastMerge = {},
+                    enableLifecycleAutoRefresh = false,
+                    enableFinanceAutoRefresh = false,
+                    enableCyclicTabs = false,
+                    animateTabSwitch = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("笔记系统").performClick()
+        composeRule.onNodeWithText("资产系统").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("RSS 拉取：2026-03-08 11:40:00（数据可能陈旧）").assertIsDisplayed()
+    }
+
+    @Test
+    fun financePanel_shouldRenderThresholdBadge() {
+        composeRule.setContent {
+            MaterialTheme {
+                MainScreenContent(
+                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
+                    bilibili = BilibiliUiState(),
+                    xiaohongshu = XiaohongshuUiState(),
+                    notes = NotesUiState(),
+                    finance = FinanceSignalsUiState(
+                        watchlistPreview = listOf(
+                            FinanceWatchlistItem(
+                                name = "布伦特原油",
+                                symbol = "BZ=F",
+                                price = 92.69,
+                                changePct = "+8.52%",
+                                alertHint = ">90",
+                            ),
+                        ),
+                    ),
+                    onAppForeground = {},
+                    onBaseUrlChange = {},
+                    onSaveBaseUrl = {},
+                    onTestConnection = {},
+                    onConfigTextChange = { _, _ -> },
+                    onConfigBooleanChange = { _, _ -> },
+                    onResetConfig = {},
+                    onBilibiliVideoUrlChange = {},
+                    onSubmitBilibiliSummary = {},
+                    onSaveBilibiliNote = {},
+                    onXiaohongshuUrlChange = {},
+                    onSummarizeXiaohongshuUrl = {},
+                    onRefreshXiaohongshuAuthConfig = {},
+                    onSaveSingleXiaohongshuNote = {},
+                    onNotesKeywordChange = {},
+                    onRefreshNotes = {},
+                    onDeleteBilibiliNote = {},
+                    onDeleteXiaohongshuNote = {},
+                    onSuggestMergeCandidates = {},
+                    onPreviewMergeCandidate = { _ -> },
+                    onCommitCurrentMerge = {},
+                    onRollbackLastMerge = {},
+                    onFinalizeLastMerge = {},
+                    enableLifecycleAutoRefresh = false,
+                    enableFinanceAutoRefresh = false,
+                    enableCyclicTabs = false,
+                    animateTabSwitch = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("笔记系统").performClick()
+        composeRule.onNodeWithText("资产系统").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("阈值 >90").assertIsDisplayed()
     }
 }
