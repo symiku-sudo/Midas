@@ -551,10 +551,16 @@ def build_high_risk_alert_payload(
         return None
 
     picked = qualifying_hits[:max_items]
-    signature = "|".join(
-        f"{str(item.get('topic_key', ''))}:{int(round(float(item.get('score', 0.0))))}"
-        for item in picked
+    # Use a stable topic-only signature so score jitter or ordering changes
+    # within the same news cycle do not trigger duplicate notifications.
+    signature_topics = sorted(
+        {
+            str(item.get("topic_key", "")).strip() or str(item.get("title", "")).strip()
+            for item in picked
+            if str(item.get("topic_key", "")).strip() or str(item.get("title", "")).strip()
+        }
     )
+    signature = "|".join(signature_topics)
     summary = "；".join(
         f"{item['title']} [score={round(float(item.get('score', 0.0)), 1)}]"
         for item in picked

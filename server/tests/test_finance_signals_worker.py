@@ -303,6 +303,67 @@ def test_build_high_risk_alert_payload_and_cooldown_logic(tmp_path, monkeypatch)
     assert len(called) == 1
 
 
+def test_high_risk_alert_signature_is_stable_across_score_jitter(tmp_path, monkeypatch) -> None:
+    config = _base_config()
+    config["_config_dir"] = str(tmp_path)
+    config["output"] = {"time_format": "%Y-%m-%d %H:%M:%S"}
+    config["news"]["alerting"]["enabled"] = True
+    config["news"]["alerting"]["state_file"] = "finance_alert_state.json"
+    config["news"]["alerting"]["ntfy_config_file"] = "notify.env"
+    config["news"]["alerting"]["notify_script"] = "notify_stub.sh"
+    notify_env = tmp_path / "notify.env"
+    notify_env.write_text("NTFY_TOPIC=test\n", encoding="utf-8")
+    notify_script = tmp_path / "notify_stub.sh"
+    notify_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    notify_script.chmod(0o755)
+
+    first_payload = worker.build_high_risk_alert_payload(
+        config=config,
+        news_hits={
+            "crisis_up_hits": [
+                {"title": "A", "topic_key": "topic-a", "score": 181.2},
+                {"title": "B", "topic_key": "topic-b", "score": 160.4},
+            ]
+        },
+    )
+    second_payload = worker.build_high_risk_alert_payload(
+        config=config,
+        news_hits={
+            "crisis_up_hits": [
+                {"title": "B updated", "topic_key": "topic-b", "score": 165.9},
+                {"title": "A updated", "topic_key": "topic-a", "score": 179.8},
+            ]
+        },
+    )
+
+    assert first_payload is not None
+    assert second_payload is not None
+    assert first_payload["signature"] == "topic-a|topic-b"
+    assert second_payload["signature"] == "topic-a|topic-b"
+
+    called = []
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda command, check, capture_output, text: called.append(command),
+    )
+
+    first = worker.maybe_send_high_risk_notification(
+        config=config,
+        alert_payload=first_payload,
+        fetch_time="2026-03-08 13:36:00",
+    )
+    second = worker.maybe_send_high_risk_notification(
+        config=config,
+        alert_payload=second_payload,
+        fetch_time="2026-03-08 13:42:00",
+    )
+
+    assert first["last_alert_status"] == "sent"
+    assert second["last_alert_status"] == "cooldown_skip"
+    assert len(called) == 1
+
+
 def test_build_market_alert_payload_and_delivery_logic(tmp_path, monkeypatch) -> None:
     config = _base_config()
     config["_config_dir"] = str(tmp_path)
