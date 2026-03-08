@@ -80,9 +80,14 @@ def test_finance_signals_ok(monkeypatch) -> None:
                 ai_insight_text="行情警报：布伦特原油（BZ=F）触发阈值。",
                 news_debug=FinanceNewsDebugData(
                     entries_scanned=12,
+                    entries_filtered_by_source=3,
                     up_hits_count=2,
                     down_hits_count=1,
                     top_unmatched_titles=["以色列袭击伊朗石油储存设施"],
+                    alert_enabled=True,
+                    alert_sent=False,
+                    last_alert_time="2026-03-05 11:59:00",
+                    last_alert_status="cooldown_skip",
                 ),
             )
 
@@ -105,7 +110,9 @@ def test_finance_signals_ok(monkeypatch) -> None:
     assert body["data"]["watchlist_preview"][0]["alert_hint"] == ">90"
     assert body["data"]["ai_insight_text"]
     assert body["data"]["news_debug"]["entries_scanned"] == 12
+    assert body["data"]["news_debug"]["entries_filtered_by_source"] == 3
     assert body["data"]["news_debug"]["up_hits_count"] == 2
+    assert body["data"]["news_debug"]["last_alert_status"] == "cooldown_skip"
 
 
 def test_asset_fill_from_images_returns_structured_amounts() -> None:

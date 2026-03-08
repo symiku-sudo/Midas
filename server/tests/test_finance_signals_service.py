@@ -45,9 +45,16 @@ market_data:
         "ai_insight_text": "行情警报：布伦特原油触发阈值。",
         "news_debug": {
             "entries_scanned": 12,
+            "entries_filtered_by_source": 2,
             "up_hits_count": 2,
             "down_hits_count": 1,
             "top_unmatched_titles": ["以色列袭击伊朗石油储存设施"],
+            "enabled": True,
+            "sent": True,
+            "last_alert_time": "2026-03-08 12:00:00",
+            "last_alert_signature": "sig-1",
+            "last_alert_summary": "高危舆情触发",
+            "last_alert_status": "sent",
         },
     }
     status_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
@@ -60,7 +67,9 @@ market_data:
     assert data.news_last_fetch_time == payload["news_last_fetch_time"]
     assert data.news_stale is False
     assert data.news_debug.entries_scanned == 12
+    assert data.news_debug.entries_filtered_by_source == 2
     assert data.news_debug.top_unmatched_titles == ["以色列袭击伊朗石油储存设施"]
+    assert data.news_debug.last_alert_status == "sent"
 
 
 def test_finance_signals_service_marks_missing_news_time_as_stale(tmp_path: Path) -> None:

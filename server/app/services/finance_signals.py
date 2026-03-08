@@ -86,11 +86,22 @@ class FinanceSignalsService:
         if isinstance(news_debug_raw, dict):
             news_debug = FinanceNewsDebugData(
                 entries_scanned=self._safe_int(news_debug_raw.get("entries_scanned")),
+                entries_filtered_by_source=self._safe_int(
+                    news_debug_raw.get("entries_filtered_by_source")
+                ),
                 up_hits_count=self._safe_int(news_debug_raw.get("up_hits_count")),
                 down_hits_count=self._safe_int(news_debug_raw.get("down_hits_count")),
                 top_unmatched_titles=self._safe_str_list(
                     news_debug_raw.get("top_unmatched_titles")
                 ),
+                alert_enabled=bool(news_debug_raw.get("enabled", False)),
+                alert_sent=bool(news_debug_raw.get("sent", False)),
+                last_alert_time=str(news_debug_raw.get("last_alert_time", "")).strip(),
+                last_alert_signature=str(
+                    news_debug_raw.get("last_alert_signature", "")
+                ).strip(),
+                last_alert_summary=str(news_debug_raw.get("last_alert_summary", "")).strip(),
+                last_alert_status=str(news_debug_raw.get("last_alert_status", "")).strip(),
             )
 
         return FinanceSignalsData(

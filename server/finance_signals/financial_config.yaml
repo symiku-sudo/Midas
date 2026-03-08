@@ -62,6 +62,13 @@ news:
     allow_missing_published: true
     max_unmatched_titles: 5
     stale_after_seconds: 900
+    topic_similarity_threshold: 0.55
+  filters:
+    source_allowlist: []
+    source_blocklist:
+      - "新浪军事_手机新浪网"
+    domain_allowlist: []
+    domain_blocklist: []
   ranking:
     recency_half_life_hours: 12
     default_keyword_score: 12
@@ -106,6 +113,15 @@ news:
       "观察者": 4
       "观察者网": 4
       "中国网": 4
+  alerting:
+    enabled: true
+    ntfy_config_file: "../.tmp/ntfy/notify.env"
+    state_file: "finance_alert_state.json"
+    cooldown_seconds: 1800
+    min_high_risk_score: 140
+    min_high_risk_hits: 2
+    max_items_in_notification: 3
+    task_name: "finance-signals-high-risk"
   keywords:
     crisis_up:
       - "封锁霍尔木兹海峡"

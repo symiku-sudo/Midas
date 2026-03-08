@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+import subprocess
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from math import pow
@@ -220,6 +221,17 @@ def normalize_title_key(title: str) -> str:
     return text
 
 
+def normalize_source_label(value: str) -> str:
+    return str(value).strip().lower()
+
+
+def extract_link_domain(link: str) -> str:
+    match = re.search(r"https?://([^/]+)", str(link).strip(), re.IGNORECASE)
+    if not match:
+        return ""
+    return match.group(1).lower()
+
+
 def extract_publisher_label(*, source_name: str, title: str, link: str) -> str:
     title_text = str(title).strip()
     parts = [part.strip() for part in re.split(r"\s+-\s+", title_text) if part.strip()]
@@ -256,6 +268,106 @@ def build_topic_key(title: str, matched_keywords: list[str]) -> str:
         topic_text = topic_text[:28]
     keywords_key = ",".join(sorted({str(keyword).strip().lower() for keyword in matched_keywords if str(keyword).strip()}))
     return f"{topic_text}|{keywords_key}".strip("|")
+
+
+TOPIC_STOPWORDS = {
+    "最新",
+    "快讯",
+    "消息",
+    "局势",
+    "报道",
+    "观察",
+    "记者会",
+    "记者",
+    "外长",
+    "两会",
+    "新华社",
+    "新华网",
+    "中国网",
+    "观察者",
+    "观察者网",
+    "人民网",
+    "国际",
+    "美国",
+    "伊朗",
+    "以色列",
+}
+
+
+def build_topic_tokens(title: str, matched_keywords: list[str]) -> set[str]:
+    raw = strip_topic_prefix(title).lower()
+    raw = re.sub(r"\s+-\s+[^-]+$", "", raw)
+    chunks = re.findall(r"[\u4e00-\u9fff]{2,}|[a-z0-9]{3,}", raw)
+    tokens: set[str] = set()
+    for chunk in chunks:
+        value = chunk.strip()
+        if not value or value in TOPIC_STOPWORDS:
+            continue
+        if re.fullmatch(r"[\u4e00-\u9fff]{2,}", value):
+            if len(value) <= 4:
+                tokens.add(value)
+            else:
+                for size in (2, 3, 4):
+                    for index in range(0, len(value) - size + 1):
+                        part = value[index : index + size]
+                        if part not in TOPIC_STOPWORDS:
+                            tokens.add(part)
+        else:
+            tokens.add(value)
+    for keyword in matched_keywords:
+        value = str(keyword).strip().lower()
+        if value:
+            tokens.add(value)
+    return tokens
+
+
+def topic_similarity(left: set[str], right: set[str]) -> float:
+    if not left or not right:
+        return 0.0
+    intersection = len(left & right)
+    union = len(left | right)
+    if union == 0:
+        return 0.0
+    return intersection / union
+
+
+def should_keep_source(
+    *,
+    publisher: str,
+    domain: str,
+    filters_cfg: dict[str, Any],
+) -> bool:
+    allowlist = {
+        normalize_source_label(item)
+        for item in filters_cfg.get("source_allowlist", [])
+        if str(item).strip()
+    }
+    blocklist = {
+        normalize_source_label(item)
+        for item in filters_cfg.get("source_blocklist", [])
+        if str(item).strip()
+    }
+    domain_allowlist = {
+        normalize_source_label(item)
+        for item in filters_cfg.get("domain_allowlist", [])
+        if str(item).strip()
+    }
+    domain_blocklist = {
+        normalize_source_label(item)
+        for item in filters_cfg.get("domain_blocklist", [])
+        if str(item).strip()
+    }
+
+    publisher_norm = normalize_source_label(publisher)
+    domain_norm = normalize_source_label(domain)
+
+    if publisher_norm in blocklist or domain_norm in domain_blocklist:
+        return False
+    if allowlist and publisher_norm not in allowlist:
+        return False
+    if domain_allowlist and domain_norm not in domain_allowlist:
+        return False
+    return True
 
 
 def should_keep_recent_item(
@@ -322,33 +434,44 @@ def dedupe_and_sort_news_hits(
     hits: list[dict[str, Any]],
     *,
     max_items: int,
+    similarity_threshold: float,
 ) -> list[dict[str, Any]]:
-    deduped: dict[str, dict[str, Any]] = {}
-    for item in hits:
-        title = str(item.get("title", "")).strip()
-        if not title:
-            continue
-        key = str(item.get("topic_key", "")).strip() or normalize_title_key(title) or title
-        current = deduped.get(key)
-        score = float(item.get("score", 0.0))
-        published_ts = float(item.get("published_ts", 0.0))
-        if current is None:
-            deduped[key] = item
-            continue
-        current_score = float(current.get("score", 0.0))
-        current_ts = float(current.get("published_ts", 0.0))
-        if score > current_score or (score == current_score and published_ts > current_ts):
-            deduped[key] = item
-
     sorted_hits = sorted(
-        deduped.values(),
+        hits,
         key=lambda item: (
             -float(item.get("score", 0.0)),
             -float(item.get("published_ts", 0.0)),
             str(item.get("title", "")),
         ),
     )
-    return sorted_hits[:max_items]
+    picked: list[dict[str, Any]] = []
+    for item in sorted_hits:
+        title = str(item.get("title", "")).strip()
+        if not title:
+            continue
+        current_tokens = item.get("topic_tokens")
+        if not isinstance(current_tokens, set):
+            current_tokens = set()
+        topic_key = str(item.get("topic_key", "")).strip() or normalize_title_key(title) or title
+        duplicate = False
+        for chosen in picked:
+            chosen_key = str(chosen.get("topic_key", "")).strip()
+            chosen_tokens = chosen.get("topic_tokens")
+            if not isinstance(chosen_tokens, set):
+                chosen_tokens = set()
+            if topic_key and chosen_key and topic_key == chosen_key:
+                duplicate = True
+                break
+            if current_tokens and chosen_tokens:
+                if topic_similarity(current_tokens, chosen_tokens) >= similarity_threshold:
+                    duplicate = True
+                    break
+        if duplicate:
+            continue
+        picked.append(item)
+        if len(picked) >= max_items:
+            break
+    return picked
 
 
 def dedupe_titles(titles: list[dict[str, Any]], *, max_items: int) -> list[str]:
@@ -372,6 +495,176 @@ def dedupe_titles(titles: list[dict[str, Any]], *, max_items: int) -> list[str]:
         if len(picked) >= max_items:
             break
     return [title for _, title in picked]
+
+
+def resolve_config_relative_path(config: dict[str, Any], raw_path: str) -> Path:
+    path = Path(str(raw_path).strip())
+    if path.is_absolute():
+        return path
+    config_dir = Path(str(config["_config_dir"]))
+    return (config_dir / path).resolve()
+
+
+def load_json_file(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    return payload
+
+
+def write_json_file(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temp_path = path.with_suffix(f"{path.suffix}.tmp")
+    temp_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    os.replace(temp_path, path)
+
+
+def build_high_risk_alert_payload(
+    *,
+    config: dict[str, Any],
+    news_hits: dict[str, Any],
+) -> dict[str, Any] | None:
+    alerting_cfg = config.get("news", {}).get("alerting")
+    if not isinstance(alerting_cfg, dict) or not bool(alerting_cfg.get("enabled", False)):
+        return None
+
+    up_hits = list(news_hits.get("crisis_up_hits", []))
+    if not up_hits:
+        return None
+
+    min_high_risk_score = float(alerting_cfg.get("min_high_risk_score", 140))
+    min_high_risk_hits = max(int(alerting_cfg.get("min_high_risk_hits", 2)), 1)
+    max_items = max(int(alerting_cfg.get("max_items_in_notification", 3)), 1)
+
+    qualifying_hits = [
+        item for item in up_hits if float(item.get("score", 0.0)) >= min_high_risk_score
+    ]
+    if len(qualifying_hits) < min_high_risk_hits:
+        return None
+
+    picked = qualifying_hits[:max_items]
+    signature = "|".join(
+        f"{str(item.get('topic_key', ''))}:{int(round(float(item.get('score', 0.0))))}"
+        for item in picked
+    )
+    summary = "；".join(
+        f"{item['title']} [score={round(float(item.get('score', 0.0)), 1)}]"
+        for item in picked
+    )
+    return {
+        "signature": signature,
+        "summary": summary,
+        "picked_hits": picked,
+        "top_score": round(float(picked[0].get("score", 0.0)), 2),
+        "hit_count": len(qualifying_hits),
+    }
+
+
+def maybe_send_high_risk_notification(
+    *,
+    config: dict[str, Any],
+    alert_payload: dict[str, Any] | None,
+    fetch_time: str,
+) -> dict[str, Any]:
+    base_status = {
+        "enabled": False,
+        "sent": False,
+        "last_alert_time": "",
+        "last_alert_signature": "",
+        "last_alert_summary": "",
+        "last_alert_status": "disabled",
+    }
+    alerting_cfg = config.get("news", {}).get("alerting")
+    if not isinstance(alerting_cfg, dict) or not bool(alerting_cfg.get("enabled", False)):
+        return base_status
+    base_status["enabled"] = True
+
+    if alert_payload is None:
+        base_status["last_alert_status"] = "threshold_not_met"
+        return base_status
+
+    state_path = resolve_config_relative_path(
+        config,
+        str(alerting_cfg.get("state_file", "finance_alert_state.json")),
+    )
+    state = load_json_file(state_path)
+    cooldown_seconds = max(int(alerting_cfg.get("cooldown_seconds", 1800)), 0)
+    last_signature = str(state.get("last_alert_signature", "")).strip()
+    last_alert_time = str(state.get("last_alert_time", "")).strip()
+    base_status["last_alert_signature"] = last_signature
+    base_status["last_alert_time"] = last_alert_time
+    base_status["last_alert_summary"] = str(state.get("last_alert_summary", "")).strip()
+
+    if last_signature == alert_payload["signature"] and last_alert_time:
+        time_format = str(config["output"]["time_format"])
+        try:
+            last_dt = datetime.strptime(last_alert_time, time_format)
+        except Exception:
+            last_dt = None
+        if last_dt is not None:
+            age_seconds = max((datetime.now() - last_dt).total_seconds(), 0.0)
+            if age_seconds < cooldown_seconds:
+                base_status["last_alert_status"] = "cooldown_skip"
+                return base_status
+
+    notify_script = alerting_cfg.get("notify_script")
+    if notify_script:
+        notify_script_path = resolve_config_relative_path(config, str(notify_script))
+    else:
+        notify_script_path = Path(__file__).resolve().parents[1] / "tools" / "ntfy_notify.sh"
+    ntfy_config_file = resolve_config_relative_path(
+        config,
+        str(alerting_cfg.get("ntfy_config_file", "../.tmp/ntfy/notify.env")),
+    )
+
+    if not notify_script_path.exists() or not ntfy_config_file.exists():
+        base_status["last_alert_status"] = "notify_not_configured"
+        return base_status
+
+    task_name = str(alerting_cfg.get("task_name", "finance-signals-high-risk")).strip()
+    command = [
+        str(notify_script_path),
+        "--config",
+        str(ntfy_config_file),
+        "--task",
+        task_name,
+        "--status",
+        "WARN",
+        "--summary",
+        f"高危舆情触发：score={alert_payload['top_score']} hits={alert_payload['hit_count']}",
+        "--extra",
+        f"signature={alert_payload['signature']}",
+        "--extra",
+        f"summary={alert_payload['summary']}",
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except Exception as exc:
+        base_status["last_alert_status"] = f"notify_failed:{exc}"
+        return base_status
+
+    next_state = {
+        "last_alert_time": fetch_time,
+        "last_alert_signature": alert_payload["signature"],
+        "last_alert_summary": alert_payload["summary"],
+    }
+    write_json_file(state_path, next_state)
+    return {
+        "enabled": True,
+        "sent": True,
+        "last_alert_time": fetch_time,
+        "last_alert_signature": alert_payload["signature"],
+        "last_alert_summary": alert_payload["summary"],
+        "last_alert_status": "sent",
+    }
 
 
 def _is_negated_hit(text: str, key: str, negation_prefixes: list[str]) -> bool:
@@ -444,9 +737,13 @@ async def run_news_job(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]
     max_age_hours = int(poll_cfg.get("recency_max_age_hours", 48))
     allow_missing_published = bool(poll_cfg.get("allow_missing_published", True))
     max_unmatched_titles = int(poll_cfg.get("max_unmatched_titles", 5))
+    topic_similarity_threshold = float(poll_cfg.get("topic_similarity_threshold", 0.55))
     ranking_cfg = news_cfg.get("ranking")
     if not isinstance(ranking_cfg, dict):
         ranking_cfg = {}
+    filters_cfg = news_cfg.get("filters")
+    if not isinstance(filters_cfg, dict):
+        filters_cfg = {}
 
     keywords_cfg = news_cfg["keywords"]
     crisis_up_words = list(keywords_cfg["crisis_up"])
@@ -460,9 +757,14 @@ async def run_news_job(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]
         "crisis_down_hits": [],
         "debug": {
             "entries_scanned": 0,
+            "entries_filtered_by_source": 0,
             "up_hits_count": 0,
             "down_hits_count": 0,
             "top_unmatched_titles": [],
+            "last_alert_time": "",
+            "last_alert_signature": "",
+            "last_alert_summary": "",
+            "last_alert_status": "",
         },
     }
     unmatched_titles: list[dict[str, Any]] = []
@@ -486,6 +788,19 @@ async def run_news_job(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]
                     max_age_hours=max_age_hours,
                     allow_missing_published=allow_missing_published,
                 ):
+                    continue
+                publisher = extract_publisher_label(
+                    source_name=source_name,
+                    title=title,
+                    link=link,
+                )
+                domain = extract_link_domain(link)
+                if not should_keep_source(
+                    publisher=publisher,
+                    domain=domain,
+                    filters_cfg=filters_cfg,
+                ):
+                    result["debug"]["entries_filtered_by_source"] += 1
                     continue
                 if match_keywords(title, exclude_title_words):
                     continue
@@ -529,15 +844,11 @@ async def run_news_job(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]
                         source_name=source_name,
                         link=link,
                     )
-                    publisher = extract_publisher_label(
-                        source_name=source_name,
-                        title=title,
-                        link=link,
-                    )
                     result["crisis_up_hits"].append(
                         {
                             "source": source_name,
                             "publisher": publisher,
+                            "domain": domain,
                             "title": title,
                             "link": link,
                             "published": published,
@@ -546,6 +857,7 @@ async def run_news_job(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]
                             "age_hours": round(age_hours, 2) if age_hours is not None else None,
                             "published_ts": published_dt.timestamp() if published_dt else 0.0,
                             "topic_key": build_topic_key(title, up_matched),
+                            "topic_tokens": build_topic_tokens(title, up_matched),
                         }
                     )
                 if down_matched:
@@ -559,15 +871,11 @@ async def run_news_job(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]
                         source_name=source_name,
                         link=link,
                     )
-                    publisher = extract_publisher_label(
-                        source_name=source_name,
-                        title=title,
-                        link=link,
-                    )
                     result["crisis_down_hits"].append(
                         {
                             "source": source_name,
                             "publisher": publisher,
+                            "domain": domain,
                             "title": title,
                             "link": link,
                             "published": published,
@@ -576,6 +884,7 @@ async def run_news_job(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]
                             "age_hours": round(age_hours, 2) if age_hours is not None else None,
                             "published_ts": published_dt.timestamp() if published_dt else 0.0,
                             "topic_key": build_topic_key(title, down_matched),
+                            "topic_tokens": build_topic_tokens(title, down_matched),
                         }
                     )
                 if not up_matched and not down_matched and title:
@@ -602,10 +911,12 @@ async def run_news_job(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]
     result["crisis_up_hits"] = dedupe_and_sort_news_hits(
         result["crisis_up_hits"],
         max_items=max_matched_items,
+        similarity_threshold=topic_similarity_threshold,
     )
     result["crisis_down_hits"] = dedupe_and_sort_news_hits(
         result["crisis_down_hits"],
         max_items=max_matched_items,
+        similarity_threshold=topic_similarity_threshold,
     )
     result["debug"]["up_hits_count"] = len(result["crisis_up_hits"])
     result["debug"]["down_hits_count"] = len(result["crisis_down_hits"])
@@ -702,9 +1013,16 @@ async def update_dashboard_state(
             "news_debug",
             {
                 "entries_scanned": 0,
+                "entries_filtered_by_source": 0,
                 "up_hits_count": 0,
                 "down_hits_count": 0,
                 "top_unmatched_titles": [],
+                "enabled": False,
+                "sent": False,
+                "last_alert_time": "",
+                "last_alert_signature": "",
+                "last_alert_summary": "",
+                "last_alert_status": "",
             },
         ),
     }
@@ -759,18 +1077,29 @@ async def news_loop(
         try:
             news_hits = await run_news_job(config)
             fetch_time = now_text(config)
-            async with state_lock:
-                shared_state["news_hits"] = news_hits
-                shared_state["news_last_fetch_time"] = fetch_time
-                shared_state["news_debug"] = news_hits.get(
+            alert_status = await asyncio.to_thread(
+                maybe_send_high_risk_notification,
+                config=config,
+                alert_payload=build_high_risk_alert_payload(config=config, news_hits=news_hits),
+                fetch_time=fetch_time,
+            )
+            news_debug = dict(
+                news_hits.get(
                     "debug",
                     {
                         "entries_scanned": 0,
+                        "entries_filtered_by_source": 0,
                         "up_hits_count": 0,
                         "down_hits_count": 0,
                         "top_unmatched_titles": [],
                     },
                 )
+            )
+            news_debug.update(alert_status)
+            async with state_lock:
+                shared_state["news_hits"] = news_hits
+                shared_state["news_last_fetch_time"] = fetch_time
+                shared_state["news_debug"] = news_debug
             await update_dashboard_state(config=config, shared_state=shared_state, file_lock=file_lock)
         except Exception as exc:  # noqa: BLE001
             fetch_time = now_text(config)
@@ -790,9 +1119,16 @@ async def news_loop(
                 shared_state["news_last_fetch_time"] = fetch_time
                 shared_state["news_debug"] = {
                     "entries_scanned": 0,
+                    "entries_filtered_by_source": 0,
                     "up_hits_count": 1,
                     "down_hits_count": 0,
                     "top_unmatched_titles": [],
+                    "enabled": False,
+                    "sent": False,
+                    "last_alert_time": "",
+                    "last_alert_signature": "",
+                    "last_alert_summary": "",
+                    "last_alert_status": "error",
                 }
             await update_dashboard_state(config=config, shared_state=shared_state, file_lock=file_lock)
         await asyncio.sleep(interval)
@@ -810,9 +1146,16 @@ async def main() -> None:
         "news_last_fetch_time": "",
         "news_debug": {
             "entries_scanned": 0,
+            "entries_filtered_by_source": 0,
             "up_hits_count": 0,
             "down_hits_count": 0,
             "top_unmatched_titles": [],
+            "enabled": False,
+            "sent": False,
+            "last_alert_time": "",
+            "last_alert_signature": "",
+            "last_alert_summary": "",
+            "last_alert_status": "",
         },
     }
     state_lock = asyncio.Lock()

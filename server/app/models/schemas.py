@@ -19,9 +19,16 @@ class FinanceWatchlistItem(BaseModel):
 
 class FinanceNewsDebugData(BaseModel):
     entries_scanned: int = 0
+    entries_filtered_by_source: int = 0
     up_hits_count: int = 0
     down_hits_count: int = 0
     top_unmatched_titles: list[str] = Field(default_factory=list)
+    alert_enabled: bool = False
+    alert_sent: bool = False
+    last_alert_time: str = ""
+    last_alert_signature: str = ""
+    last_alert_summary: str = ""
+    last_alert_status: str = ""
 
 
 class FinanceSignalsData(BaseModel):

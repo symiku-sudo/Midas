@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from datetime import datetime, timedelta, timezone
 from email.utils import format_datetime
 from types import SimpleNamespace
@@ -19,6 +20,13 @@ def _base_config() -> dict:
                 "recency_max_age_hours": 48,
                 "allow_missing_published": True,
                 "max_unmatched_titles": 5,
+                "topic_similarity_threshold": 0.55,
+            },
+            "filters": {
+                "source_allowlist": [],
+                "source_blocklist": [],
+                "domain_allowlist": [],
+                "domain_blocklist": [],
             },
             "ranking": {
                 "recency_half_life_hours": 12,
@@ -38,6 +46,14 @@ def _base_config() -> dict:
                     "新华网": 8,
                     "观察者": 4,
                 },
+            },
+            "alerting": {
+                "enabled": False,
+                "state_file": "finance_alert_state.json",
+                "cooldown_seconds": 1800,
+                "min_high_risk_score": 140,
+                "min_high_risk_hits": 2,
+                "max_items_in_notification": 3,
             },
             "keywords": {
                 "crisis_up": ["空袭", "袭击", "石油设施"],
@@ -186,3 +202,93 @@ async def test_run_news_job_prefers_higher_weight_source_and_dedupes_same_topic(
         "新华社消息丨王毅谈伊朗局势：停止军事行动 避免升级蔓延 - 新华网"
     ]
     assert up_titles[0] == "霍尔木兹航运面临供应中断风险 - Reuters"
+
+
+@pytest.mark.asyncio
+async def test_run_news_job_respects_source_blocklist_and_topic_similarity(monkeypatch) -> None:
+    now_utc = datetime.now(timezone.utc)
+    entries = [
+        {
+            "title": "中国发布丨王毅：伊朗局势应停止军事行动 避免升级蔓延 - 中国网",
+            "summary": "",
+            "link": "https://example.com/china",
+            "published": format_datetime(now_utc - timedelta(minutes=30)),
+        },
+        {
+            "title": "新华社消息丨王毅谈伊朗局势：停止军事行动 避免升级蔓延 - 新华网",
+            "summary": "",
+            "link": "https://example.com/xinhua",
+            "published": format_datetime(now_utc - timedelta(minutes=40)),
+        },
+        {
+            "title": "伊朗、以色列最新发声 - 新浪军事_手机新浪网",
+            "summary": "冲突升级",
+            "link": "https://mil.sina.cn/example",
+            "published": format_datetime(now_utc - timedelta(minutes=20)),
+        },
+    ]
+    config = _base_config()
+    config["news"]["filters"]["source_blocklist"] = ["新浪军事_手机新浪网"]
+    config["news"]["keywords"]["crisis_down"].append("避免升级")
+    config["news"]["ranking"]["keyword_weights"]["避免升级"] = 12
+
+    monkeypatch.setattr(
+        worker,
+        "parse_feed_sync",
+        lambda _url: SimpleNamespace(entries=entries),
+    )
+
+    result = await worker.run_news_job(config)
+
+    assert [item["title"] for item in result["crisis_down_hits"]] == [
+        "新华社消息丨王毅谈伊朗局势：停止军事行动 避免升级蔓延 - 新华网"
+    ]
+    assert result["debug"]["entries_filtered_by_source"] == 1
+
+
+def test_build_high_risk_alert_payload_and_cooldown_logic(tmp_path, monkeypatch) -> None:
+    config = _base_config()
+    config["_config_dir"] = str(tmp_path)
+    config["output"] = {"time_format": "%Y-%m-%d %H:%M:%S"}
+    config["news"]["alerting"]["enabled"] = True
+    config["news"]["alerting"]["state_file"] = "finance_alert_state.json"
+    config["news"]["alerting"]["ntfy_config_file"] = "notify.env"
+    config["news"]["alerting"]["notify_script"] = "notify_stub.sh"
+    notify_env = tmp_path / "notify.env"
+    notify_env.write_text("NTFY_TOPIC=test\n", encoding="utf-8")
+    notify_script = tmp_path / "notify_stub.sh"
+    notify_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    notify_script.chmod(0o755)
+    news_hits = {
+        "crisis_up_hits": [
+            {"title": "A", "topic_key": "a", "score": 180.0},
+            {"title": "B", "topic_key": "b", "score": 160.0},
+        ]
+    }
+
+    payload = worker.build_high_risk_alert_payload(config=config, news_hits=news_hits)
+    assert payload is not None
+    assert payload["hit_count"] == 2
+    called = []
+
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda command, check, capture_output, text: called.append(command),
+    )
+
+    first = worker.maybe_send_high_risk_notification(
+        config=config,
+        alert_payload=payload,
+        fetch_time="2026-03-08 13:30:00",
+    )
+    second = worker.maybe_send_high_risk_notification(
+        config=config,
+        alert_payload=payload,
+        fetch_time="2026-03-08 13:35:00",
+    )
+
+    assert first["last_alert_status"] == "sent"
+    assert first["sent"] is True
+    assert second["last_alert_status"] == "cooldown_skip"
+    assert len(called) == 1
