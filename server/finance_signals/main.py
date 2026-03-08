@@ -527,6 +527,34 @@ def write_json_file(path: Path, payload: dict[str, Any]) -> None:
     os.replace(temp_path, path)
 
 
+def extract_alert_summary_title_keys(summary: str) -> list[str]:
+    title_keys: list[str] = []
+    for chunk in str(summary).split("；"):
+        text = str(chunk).strip()
+        if not text:
+            continue
+        title = re.sub(r"\s*\[score=.*$", "", text).strip()
+        normalized_market = normalize_market_alert_key(title)
+        key = (
+            normalize_title_key(normalized_market)
+            or normalize_title_key(title)
+            or normalized_market
+            or title
+        )
+        if key and key not in title_keys:
+            title_keys.append(key)
+    return title_keys
+
+
+def normalize_market_alert_key(text: str) -> str:
+    value = str(text).strip()
+    if not value:
+        return ""
+    value = re.sub(r"（当前[^）]*阈值[^）]*）", "", value)
+    value = re.sub(r"抓取异常：.*$", "抓取异常", value)
+    return value.strip()
+
+
 def build_high_risk_alert_payload(
     *,
     config: dict[str, Any],
@@ -551,6 +579,13 @@ def build_high_risk_alert_payload(
         return None
 
     picked = qualifying_hits[:max_items]
+    all_topic_keys = sorted(
+        {
+            str(item.get("topic_key", "")).strip() or str(item.get("title", "")).strip()
+            for item in qualifying_hits
+            if str(item.get("topic_key", "")).strip() or str(item.get("title", "")).strip()
+        }
+    )
     # Use a stable topic-only signature so score jitter or ordering changes
     # within the same news cycle do not trigger duplicate notifications.
     signature_topics = sorted(
@@ -567,6 +602,12 @@ def build_high_risk_alert_payload(
     )
     return {
         "signature": signature,
+        "dedupe_keys": all_topic_keys,
+        "dedupe_title_keys": [
+            normalize_title_key(str(item.get("title", "")).strip()) or str(item.get("title", "")).strip()
+            for item in picked
+            if str(item.get("title", "")).strip()
+        ],
         "summary": summary,
         "notification_summary": f"高危舆情触发：score={round(float(picked[0].get('score', 0.0)), 2)} hits={len(qualifying_hits)}",
         "picked_hits": picked,
@@ -590,10 +631,22 @@ def build_market_alert_payload(
 
     max_items = max(int(alerting_cfg.get("max_items_in_notification", 3)), 1)
     picked = market_alerts[:max_items]
-    signature = "|".join(picked)
+    dedupe_keys = [
+        normalize_market_alert_key(item)
+        for item in picked
+        if normalize_market_alert_key(item)
+    ]
+    signature = "|".join(dedupe_keys) or "|".join(picked)
     summary = "；".join(picked)
     return {
         "signature": signature,
+        "dedupe_keys": dedupe_keys,
+        "dedupe_title_keys": [
+            normalize_title_key(item) or item
+            for item in dedupe_keys
+            if str(item).strip()
+        ],
+        "picked_alerts": picked,
         "summary": summary,
         "notification_summary": f"Watchlist 行情阈值触发：alerts={len(market_alerts)}",
         "alert_count": len(market_alerts),
@@ -633,11 +686,49 @@ def deliver_alert_notification(
     cooldown_seconds = max(int(alerting_cfg.get("cooldown_seconds", 1800)), 0)
     last_signature = str(state.get("last_alert_signature", "")).strip()
     last_alert_time = str(state.get("last_alert_time", "")).strip()
+    last_alert_topics = [
+        str(item).strip()
+        for item in state.get("last_alert_topics", [])
+        if str(item).strip()
+    ]
+    current_alert_topics = [
+        str(item).strip()
+        for item in alert_payload.get("dedupe_keys", [])
+        if str(item).strip()
+    ]
+    last_alert_titles = [
+        str(item).strip()
+        for item in state.get("last_alert_titles", [])
+        if str(item).strip()
+    ]
+    if not last_alert_titles:
+        last_alert_titles = extract_alert_summary_title_keys(
+            str(state.get("last_alert_summary", "")).strip()
+        )
+    current_alert_titles = [
+        str(item).strip()
+        for item in alert_payload.get("dedupe_title_keys", [])
+        if str(item).strip()
+    ]
     base_status["last_alert_signature"] = last_signature
     base_status["last_alert_time"] = last_alert_time
     base_status["last_alert_summary"] = str(state.get("last_alert_summary", "")).strip()
 
-    if last_signature == alert_payload["signature"] and last_alert_time:
+    topics_comparable = bool(current_alert_topics and last_alert_topics)
+    if topics_comparable:
+        has_new_topics = any(topic not in last_alert_topics for topic in current_alert_topics)
+        if not has_new_topics:
+            base_status["last_alert_status"] = "no_new_topics"
+            return base_status
+
+    titles_comparable = bool(current_alert_titles and last_alert_titles)
+    if (not topics_comparable) and titles_comparable:
+        has_new_titles = any(title not in last_alert_titles for title in current_alert_titles)
+        if not has_new_titles:
+            base_status["last_alert_status"] = "no_new_titles"
+            return base_status
+
+    if (not topics_comparable) and last_signature == alert_payload["signature"] and last_alert_time:
         time_format = str(config["output"]["time_format"])
         try:
             last_dt = datetime.strptime(last_alert_time, time_format)
@@ -689,6 +780,8 @@ def deliver_alert_notification(
         "last_alert_time": fetch_time,
         "last_alert_signature": alert_payload["signature"],
         "last_alert_summary": alert_payload["summary"],
+        "last_alert_topics": current_alert_topics,
+        "last_alert_titles": current_alert_titles,
     }
     write_json_file(state_path, next_state)
     return {
@@ -723,14 +816,160 @@ def maybe_send_market_alert_notification(
     alert_payload: dict[str, Any] | None,
     fetch_time: str,
 ) -> dict[str, Any]:
-    return deliver_alert_notification(
-        config=config,
-        alerting_cfg=config.get("market_data", {}).get("alerting"),
-        alert_payload=alert_payload,
-        fetch_time=fetch_time,
-        default_state_file="../.tmp/finance_market_alert_state.json",
-        default_task_name="finance-signals-market-alert",
+    base_status = {
+        "enabled": False,
+        "sent": False,
+        "last_alert_time": "",
+        "last_alert_signature": "",
+        "last_alert_summary": "",
+        "last_alert_status": "disabled",
+    }
+    alerting_cfg = config.get("market_data", {}).get("alerting")
+    if not isinstance(alerting_cfg, dict) or not bool(alerting_cfg.get("enabled", False)):
+        return base_status
+    base_status["enabled"] = True
+
+    state_path = resolve_config_relative_path(
+        config,
+        str(alerting_cfg.get("state_file", "../.tmp/finance_market_alert_state.json")),
     )
+    state = load_json_file(state_path)
+    base_status["last_alert_time"] = str(state.get("last_alert_time", "")).strip()
+    base_status["last_alert_signature"] = str(state.get("last_alert_signature", "")).strip()
+    base_status["last_alert_summary"] = str(state.get("last_alert_summary", "")).strip()
+
+    active_topics_source = (
+        state.get("active_alert_topics")
+        if "active_alert_topics" in state
+        else state.get("last_alert_topics", [])
+    )
+    active_titles_source = (
+        state.get("active_alert_titles")
+        if "active_alert_titles" in state
+        else state.get("last_alert_titles", [])
+    )
+    active_topics = [
+        str(item).strip()
+        for item in active_topics_source
+        if str(item).strip()
+    ]
+    active_titles = [
+        str(item).strip()
+        for item in active_titles_source
+        if str(item).strip()
+    ]
+    if ("active_alert_titles" not in state) and not active_titles:
+        active_titles = extract_alert_summary_title_keys(
+            str(state.get("last_alert_summary", "")).strip()
+        )
+
+    if alert_payload is None:
+        if active_topics or active_titles:
+            state["active_alert_topics"] = []
+            state["active_alert_titles"] = []
+            write_json_file(state_path, state)
+        base_status["last_alert_status"] = "threshold_not_met"
+        return base_status
+
+    current_topics = [
+        str(item).strip()
+        for item in alert_payload.get("dedupe_keys", [])
+        if str(item).strip()
+    ]
+    current_titles = [
+        str(item).strip()
+        for item in alert_payload.get("dedupe_title_keys", [])
+        if str(item).strip()
+    ]
+    picked_alerts = [
+        str(item).strip()
+        for item in alert_payload.get("picked_alerts", [])
+        if str(item).strip()
+    ]
+
+    if not current_topics and not current_titles:
+        state["active_alert_topics"] = []
+        state["active_alert_titles"] = []
+        write_json_file(state_path, state)
+        base_status["last_alert_status"] = "threshold_not_met"
+        return base_status
+
+    if active_topics:
+        new_indexes = [index for index, item in enumerate(current_topics) if item not in active_topics]
+        no_new_status = "no_new_topics"
+    elif active_titles:
+        new_indexes = [index for index, item in enumerate(current_titles) if item not in active_titles]
+        no_new_status = "no_new_titles"
+    else:
+        new_indexes = list(range(len(picked_alerts)))
+        no_new_status = "sent"
+
+    state["active_alert_topics"] = current_topics
+    state["active_alert_titles"] = current_titles
+
+    if not new_indexes:
+        write_json_file(state_path, state)
+        base_status["last_alert_status"] = no_new_status
+        return base_status
+
+    new_topics = [current_topics[index] for index in new_indexes if index < len(current_topics)]
+    new_alerts = [picked_alerts[index] for index in new_indexes if index < len(picked_alerts)]
+    send_signature = "|".join(new_topics) or str(alert_payload.get("signature", "")).strip()
+    send_summary = "；".join(new_alerts) or str(alert_payload.get("summary", "")).strip()
+
+    notify_script = alerting_cfg.get("notify_script")
+    if notify_script:
+        notify_script_path = resolve_config_relative_path(config, str(notify_script))
+    else:
+        notify_script_path = Path(__file__).resolve().parents[2] / "tools" / "ntfy_notify.sh"
+    ntfy_config_file = resolve_config_relative_path(
+        config,
+        str(alerting_cfg.get("ntfy_config_file", "../../.tmp/ntfy/notify.env")),
+    )
+    if not notify_script_path.exists() or not ntfy_config_file.exists():
+        base_status["last_alert_status"] = "notify_not_configured"
+        write_json_file(state_path, state)
+        return base_status
+
+    task_name = str(alerting_cfg.get("task_name", "finance-signals-market-alert")).strip()
+    command = [
+        str(notify_script_path),
+        "--config",
+        str(ntfy_config_file),
+        "--task",
+        task_name,
+        "--status",
+        "WARN",
+        "--summary",
+        f"Watchlist 行情阈值触发：alerts={len(new_alerts)}",
+        "--extra",
+        f"signature={send_signature}",
+        "--extra",
+        f"summary={send_summary}",
+    ]
+    try:
+        subprocess.run(command, check=True, capture_output=True, text=True)
+    except Exception as exc:
+        base_status["last_alert_status"] = f"notify_failed:{exc}"
+        write_json_file(state_path, state)
+        return base_status
+
+    state["last_alert_time"] = fetch_time
+    state["last_alert_signature"] = send_signature
+    state["last_alert_summary"] = send_summary
+    state["last_alert_topics"] = new_topics
+    state["last_alert_titles"] = [
+        current_titles[index] for index in new_indexes if index < len(current_titles)
+    ]
+    write_json_file(state_path, state)
+    return {
+        "enabled": True,
+        "sent": True,
+        "last_alert_time": fetch_time,
+        "last_alert_signature": send_signature,
+        "last_alert_summary": send_summary,
+        "last_alert_status": "sent",
+    }
 
 
 def _is_negated_hit(text: str, key: str, negation_prefixes: list[str]) -> bool:

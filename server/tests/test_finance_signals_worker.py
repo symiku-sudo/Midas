@@ -299,7 +299,7 @@ def test_build_high_risk_alert_payload_and_cooldown_logic(tmp_path, monkeypatch)
 
     assert first["last_alert_status"] == "sent"
     assert first["sent"] is True
-    assert second["last_alert_status"] == "cooldown_skip"
+    assert second["last_alert_status"] == "no_new_topics"
     assert len(called) == 1
 
 
@@ -360,8 +360,61 @@ def test_high_risk_alert_signature_is_stable_across_score_jitter(tmp_path, monke
     )
 
     assert first["last_alert_status"] == "sent"
-    assert second["last_alert_status"] == "cooldown_skip"
+    assert second["last_alert_status"] == "no_new_topics"
     assert len(called) == 1
+
+
+def test_high_risk_alert_legacy_state_does_not_resend_same_titles(tmp_path, monkeypatch) -> None:
+    config = _base_config()
+    config["_config_dir"] = str(tmp_path)
+    config["output"] = {"time_format": "%Y-%m-%d %H:%M:%S"}
+    config["news"]["alerting"]["enabled"] = True
+    config["news"]["alerting"]["state_file"] = "finance_alert_state.json"
+    config["news"]["alerting"]["ntfy_config_file"] = "notify.env"
+    config["news"]["alerting"]["notify_script"] = "notify_stub.sh"
+    notify_env = tmp_path / "notify.env"
+    notify_env.write_text("NTFY_TOPIC=test\n", encoding="utf-8")
+    notify_script = tmp_path / "notify_stub.sh"
+    notify_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    notify_script.chmod(0o755)
+    state_file = tmp_path / "finance_alert_state.json"
+    state_file.write_text(
+        (
+            '{\n'
+            '  "last_alert_time": "2026-03-08 13:52:00",\n'
+            '  "last_alert_signature": "legacy-signature-with-score",\n'
+            '  "last_alert_summary": "A [score=181.2]；B [score=160.4]"\n'
+            '}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    payload = worker.build_high_risk_alert_payload(
+        config=config,
+        news_hits={
+            "crisis_up_hits": [
+                {"title": "A", "topic_key": "topic-a", "score": 181.2},
+                {"title": "B", "topic_key": "topic-b", "score": 160.4},
+            ]
+        },
+    )
+
+    assert payload is not None
+    called = []
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda command, check, capture_output, text: called.append(command),
+    )
+
+    result = worker.maybe_send_high_risk_notification(
+        config=config,
+        alert_payload=payload,
+        fetch_time="2026-03-08 13:56:00",
+    )
+
+    assert result["last_alert_status"] == "no_new_titles"
+    assert len(called) == 0
 
 
 def test_build_market_alert_payload_and_delivery_logic(tmp_path, monkeypatch) -> None:
@@ -369,6 +422,7 @@ def test_build_market_alert_payload_and_delivery_logic(tmp_path, monkeypatch) ->
     config["_config_dir"] = str(tmp_path)
     config["output"] = {"time_format": "%Y-%m-%d %H:%M:%S"}
     config["market_data"]["alerting"]["enabled"] = True
+    config["market_data"]["alerting"]["state_file"] = "finance_market_alert_state.json"
     config["market_data"]["alerting"]["ntfy_config_file"] = "notify.env"
     config["market_data"]["alerting"]["notify_script"] = "notify_stub.sh"
     notify_env = tmp_path / "notify.env"
@@ -402,5 +456,152 @@ def test_build_market_alert_payload_and_delivery_logic(tmp_path, monkeypatch) ->
     )
 
     assert first["last_alert_status"] == "sent"
-    assert second["last_alert_status"] == "cooldown_skip"
+    assert second["last_alert_status"] == "no_new_topics"
     assert len(called) == 1
+
+
+def test_market_alert_price_jitter_does_not_resend(tmp_path, monkeypatch) -> None:
+    config = _base_config()
+    config["_config_dir"] = str(tmp_path)
+    config["output"] = {"time_format": "%Y-%m-%d %H:%M:%S"}
+    config["market_data"]["alerting"]["enabled"] = True
+    config["market_data"]["alerting"]["state_file"] = "finance_market_alert_state.json"
+    config["market_data"]["alerting"]["ntfy_config_file"] = "notify.env"
+    config["market_data"]["alerting"]["notify_script"] = "notify_stub.sh"
+    notify_env = tmp_path / "notify.env"
+    notify_env.write_text("NTFY_TOPIC=test\n", encoding="utf-8")
+    notify_script = tmp_path / "notify_stub.sh"
+    notify_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    notify_script.chmod(0o755)
+
+    first_payload = worker.build_market_alert_payload(
+        config=config,
+        market_alerts=["布伦特原油（BZ=F）触发：价格突破 90（当前 92.69 >= 阈值 90.00）"],
+    )
+    second_payload = worker.build_market_alert_payload(
+        config=config,
+        market_alerts=["布伦特原油（BZ=F）触发：价格突破 90（当前 92.81 >= 阈值 90.00）"],
+    )
+
+    assert first_payload is not None
+    assert second_payload is not None
+    assert first_payload["signature"] == second_payload["signature"]
+
+    called = []
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda command, check, capture_output, text: called.append(command),
+    )
+
+    first = worker.maybe_send_market_alert_notification(
+        config=config,
+        alert_payload=first_payload,
+        fetch_time="2026-03-08 14:07:00",
+    )
+    second = worker.maybe_send_market_alert_notification(
+        config=config,
+        alert_payload=second_payload,
+        fetch_time="2026-03-08 14:08:00",
+    )
+
+    assert first["last_alert_status"] == "sent"
+    assert second["last_alert_status"] == "no_new_topics"
+    assert len(called) == 1
+
+
+def test_market_alert_legacy_state_does_not_resend_same_threshold(tmp_path, monkeypatch) -> None:
+    config = _base_config()
+    config["_config_dir"] = str(tmp_path)
+    config["output"] = {"time_format": "%Y-%m-%d %H:%M:%S"}
+    config["market_data"]["alerting"]["enabled"] = True
+    config["market_data"]["alerting"]["state_file"] = "finance_market_alert_state.json"
+    config["market_data"]["alerting"]["ntfy_config_file"] = "notify.env"
+    config["market_data"]["alerting"]["notify_script"] = "notify_stub.sh"
+    notify_env = tmp_path / "notify.env"
+    notify_env.write_text("NTFY_TOPIC=test\n", encoding="utf-8")
+    notify_script = tmp_path / "notify_stub.sh"
+    notify_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    notify_script.chmod(0o755)
+    state_file = tmp_path / "finance_market_alert_state.json"
+    state_file.write_text(
+        (
+            '{\n'
+            '  "last_alert_time": "2026-03-08 14:07:00",\n'
+            '  "last_alert_signature": "布伦特原油（BZ=F）触发：价格突破 90（当前 92.69 >= 阈值 90.00）",\n'
+            '  "last_alert_summary": "布伦特原油（BZ=F）触发：价格突破 90（当前 92.69 >= 阈值 90.00）"\n'
+            '}\n'
+        ),
+        encoding="utf-8",
+    )
+
+    payload = worker.build_market_alert_payload(
+        config=config,
+        market_alerts=["布伦特原油（BZ=F）触发：价格突破 90（当前 92.81 >= 阈值 90.00）"],
+    )
+
+    assert payload is not None
+    called = []
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda command, check, capture_output, text: called.append(command),
+    )
+
+    result = worker.maybe_send_market_alert_notification(
+        config=config,
+        alert_payload=payload,
+        fetch_time="2026-03-08 14:11:00",
+    )
+
+    assert result["last_alert_status"] == "no_new_titles"
+    assert len(called) == 0
+
+
+def test_market_alert_reentry_after_clear_resends(tmp_path, monkeypatch) -> None:
+    config = _base_config()
+    config["_config_dir"] = str(tmp_path)
+    config["output"] = {"time_format": "%Y-%m-%d %H:%M:%S"}
+    config["market_data"]["alerting"]["enabled"] = True
+    config["market_data"]["alerting"]["state_file"] = "finance_market_alert_state.json"
+    config["market_data"]["alerting"]["ntfy_config_file"] = "notify.env"
+    config["market_data"]["alerting"]["notify_script"] = "notify_stub.sh"
+    notify_env = tmp_path / "notify.env"
+    notify_env.write_text("NTFY_TOPIC=test\n", encoding="utf-8")
+    notify_script = tmp_path / "notify_stub.sh"
+    notify_script.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    notify_script.chmod(0o755)
+
+    up_payload = worker.build_market_alert_payload(
+        config=config,
+        market_alerts=["布伦特原油（BZ=F）触发：价格突破 90（当前 92.69 >= 阈值 90.00）"],
+    )
+    assert up_payload is not None
+
+    called = []
+    monkeypatch.setattr(
+        subprocess,
+        "run",
+        lambda command, check, capture_output, text: called.append(command),
+    )
+
+    first = worker.maybe_send_market_alert_notification(
+        config=config,
+        alert_payload=up_payload,
+        fetch_time="2026-03-08 14:07:00",
+    )
+    cleared = worker.maybe_send_market_alert_notification(
+        config=config,
+        alert_payload=None,
+        fetch_time="2026-03-08 14:08:00",
+    )
+    second = worker.maybe_send_market_alert_notification(
+        config=config,
+        alert_payload=up_payload,
+        fetch_time="2026-03-08 14:09:00",
+    )
+
+    assert first["last_alert_status"] == "sent"
+    assert cleared["last_alert_status"] == "threshold_not_met"
+    assert second["last_alert_status"] == "sent"
+    assert len(called) == 2
