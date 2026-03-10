@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
+import tempfile
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -10,10 +13,13 @@ import yaml
 from app.core.errors import AppError, ErrorCode
 from app.models.schemas import (
     FinanceMarketAlertDebugData,
+    FinanceNewsItem,
     FinanceNewsDebugData,
     FinanceSignalsData,
     FinanceWatchlistItem,
 )
+
+_CONFIG_WRITE_LOCK = threading.RLock()
 
 
 class FinanceSignalsService:
@@ -30,6 +36,8 @@ class FinanceSignalsService:
                 news_last_fetch_time="",
                 news_stale=False,
                 watchlist_preview=[],
+                top_news=[],
+                watchlist_ntfy_enabled=self.get_watchlist_ntfy_enabled(),
                 ai_insight_text="财经信号尚未初始化，请先启动 finance_signals 任务。",
                 news_debug=FinanceNewsDebugData(),
                 market_alert_debug=FinanceMarketAlertDebugData(),
@@ -79,12 +87,33 @@ class FinanceSignalsService:
                         price=price_value,
                         change_pct=change_pct,
                         alert_hint=alert_hints.get(symbol, ""),
+                        alert_active=bool(item.get("alert_active", False)),
+                    )
+                )
+
+        top_news_raw = payload.get("top_news") or []
+        top_news: list[FinanceNewsItem] = []
+        if isinstance(top_news_raw, list):
+            for item in top_news_raw:
+                if not isinstance(item, dict):
+                    continue
+                title = str(item.get("title", "")).strip()
+                if not title:
+                    continue
+                top_news.append(
+                    FinanceNewsItem(
+                        title=title,
+                        link=str(item.get("link", "")).strip(),
+                        publisher=str(item.get("publisher", "")).strip(),
+                        published=str(item.get("published", "")).strip(),
+                        category=str(item.get("category", "")).strip(),
+                        matched_keywords=self._safe_str_list(item.get("matched_keywords")),
                     )
                 )
 
         ai_insight_text = str(payload.get("ai_insight_text", "")).strip()
         if not ai_insight_text:
-            ai_insight_text = "市场与舆情暂无异常信号，维持常规观察。"
+            ai_insight_text = "今日暂无高优先级金融与时政新闻。"
 
         news_last_fetch_time = str(payload.get("news_last_fetch_time", "")).strip()
         news_debug_raw = payload.get("news_debug")
@@ -95,19 +124,13 @@ class FinanceSignalsService:
                 entries_filtered_by_source=self._safe_int(
                     news_debug_raw.get("entries_filtered_by_source")
                 ),
-                up_hits_count=self._safe_int(news_debug_raw.get("up_hits_count")),
-                down_hits_count=self._safe_int(news_debug_raw.get("down_hits_count")),
+                matched_entries_count=self._safe_int(
+                    news_debug_raw.get("matched_entries_count")
+                ),
+                top_news_count=self._safe_int(news_debug_raw.get("top_news_count")),
                 top_unmatched_titles=self._safe_str_list(
                     news_debug_raw.get("top_unmatched_titles")
                 ),
-                alert_enabled=bool(news_debug_raw.get("enabled", False)),
-                alert_sent=bool(news_debug_raw.get("sent", False)),
-                last_alert_time=str(news_debug_raw.get("last_alert_time", "")).strip(),
-                last_alert_signature=str(
-                    news_debug_raw.get("last_alert_signature", "")
-                ).strip(),
-                last_alert_summary=str(news_debug_raw.get("last_alert_summary", "")).strip(),
-                last_alert_status=str(news_debug_raw.get("last_alert_status", "")).strip(),
             )
         market_alert_debug_raw = payload.get("market_alert_debug")
         market_alert_debug = FinanceMarketAlertDebugData()
@@ -134,10 +157,39 @@ class FinanceSignalsService:
             news_last_fetch_time=news_last_fetch_time,
             news_stale=self._compute_news_stale(news_last_fetch_time),
             watchlist_preview=watchlist,
+            top_news=top_news,
+            watchlist_ntfy_enabled=bool(
+                payload.get("watchlist_ntfy_enabled", self.get_watchlist_ntfy_enabled())
+            ),
             ai_insight_text=ai_insight_text,
             news_debug=news_debug,
             market_alert_debug=market_alert_debug,
         )
+
+    def get_watchlist_ntfy_enabled(self) -> bool:
+        cfg = self._load_config()
+        market_data = cfg.get("market_data")
+        if not isinstance(market_data, dict):
+            return False
+        alerting = market_data.get("alerting")
+        if not isinstance(alerting, dict):
+            return False
+        return bool(alerting.get("enabled", False))
+
+    def set_watchlist_ntfy_enabled(self, enabled: bool) -> bool:
+        with _CONFIG_WRITE_LOCK:
+            raw = self._load_config()
+            market_data = raw.get("market_data")
+            if not isinstance(market_data, dict):
+                market_data = {}
+                raw["market_data"] = market_data
+            alerting = market_data.get("alerting")
+            if not isinstance(alerting, dict):
+                alerting = {}
+                market_data["alerting"] = alerting
+            alerting["enabled"] = bool(enabled)
+            self._write_yaml(self._config_path, raw)
+        return bool(enabled)
 
     def _resolve_status_path(self) -> Path:
         status_file = "finance_status.json"
@@ -160,15 +212,7 @@ class FinanceSignalsService:
         return (config_dir / raw_path).resolve()
 
     def _load_alert_hints(self) -> dict[str, str]:
-        if not self._config_path.exists():
-            return {}
-        try:
-            cfg = yaml.safe_load(self._config_path.read_text(encoding="utf-8")) or {}
-        except Exception:
-            return {}
-        if not isinstance(cfg, dict):
-            return {}
-
+        cfg = self._load_config()
         market_data = cfg.get("market_data")
         if not isinstance(market_data, dict):
             return {}
@@ -268,3 +312,33 @@ class FinanceSignalsService:
         if rounded.is_integer():
             return str(int(rounded))
         return str(rounded)
+
+    def _load_config(self) -> dict[str, Any]:
+        if not self._config_path.exists():
+            return {}
+        try:
+            cfg = yaml.safe_load(self._config_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            return {}
+        if not isinstance(cfg, dict):
+            return {}
+        return cfg
+
+    def _write_yaml(self, path: Path, payload: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as fp:
+                yaml.safe_dump(payload, fp, allow_unicode=True, sort_keys=False)
+                temp_path = Path(fp.name)
+            os.replace(str(temp_path), str(path))
+        finally:
+            if temp_path is not None and temp_path.exists():
+                temp_path.unlink(missing_ok=True)

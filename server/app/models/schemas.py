@@ -15,20 +15,24 @@ class FinanceWatchlistItem(BaseModel):
     price: float | None = None
     change_pct: str = "N/A"
     alert_hint: str = ""
+    alert_active: bool = False
+
+
+class FinanceNewsItem(BaseModel):
+    title: str
+    link: str = ""
+    publisher: str = ""
+    published: str = ""
+    category: str = ""
+    matched_keywords: list[str] = Field(default_factory=list)
 
 
 class FinanceNewsDebugData(BaseModel):
     entries_scanned: int = 0
     entries_filtered_by_source: int = 0
-    up_hits_count: int = 0
-    down_hits_count: int = 0
+    matched_entries_count: int = 0
+    top_news_count: int = 0
     top_unmatched_titles: list[str] = Field(default_factory=list)
-    alert_enabled: bool = False
-    alert_sent: bool = False
-    last_alert_time: str = ""
-    last_alert_signature: str = ""
-    last_alert_summary: str = ""
-    last_alert_status: str = ""
 
 
 class FinanceMarketAlertDebugData(BaseModel):
@@ -45,11 +49,21 @@ class FinanceSignalsData(BaseModel):
     news_last_fetch_time: str = ""
     news_stale: bool = False
     watchlist_preview: list[FinanceWatchlistItem]
+    top_news: list[FinanceNewsItem] = Field(default_factory=list)
+    watchlist_ntfy_enabled: bool = False
     ai_insight_text: str
     news_debug: FinanceNewsDebugData = Field(default_factory=FinanceNewsDebugData)
     market_alert_debug: FinanceMarketAlertDebugData = Field(
         default_factory=FinanceMarketAlertDebugData
     )
+
+
+class FinanceWatchlistNtfyUpdateRequest(BaseModel):
+    enabled: bool
+
+
+class FinanceWatchlistNtfyData(BaseModel):
+    enabled: bool
 
 
 class AssetImageFillData(BaseModel):

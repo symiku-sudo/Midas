@@ -20,6 +20,7 @@ from app.main import app
 from app.models.schemas import (
     FinanceMarketAlertDebugData,
     FinanceNewsDebugData,
+    FinanceNewsItem,
     FinanceSignalsData,
     FinanceWatchlistItem,
 )
@@ -82,19 +83,26 @@ def test_finance_signals_ok(monkeypatch) -> None:
                         price=91.23,
                         change_pct="+1.2%",
                         alert_hint=">90",
+                        alert_active=True,
                     )
                 ],
-                ai_insight_text="行情警报：布伦特原油（BZ=F）触发阈值。",
+                top_news=[
+                    FinanceNewsItem(
+                        title="美联储官员释放降息信号",
+                        publisher="Reuters",
+                        published="2026-03-05 11:30:00",
+                        category="finance",
+                        matched_keywords=["美联储", "降息"],
+                    )
+                ],
+                watchlist_ntfy_enabled=True,
+                ai_insight_text="finance: 美联储官员释放降息信号",
                 news_debug=FinanceNewsDebugData(
                     entries_scanned=12,
                     entries_filtered_by_source=3,
-                    up_hits_count=2,
-                    down_hits_count=1,
-                    top_unmatched_titles=["以色列袭击伊朗石油储存设施"],
-                    alert_enabled=True,
-                    alert_sent=False,
-                    last_alert_time="2026-03-05 11:59:00",
-                    last_alert_status="cooldown_skip",
+                    matched_entries_count=8,
+                    top_news_count=5,
+                    top_unmatched_titles=["地方政策解读长文"],
                 ),
                 market_alert_debug=FinanceMarketAlertDebugData(
                     alert_enabled=True,
@@ -121,13 +129,35 @@ def test_finance_signals_ok(monkeypatch) -> None:
     assert body["data"]["watchlist_preview"][0]["symbol"] == "BZ=F"
     assert body["data"]["watchlist_preview"][0]["price"] == 91.23
     assert body["data"]["watchlist_preview"][0]["alert_hint"] == ">90"
+    assert body["data"]["watchlist_preview"][0]["alert_active"] is True
+    assert body["data"]["top_news"][0]["title"] == "美联储官员释放降息信号"
+    assert body["data"]["watchlist_ntfy_enabled"] is True
     assert body["data"]["ai_insight_text"]
     assert body["data"]["news_debug"]["entries_scanned"] == 12
     assert body["data"]["news_debug"]["entries_filtered_by_source"] == 3
-    assert body["data"]["news_debug"]["up_hits_count"] == 2
-    assert body["data"]["news_debug"]["last_alert_status"] == "cooldown_skip"
+    assert body["data"]["news_debug"]["matched_entries_count"] == 8
+    assert body["data"]["news_debug"]["top_news_count"] == 5
     assert body["data"]["market_alert_debug"]["alert_sent"] is True
     assert body["data"]["market_alert_debug"]["last_alert_status"] == "sent"
+
+
+def test_update_finance_watchlist_ntfy(monkeypatch) -> None:
+    class _FakeFinanceSignalsService:
+        def set_watchlist_ntfy_enabled(self, enabled: bool) -> bool:
+            return enabled
+
+    monkeypatch.setattr(
+        routes_module,
+        "_get_finance_signals_service",
+        lambda: _FakeFinanceSignalsService(),
+    )
+    monkeypatch.setattr(routes_module, "_reload_runtime_services", lambda: None)
+
+    resp = client.put("/api/finance/signals/watchlist-ntfy", json={"enabled": False})
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["data"]["enabled"] is False
 
 
 def test_asset_fill_from_images_returns_structured_amounts() -> None:

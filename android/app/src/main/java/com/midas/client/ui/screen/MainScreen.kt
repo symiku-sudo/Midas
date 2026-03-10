@@ -64,6 +64,7 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSummaryData
+import com.midas.client.data.model.FinanceNewsItem
 import com.midas.client.data.model.FinanceWatchlistItem
 import com.midas.client.data.model.NotesMergeCandidateItem
 import com.midas.client.data.model.NotesMergePreviewData
@@ -87,7 +88,7 @@ private enum class WorkspaceSection(val title: String) {
 }
 
 private enum class AssetPanelTab(val title: String) {
-    MARKET("Watchlist+RSS"),
+    MARKET("Watchlist+新闻"),
     ASSET_STATS("资产统计"),
 }
 
@@ -313,6 +314,7 @@ fun MainScreen(viewModel: MainViewModel) {
         onSaveAssetStats = viewModel::saveAssetStats,
         onDeleteAssetHistoryRecord = viewModel::deleteAssetHistoryRecord,
         onAssetSummaryCopied = viewModel::markAssetSummaryCopied,
+        onToggleWatchlistNtfy = viewModel::setWatchlistNtfyEnabled,
         onFillAssetStatsFromImages = { assetImagePickerLauncher.launch("image/*") },
     )
 }
@@ -353,6 +355,7 @@ fun MainScreenContent(
     onSaveAssetStats: () -> Unit = {},
     onDeleteAssetHistoryRecord: (String) -> Unit = {},
     onAssetSummaryCopied: () -> Unit = {},
+    onToggleWatchlistNtfy: (Boolean) -> Unit = {},
     onFillAssetStatsFromImages: () -> Unit = {},
     enableLifecycleAutoRefresh: Boolean = true,
     enableFinanceAutoRefresh: Boolean = true,
@@ -489,11 +492,12 @@ fun MainScreenContent(
                     onRefresh = onRefreshFinanceSignals,
                     onAssetAmountChange = onAssetAmountChange,
                     onSaveAssetStats = onSaveAssetStats,
-                    onDeleteAssetHistoryRecord = onDeleteAssetHistoryRecord,
-                    onAssetSummaryCopied = onAssetSummaryCopied,
-                    onFillAssetStatsFromImages = onFillAssetStatsFromImages,
-                    modifier = contentModifier,
-                )
+                        onDeleteAssetHistoryRecord = onDeleteAssetHistoryRecord,
+                        onAssetSummaryCopied = onAssetSummaryCopied,
+                        onToggleWatchlistNtfy = onToggleWatchlistNtfy,
+                        onFillAssetStatsFromImages = onFillAssetStatsFromImages,
+                        modifier = contentModifier,
+                    )
             } else {
                 when {
                     selectedMainTab == MainTab.SETTINGS -> SettingsPanel(
@@ -1216,6 +1220,7 @@ private fun FinanceSignalsPanel(
     onSaveAssetStats: () -> Unit,
     onDeleteAssetHistoryRecord: (String) -> Unit,
     onAssetSummaryCopied: () -> Unit,
+    onToggleWatchlistNtfy: (Boolean) -> Unit,
     onFillAssetStatsFromImages: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -1243,12 +1248,12 @@ private fun FinanceSignalsPanel(
                 Text(
                     text = if (state.newsLastFetchTime.isNotBlank()) {
                         if (state.newsIsStale) {
-                            "RSS 拉取：${state.newsLastFetchTime}（数据可能陈旧）"
+                            "新闻拉取：${state.newsLastFetchTime}（数据可能陈旧）"
                         } else {
-                            "RSS 拉取：${state.newsLastFetchTime}"
+                            "新闻拉取：${state.newsLastFetchTime}"
                         }
                     } else {
-                        "RSS 拉取：等待数据"
+                        "新闻拉取：等待数据"
                     },
                     style = MaterialTheme.typography.bodySmall,
                     color = if (state.newsIsStale) {
@@ -1279,7 +1284,24 @@ private fun FinanceSignalsPanel(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("Watchlist Preview", style = MaterialTheme.typography.titleSmall)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text("Watchlist", style = MaterialTheme.typography.titleSmall)
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(
+                                text = if (state.watchlistNtfyEnabled) "ntfy 已开启" else "ntfy 已关闭",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Switch(
+                                checked = state.watchlistNtfyEnabled,
+                                onCheckedChange = onToggleWatchlistNtfy,
+                                enabled = !state.isUpdatingWatchlistNtfy,
+                            )
+                        }
+                    }
                     when {
                         state.isLoading && state.watchlistPreview.isEmpty() -> {
                             Text("正在拉取行情数据...", style = MaterialTheme.typography.bodySmall)
@@ -1303,11 +1325,10 @@ private fun FinanceSignalsPanel(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("RSS Insight", style = MaterialTheme.typography.titleSmall)
-                    FinanceInsightBody(
-                        insightText = state.aiInsightText.ifBlank {
-                            "市场与舆情暂无异常信号，维持常规观察。"
-                        },
+                    Text("今日金融与时政新闻 Top5", style = MaterialTheme.typography.titleSmall)
+                    FinanceTopNewsList(
+                        items = state.topNews,
+                        isLoading = state.isLoading,
                     )
                 }
             }
@@ -1561,6 +1582,16 @@ private fun FinanceWatchlistRow(item: FinanceWatchlistItem) {
         normalizedChange.startsWith("-") -> ErrorStatusColor
         else -> MaterialTheme.colorScheme.onSurfaceVariant
     }
+    val hintColor = if (item.alertActive) {
+        ErrorStatusColor
+    } else {
+        MaterialTheme.colorScheme.onSurfaceVariant
+    }
+    val hintBackground = if (item.alertActive) {
+        ErrorStatusColor.copy(alpha = 0.14f)
+    } else {
+        MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.68f)
+    }
 
     Row(
         modifier = Modifier.fillMaxWidth(),
@@ -1588,10 +1619,10 @@ private fun FinanceWatchlistRow(item: FinanceWatchlistItem) {
                     Text(
                         text = "阈值 $normalizedHint",
                         style = MaterialTheme.typography.bodySmall,
-                        color = WarningStatusColor,
+                        color = hintColor,
                         modifier = Modifier
                             .background(
-                                color = WarningStatusColor.copy(alpha = 0.12f),
+                                color = hintBackground,
                                 shape = RoundedCornerShape(999.dp),
                             )
                             .padding(horizontal = 8.dp, vertical = 2.dp),
@@ -1612,72 +1643,66 @@ private fun FinanceWatchlistRow(item: FinanceWatchlistItem) {
     }
 }
 
-private data class FinanceInsightSection(
-    val title: String,
-    val items: List<String>,
-)
-
 @Composable
-private fun FinanceInsightBody(insightText: String) {
-    val sections = parseFinanceInsightSections(insightText)
-    if (sections.isEmpty()) {
-        Text(insightText, style = MaterialTheme.typography.bodySmall)
-        return
-    }
+private fun FinanceTopNewsList(
+    items: List<FinanceNewsItem>,
+    isLoading: Boolean,
+) {
+    when {
+        isLoading && items.isEmpty() -> {
+            Text("正在拉取今日新闻...", style = MaterialTheme.typography.bodySmall)
+        }
 
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        sections.forEachIndexed { index, section ->
-            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                if (section.title.isNotBlank()) {
-                    Text(
-                        text = section.title,
-                        style = MaterialTheme.typography.bodySmall,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
-                if (section.items.isEmpty()) {
-                    Text("暂无命中。", style = MaterialTheme.typography.bodySmall)
-                } else {
-                    section.items.forEach { item ->
-                        Text("• $item", style = MaterialTheme.typography.bodySmall)
+        items.isEmpty() -> {
+            Text("今日暂无可展示的金融或时政新闻。", style = MaterialTheme.typography.bodySmall)
+        }
+
+        else -> {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                items.forEachIndexed { index, item ->
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "${index + 1}. ${item.title}",
+                            style = MaterialTheme.typography.bodySmall,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            if (item.category.isNotBlank()) {
+                                val categoryLabel = when (item.category.lowercase(Locale.getDefault())) {
+                                    "finance" -> "金融"
+                                    "politics" -> "时政"
+                                    else -> item.category
+                                }
+                                Text(
+                                    text = categoryLabel,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = LinkStatusColor,
+                                    modifier = Modifier
+                                        .background(
+                                            color = LinkStatusColor.copy(alpha = 0.12f),
+                                            shape = RoundedCornerShape(999.dp),
+                                        )
+                                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                                )
+                            }
+                            val metaText = listOf(item.publisher, item.published)
+                                .filter { it.isNotBlank() }
+                                .joinToString(" · ")
+                            if (metaText.isNotBlank()) {
+                                Text(
+                                    text = metaText,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                        }
+                    }
+                    if (index < items.lastIndex) {
+                        HorizontalDivider()
                     }
                 }
             }
-            if (index < sections.lastIndex) {
-                HorizontalDivider()
-            }
         }
-    }
-}
-
-private fun parseFinanceInsightSections(rawText: String): List<FinanceInsightSection> {
-    val normalized = rawText
-        .replace('\n', ' ')
-        .replace('\r', ' ')
-        .trim()
-    if (normalized.isBlank()) {
-        return emptyList()
-    }
-
-    val sections = normalized.split("|")
-        .map { it.trim() }
-        .filter { it.isNotBlank() }
-    if (sections.isEmpty()) {
-        return listOf(FinanceInsightSection(title = "摘要", items = listOf(normalized)))
-    }
-
-    return sections.map { sectionText ->
-        val colonIndex = sectionText.indexOf('：').takeIf { it > 0 }
-            ?: sectionText.indexOf(':').takeIf { it > 0 }
-        if (colonIndex == null) {
-            return@map FinanceInsightSection(title = "摘要", items = listOf(sectionText))
-        }
-        val title = sectionText.substring(0, colonIndex).trim()
-        val body = sectionText.substring(colonIndex + 1).trim()
-        val items = body.split("；")
-            .map { it.trim() }
-            .filter { it.isNotBlank() }
-        FinanceInsightSection(title = title, items = items)
     }
 }
 

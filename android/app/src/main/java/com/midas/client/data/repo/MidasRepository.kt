@@ -15,6 +15,8 @@ import com.midas.client.data.model.BilibiliSummaryRequest
 import com.midas.client.data.model.EditableConfigData
 import com.midas.client.data.model.EditableConfigUpdateRequest
 import com.midas.client.data.model.FinanceSignalsData
+import com.midas.client.data.model.FinanceWatchlistNtfyData
+import com.midas.client.data.model.FinanceWatchlistNtfyUpdateRequest
 import com.midas.client.data.model.HealthData
 import com.midas.client.data.model.NotesMergeCommitData
 import com.midas.client.data.model.NotesMergeCommitRequest
@@ -305,6 +307,15 @@ class MidasRepository {
 
     suspend fun getEditableConfig(baseUrl: String): AppResult<EditableConfigData> {
         return request(baseUrl) { getEditableConfig() }
+    }
+
+    suspend fun updateFinanceWatchlistNtfy(
+        baseUrl: String,
+        enabled: Boolean,
+    ): AppResult<FinanceWatchlistNtfyData> {
+        return request(baseUrl) {
+            updateFinanceWatchlistNtfy(FinanceWatchlistNtfyUpdateRequest(enabled = enabled))
+        }
     }
 
     suspend fun updateEditableConfig(

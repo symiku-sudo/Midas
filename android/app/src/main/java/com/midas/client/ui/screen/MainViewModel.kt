@@ -7,6 +7,7 @@ import androidx.lifecycle.viewModelScope
 import com.midas.client.data.model.AssetSnapshotRecordData
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSummaryData
+import com.midas.client.data.model.FinanceNewsItem
 import com.midas.client.data.model.FinanceWatchlistItem
 import com.midas.client.data.model.NotesMergeCandidateItem
 import com.midas.client.data.model.NotesMergeCommitData
@@ -139,6 +140,9 @@ data class FinanceSignalsUiState(
     val newsLastFetchTime: String = "",
     val newsIsStale: Boolean = false,
     val watchlistPreview: List<FinanceWatchlistItem> = emptyList(),
+    val topNews: List<FinanceNewsItem> = emptyList(),
+    val watchlistNtfyEnabled: Boolean = false,
+    val isUpdatingWatchlistNtfy: Boolean = false,
     val aiInsightText: String = "",
     val assetDrafts: List<AssetCategoryDraft> = defaultAssetDrafts(),
     val assetTotalAmount: Double = 0.0,
@@ -1524,6 +1528,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                                 newsLastFetchTime = result.data.newsLastFetchTime,
                                 newsIsStale = result.data.newsStale,
                                 watchlistPreview = result.data.watchlistPreview,
+                                topNews = result.data.topNews,
+                                watchlistNtfyEnabled = result.data.watchlistNtfyEnabled,
                                 aiInsightText = insight,
                                 errorMessage = "",
                                 statusMessage = status,
@@ -1548,6 +1554,58 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } finally {
                 financeSignalsJob = null
+            }
+        }
+    }
+
+    fun setWatchlistNtfyEnabled(enabled: Boolean) {
+        val baseUrl = requireBaseUrl {
+            _financeState.update {
+                it.copy(
+                    isUpdatingWatchlistNtfy = false,
+                    errorMessage = "请先填写服务端地址。",
+                    statusMessage = "",
+                )
+            }
+        } ?: return
+        viewModelScope.launch {
+            _financeState.update {
+                it.copy(
+                    isUpdatingWatchlistNtfy = true,
+                    watchlistNtfyEnabled = enabled,
+                    errorMessage = "",
+                    statusMessage = "",
+                )
+            }
+            when (val result = apiRepository.updateFinanceWatchlistNtfy(baseUrl, enabled)) {
+                is AppResult.Success -> {
+                    _financeState.update {
+                        it.copy(
+                            isUpdatingWatchlistNtfy = false,
+                            watchlistNtfyEnabled = result.data.enabled,
+                            statusMessage = if (result.data.enabled) {
+                                "Watchlist ntfy 通知已开启。"
+                            } else {
+                                "Watchlist ntfy 通知已关闭。"
+                            },
+                        )
+                    }
+                }
+
+                is AppResult.Error -> {
+                    _financeState.update {
+                        it.copy(
+                            isUpdatingWatchlistNtfy = false,
+                            watchlistNtfyEnabled = !enabled,
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.CONNECTION,
+                            ),
+                            statusMessage = "",
+                        )
+                    }
+                }
             }
         }
     }

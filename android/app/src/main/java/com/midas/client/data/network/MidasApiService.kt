@@ -15,6 +15,8 @@ import com.midas.client.data.model.BilibiliSummaryRequest
 import com.midas.client.data.model.EditableConfigData
 import com.midas.client.data.model.EditableConfigUpdateRequest
 import com.midas.client.data.model.FinanceSignalsData
+import com.midas.client.data.model.FinanceWatchlistNtfyData
+import com.midas.client.data.model.FinanceWatchlistNtfyUpdateRequest
 import com.midas.client.data.model.HealthData
 import com.midas.client.data.model.NotesMergeCommitData
 import com.midas.client.data.model.NotesMergeCommitRequest
@@ -52,6 +54,11 @@ interface MidasApiService {
 
     @GET("api/finance/signals")
     suspend fun getFinanceSignals(): Response<ApiEnvelope<FinanceSignalsData>>
+
+    @PUT("api/finance/signals/watchlist-ntfy")
+    suspend fun updateFinanceWatchlistNtfy(
+        @Body request: FinanceWatchlistNtfyUpdateRequest
+    ): Response<ApiEnvelope<FinanceWatchlistNtfyData>>
 
     @Multipart
     @POST("api/assets/fill-from-images")

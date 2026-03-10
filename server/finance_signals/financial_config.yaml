@@ -1,189 +1,176 @@
 scheduler:
   market_interval_seconds: 60
   news_interval_seconds: 300
-
 output:
-  status_file: "finance_status.json"
-  time_format: "%Y-%m-%d %H:%M:%S"
+  status_file: finance_status.json
+  time_format: '%Y-%m-%d %H:%M:%S'
   json_indent: 2
   ensure_ascii: false
-
 runtime:
   health_max_staleness_seconds: 420
   health_startup_grace_seconds: 120
-
 ai_insight:
-  safe_text: "市场与舆情暂无异常信号，维持常规观察。"
-  section_separator: " | "
-  max_market_alerts_in_text: 4
-  max_news_items_in_text: 3
-
+  safe_text: 今日暂无高优先级金融与时政新闻。
+  section_separator: ' | '
+  max_market_alerts_in_text: 0
+  max_news_items_in_text: 5
 market_data:
   history_period_days: 180
-  history_interval: "1d"
+  history_interval: 1d
   default_drawdown_lookback_days: 120
   price_round_digits: 2
   change_round_digits: 2
   alerting:
-    enabled: true
-    ntfy_config_file: "../../.tmp/ntfy/notify.env"
-    state_file: "../.tmp/finance_market_alert_state.json"
+    enabled: false
+    ntfy_config_file: ../../.tmp/ntfy/notify.env
+    state_file: ../.tmp/finance_market_alert_state.json
     cooldown_seconds: 1800
     min_market_alerts: 1
     max_items_in_notification: 3
-    task_name: "finance-signals-market-alert"
+    task_name: finance-signals-market-alert
   instruments:
-    - name: "布伦特原油"
-      symbol: "BZ=F"
-      rule:
-        type: "price_gte"
-        threshold: 90
-        description: "价格突破 90"
-    - name: "现货黄金"
-      symbol: "GC=F"
-      rule:
-        type: "change_pct_lte"
-        threshold: -1.5
-        description: "单日跌幅 <= -1.5%"
-    - name: "VIX恐慌指数"
-      symbol: "^VIX"
-      rule:
-        type: "price_gte"
-        threshold: 30
-        description: "指数突破 30"
-    - name: "纳指100"
-      symbol: "^NDX"
-      rule:
-        type: "drawdown_pct_gte"
-        threshold: 10
-        lookback_days: 120
-        description: "较阶段高点回撤 > 10%"
-
+  - name: 布伦特原油
+    symbol: BZ=F
+    rule:
+      type: price_gte
+      threshold: 90
+      description: 价格突破 90
+  - name: 现货黄金
+    symbol: GC=F
+    rule:
+      type: change_pct_lte
+      threshold: -1.5
+      description: 单日跌幅 <= -1.5%
+  - name: VIX恐慌指数
+    symbol: ^VIX
+    rule:
+      type: price_gte
+      threshold: 30
+      description: 指数突破 30
+  - name: 纳指100
+    symbol: ^NDX
+    rule:
+      type: drawdown_pct_gte
+      threshold: 10
+      lookback_days: 120
+      description: 较阶段高点回撤 > 10%
 news:
   sources:
-    - name: "中东地缘风险"
-      url: "https://news.google.com/rss/search?q=%E4%BC%8A%E6%9C%97+OR+%E4%BB%A5%E8%89%B2%E5%88%97+OR+%E9%9C%8D%E5%B0%94%E6%9C%A8%E5%85%B9&hl=zh-CN&gl=CN&ceid=CN:zh-Hans"
+  - name: Google News 财经
+    category: finance
+    url: https://news.google.com/rss/search?q=%28%E8%B4%A2%E7%BB%8F+OR+%E7%BE%8E%E8%82%A1+OR+A%E8%82%A1+OR+%E7%BE%8E%E8%81%94%E5%82%A8+OR+%E9%BB%84%E9%87%91+OR+%E5%8E%9F%E6%B2%B9%29+when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans
+  - name: Google News 宏观市场
+    category: finance
+    url: https://news.google.com/rss/search?q=%28%E9%80%9A%E8%83%80+OR+%E5%88%A9%E7%8E%87+OR+%E5%80%BA%E5%B8%82+OR+%E6%B1%87%E7%8E%87+OR+%E6%B2%B9%E4%BB%B7+OR+%E5%95%86%E5%93%81%29+when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans
+  - name: Google News 国际时政
+    category: politics
+    url: https://news.google.com/rss/search?q=%28%E6%97%B6%E6%94%BF+OR+%E7%99%BD%E5%AE%AB+OR+%E6%AC%A7%E7%9B%9F+OR+%E5%9B%BD%E5%8A%A1%E9%99%A2+OR+%E4%B8%AD%E7%BE%8E+OR+%E5%85%B3%E7%A8%8E+OR+%E9%80%89%E4%B8%BE%29+when%3A1d&hl=zh-CN&gl=CN&ceid=CN%3Azh-Hans
   poll:
     max_items_per_source: 40
-    max_matched_items: 8
-    recency_max_age_hours: 48
+    max_top_items: 5
+    recency_max_age_hours: 24
     allow_missing_published: true
     max_unmatched_titles: 5
     stale_after_seconds: 900
     topic_similarity_threshold: 0.55
   filters:
     source_allowlist: []
-    source_blocklist:
-      - "新浪军事_手机新浪网"
+    source_blocklist: []
     domain_allowlist: []
     domain_blocklist: []
   ranking:
-    recency_half_life_hours: 12
-    default_keyword_score: 12
-    title_keyword_bonus: 8
-    missing_timestamp_multiplier: 0.7
-    crisis_up_base_score: 100
-    crisis_down_base_score: 40
+    recency_half_life_hours: 8
+    default_keyword_score: 10
+    title_keyword_bonus: 6
+    missing_timestamp_multiplier: 0.65
+    same_topic_source_bonus: 6
+    category_base_scores:
+      finance: 86
+      politics: 80
     keyword_weights:
-      "封锁霍尔木兹海峡": 42
-      "关闭霍尔木兹海峡": 42
-      "断供": 36
-      "供应中断": 36
-      "航运受阻": 34
-      "制裁升级": 30
-      "军事升级": 28
-      "冲突升级": 28
-      "导弹袭击": 26
-      "空袭": 24
-      "袭击": 22
-      "报复性打击": 22
-      "打击": 18
-      "军事行动": 18
-      "战争": 16
-      "石油储存设施": 16
-      "石油设施": 16
-      "油库": 16
-      "停火协议": 18
-      "停火": 16
-      "停战": 16
-      "达成协议": 14
-      "缓和": 12
-      "外交斡旋": 12
+      财报: 18
+      业绩: 16
+      降息: 18
+      加息: 18
+      美联储: 20
+      央行: 16
+      通胀: 14
+      非农: 14
+      关税: 16
+      制裁: 14
+      原油: 18
+      黄金: 16
+      汇率: 14
+      债券: 12
+      股市: 12
+      资本市场: 12
+      白宫: 18
+      国务院: 16
+      国会: 14
+      选举: 18
+      峰会: 14
+      会谈: 14
+      停火: 18
+      协议: 14
+      内阁: 12
+      外交: 12
+      军援: 14
+      预算: 12
     source_weights:
-      "Reuters": 18
-      "路透": 18
-      "Bloomberg": 16
-      "彭博社": 16
-      "BBC": 12
-      "dw.com": 10
-      "新华网": 8
-      "人民网国际": 6
-      "观察者": 4
-      "观察者网": 4
-      "中国网": 4
-  alerting:
-    enabled: true
-    ntfy_config_file: "../../.tmp/ntfy/notify.env"
-    state_file: "../.tmp/finance_alert_state.json"
-    cooldown_seconds: 1800
-    min_high_risk_score: 120
-    min_high_risk_hits: 2
-    max_items_in_notification: 3
-    task_name: "finance-signals-high-risk"
-  keywords:
-    crisis_up:
-      - "封锁霍尔木兹海峡"
-      - "关闭霍尔木兹海峡"
-      - "油轮遇袭"
-      - "船只遇袭"
-      - "基地遇袭"
-      - "导弹袭击"
-      - "空袭"
-      - "袭击"
-      - "报复性打击"
-      - "打击"
-      - "军事升级"
-      - "军事行动"
-      - "冲突升级"
-      - "战争"
-      - "断供"
-      - "供应中断"
-      - "航运受阻"
-      - "制裁升级"
-      - "石油储存设施"
-      - "石油设施"
-      - "油库"
-    crisis_down:
-      - "停火协议"
-      - "重启谈判"
-      - "恢复谈判"
-      - "和谈"
-      - "斡旋"
-      - "停火"
-      - "停战"
-      - "调停"
-      - "达成协议"
-      - "局势缓和"
-      - "缓和"
-      - "外交斡旋"
-      - "避免升级"
-      - "降级"
-    exclude_title_if_contains:
-      - "六张图看清"
-      - "关键航道"
-      - "在哪"
-      - "是什么"
-      - "怎么办"
-      - "怎样了"
-      - "我们目前知道什么"
-    negation_prefixes:
-      - "未"
-      - "并未"
-      - "没有"
-      - "并没有"
-      - "不会"
-      - "尚未"
-      - "未曾"
-      - "无意"
-      - "否认"
-      - "并非"
+      Reuters: 18
+      路透: 18
+      Bloomberg: 16
+      彭博社: 16
+      Financial Times: 14
+      华尔街见闻: 10
+      财联社: 10
+      新华网: 8
+      央视新闻: 8
+      人民日报: 8
+      人民网: 8
+      BBC: 8
+  topics:
+    finance:
+      label: 金融
+      keywords:
+      - 财报
+      - 业绩
+      - 降息
+      - 加息
+      - 美联储
+      - 央行
+      - 通胀
+      - 非农
+      - 关税
+      - 原油
+      - 黄金
+      - 汇率
+      - 债券
+      - 股市
+      - 资本市场
+    politics:
+      label: 时政
+      keywords:
+      - 白宫
+      - 国务院
+      - 国会
+      - 选举
+      - 峰会
+      - 会谈
+      - 停火
+      - 协议
+      - 内阁
+      - 外交
+      - 军援
+      - 预算
+  negation_prefixes:
+  - 未
+  - 并未
+  - 没有
+  - 并没有
+  - 不会
+  - 尚未
+  - 未曾
+  - 无意
+  - 否认
+  - 并非

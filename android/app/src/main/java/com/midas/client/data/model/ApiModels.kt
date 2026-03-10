@@ -28,6 +28,16 @@ data class FinanceWatchlistItem(
     val price: Double? = null,
     @Json(name = "change_pct") val changePct: String = "N/A",
     @Json(name = "alert_hint") val alertHint: String = "",
+    @Json(name = "alert_active") val alertActive: Boolean = false,
+)
+
+data class FinanceNewsItem(
+    val title: String,
+    val link: String = "",
+    val publisher: String = "",
+    val published: String = "",
+    val category: String = "",
+    @Json(name = "matched_keywords") val matchedKeywords: List<String> = emptyList(),
 )
 
 data class FinanceSignalsData(
@@ -35,7 +45,17 @@ data class FinanceSignalsData(
     @Json(name = "news_last_fetch_time") val newsLastFetchTime: String = "",
     @Json(name = "news_stale") val newsStale: Boolean = false,
     @Json(name = "watchlist_preview") val watchlistPreview: List<FinanceWatchlistItem> = emptyList(),
+    @Json(name = "top_news") val topNews: List<FinanceNewsItem> = emptyList(),
+    @Json(name = "watchlist_ntfy_enabled") val watchlistNtfyEnabled: Boolean = false,
     @Json(name = "ai_insight_text") val aiInsightText: String = "",
+)
+
+data class FinanceWatchlistNtfyUpdateRequest(
+    val enabled: Boolean,
+)
+
+data class FinanceWatchlistNtfyData(
+    val enabled: Boolean,
 )
 
 data class AssetImageFillData(

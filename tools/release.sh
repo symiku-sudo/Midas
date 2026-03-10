@@ -129,14 +129,23 @@ cmd+=("${OUTPUT_ARGS[@]}")
   "${cmd[@]}"
 )
 
+APK_OUTPUT_DIR="$OUTPUT_DIR"
+if [[ -z "$APK_OUTPUT_DIR" ]]; then
+  APK_OUTPUT_DIR="$ROOT_DIR/android/.tmp/apk"
+elif [[ "$APK_OUTPUT_DIR" != /* ]]; then
+  APK_OUTPUT_DIR="$ROOT_DIR/$APK_OUTPUT_DIR"
+fi
+LATEST_APK_PATH="$APK_OUTPUT_DIR/midas-${BUILD_TYPE}-latest.apk"
+if [[ -f "$LATEST_APK_PATH" ]]; then
+  APK_SHA256="$(sha256sum "$LATEST_APK_PATH" | awk '{print $1}')"
+  APK_MTIME="$(stat -c '%y' "$LATEST_APK_PATH")"
+  echo "[release] apk_path=$LATEST_APK_PATH"
+  echo "[release] apk_mtime=$APK_MTIME"
+  echo "[release] apk_sha256=$APK_SHA256"
+fi
+
 if [[ "$SHARE_TAILNET" == "1" ]]; then
-  SHARE_OUTPUT_DIR="$OUTPUT_DIR"
-  if [[ -z "$SHARE_OUTPUT_DIR" ]]; then
-    SHARE_OUTPUT_DIR="$ROOT_DIR/android/.tmp/apk"
-  elif [[ "$SHARE_OUTPUT_DIR" != /* ]]; then
-    SHARE_OUTPUT_DIR="$ROOT_DIR/$SHARE_OUTPUT_DIR"
-  fi
-  SHARE_APK_PATH="$SHARE_OUTPUT_DIR/midas-${BUILD_TYPE}-latest.apk"
+  SHARE_APK_PATH="$LATEST_APK_PATH"
 
   echo "[release] 4/4 share APK over tailnet..."
   if [[ ! -f "$SHARE_APK_PATH" ]]; then

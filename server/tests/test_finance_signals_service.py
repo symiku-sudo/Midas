@@ -40,21 +40,27 @@ market_data:
                 "symbol": "BZ=F",
                 "price": 91.23,
                 "change_pct": "+1.2%",
+                "alert_active": True,
             }
         ],
-        "ai_insight_text": "行情警报：布伦特原油触发阈值。",
+        "top_news": [
+            {
+                "title": "美联储官员释放降息信号",
+                "link": "https://example.com/news-1",
+                "publisher": "Reuters",
+                "published": "2026-03-08 11:30:00",
+                "category": "finance",
+                "matched_keywords": ["美联储", "降息"],
+            }
+        ],
+        "watchlist_ntfy_enabled": True,
+        "ai_insight_text": "finance: 美联储官员释放降息信号",
         "news_debug": {
             "entries_scanned": 12,
             "entries_filtered_by_source": 2,
-            "up_hits_count": 2,
-            "down_hits_count": 1,
-            "top_unmatched_titles": ["以色列袭击伊朗石油储存设施"],
-            "enabled": True,
-            "sent": True,
-            "last_alert_time": "2026-03-08 12:00:00",
-            "last_alert_signature": "sig-1",
-            "last_alert_summary": "高危舆情触发",
-            "last_alert_status": "sent",
+            "matched_entries_count": 7,
+            "top_news_count": 5,
+            "top_unmatched_titles": ["地方政策解读长文"],
         },
         "market_alert_debug": {
             "enabled": True,
@@ -74,10 +80,14 @@ market_data:
 
     assert data.news_last_fetch_time == payload["news_last_fetch_time"]
     assert data.news_stale is False
+    assert data.watchlist_preview[0].alert_active is True
+    assert data.top_news[0].title == "美联储官员释放降息信号"
+    assert data.watchlist_ntfy_enabled is True
     assert data.news_debug.entries_scanned == 12
     assert data.news_debug.entries_filtered_by_source == 2
-    assert data.news_debug.top_unmatched_titles == ["以色列袭击伊朗石油储存设施"]
-    assert data.news_debug.last_alert_status == "sent"
+    assert data.news_debug.matched_entries_count == 7
+    assert data.news_debug.top_news_count == 5
+    assert data.news_debug.top_unmatched_titles == ["地方政策解读长文"]
     assert data.market_alert_debug.alert_sent is True
     assert data.market_alert_debug.last_alert_status == "sent"
 
@@ -117,3 +127,22 @@ market_data:
 
     assert data.news_last_fetch_time == ""
     assert data.news_stale is True
+
+
+def test_finance_signals_service_updates_watchlist_ntfy_toggle(tmp_path: Path) -> None:
+    config_path = tmp_path / "financial_config.yaml"
+    config_path.write_text(
+        """
+market_data:
+  alerting:
+    enabled: true
+""".strip(),
+        encoding="utf-8",
+    )
+
+    service = FinanceSignalsService()
+    service._config_path = config_path
+
+    assert service.get_watchlist_ntfy_enabled() is True
+    assert service.set_watchlist_ntfy_enabled(False) is False
+    assert service.get_watchlist_ntfy_enabled() is False

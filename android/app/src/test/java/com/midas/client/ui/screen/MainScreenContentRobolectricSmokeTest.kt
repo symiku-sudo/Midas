@@ -200,8 +200,8 @@ class MainScreenContentRobolectricSmokeTest {
         composeRule.onNodeWithText("资产系统").performClick()
         composeRule.waitForIdle()
 
-        composeRule.onAllNodesWithText("Watchlist Preview").assertCountEquals(1)
-        composeRule.onAllNodesWithText("RSS Insight").assertCountEquals(1)
+        composeRule.onAllNodesWithText("Watchlist").assertCountEquals(1)
+        composeRule.onAllNodesWithText("今日金融与时政新闻 Top5").assertCountEquals(1)
         composeRule.onAllNodesWithText("资产统计").assertCountEquals(1)
         composeRule.onAllNodesWithTag("asset_amount_bank_current_deposit", useUnmergedTree = true)
             .assertCountEquals(0)
@@ -739,7 +739,7 @@ class MainScreenContentRobolectricSmokeTest {
         composeRule.onNodeWithText("资产系统").performClick()
         composeRule.waitForIdle()
 
-        composeRule.onNodeWithText("RSS 拉取：2026-03-08 11:40:00（数据可能陈旧）").assertIsDisplayed()
+        composeRule.onNodeWithText("新闻拉取：2026-03-08 11:40:00（数据可能陈旧）").assertIsDisplayed()
     }
 
     @Test
@@ -759,6 +759,7 @@ class MainScreenContentRobolectricSmokeTest {
                                 price = 92.69,
                                 changePct = "+8.52%",
                                 alertHint = ">90",
+                                alertActive = true,
                             ),
                         ),
                     ),
@@ -798,5 +799,6 @@ class MainScreenContentRobolectricSmokeTest {
         composeRule.waitForIdle()
 
         composeRule.onNodeWithText("阈值 >90").assertIsDisplayed()
+        composeRule.onNodeWithText("ntfy 已关闭").assertIsDisplayed()
     }
 }

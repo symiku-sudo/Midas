@@ -104,12 +104,12 @@ tools/finance_signals.sh stop
 说明：
 - 运行参数全部来自 `finance_signals/financial_config.yaml`。
 - `check` 会校验 `finance_status.json` 是否存在且更新时间未过期（阈值由 `runtime.health_max_staleness_seconds` 控制）。
-- RSS 舆情面板现已按“关键词严重度 + 发布时间衰减”排序，并默认过滤 48 小时外旧新闻。
-- 同主题标题会做归一化去重；不同来源的命中会按 `news.ranking.source_weights` 做来源加权。
+- 新闻面板现已输出“今日金融与时政新闻 Top5”，默认过滤 24 小时外旧新闻。
+- 排序采用新闻客户端常见因子：发布时间衰减、来源权重、主题关键词、跨源覆盖加权，再做同主题去重。
 - 可通过 `news.filters.source_allowlist/source_blocklist/domain_allowlist/domain_blocklist` 做来源白名单/黑名单控制。
-- 可通过 `news.alerting.*` 配置高危阈值告警；命中后会走 `tools/ntfy_notify.sh`，并受 `cooldown_seconds` 抑制重复告警。
 - 可通过 `market_data.alerting.*` 配置 Watchlist 行情阈值告警；其状态会写入 `market_alert_debug`。
-- Worker 会额外写出 `news_last_fetch_time`、`news_stale`（由 API 服务端计算）、`news_debug.entries_scanned/up_hits_count/down_hits_count/top_unmatched_titles`，便于定位召回漏检。
+- Watchlist ntfy 开关可通过 `PUT /api/finance/signals/watchlist-ntfy` 动态切换，worker 会在下一个轮询周期自动生效。
+- Worker 会额外写出 `news_last_fetch_time`、`news_stale`（由 API 服务端计算）、`news_debug.entries_scanned/matched_entries_count/top_news_count/top_unmatched_titles`，便于定位召回漏检。
 
 ## Periodic DB backup
 

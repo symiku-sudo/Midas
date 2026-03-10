@@ -56,23 +56,29 @@ Success `data`:
       "symbol": "BZ=F",
       "price": 91.23,
       "change_pct": "+1.2%",
-      "alert_hint": ">90"
+      "alert_hint": ">90",
+      "alert_active": true
     }
   ],
-  "ai_insight_text": "行情警报：布伦特原油（BZ=F）触发：价格突破 90。 | 舆情高危：《以色列袭击伊朗石油储存设施》命中[袭击,石油储存设施] | 舆情降温：《多方推动停火协议》命中[停火协议]",
+  "top_news": [
+    {
+      "title": "美联储官员释放降息信号",
+      "link": "https://example.com/news-1",
+      "publisher": "Reuters",
+      "published": "2026-03-05 11:40:00",
+      "category": "finance",
+      "matched_keywords": ["美联储", "降息"]
+    }
+  ],
+  "watchlist_ntfy_enabled": true,
+  "ai_insight_text": "finance: 美联储官员释放降息信号；politics: 白宫回应停火会谈进展",
   "news_debug": {
     "entries_scanned": 40,
     "entries_filtered_by_source": 3,
-    "up_hits_count": 3,
-    "down_hits_count": 2,
-    "alert_enabled": true,
-    "alert_sent": false,
-    "last_alert_time": "2026-03-05 11:59:00",
-    "last_alert_signature": "hormuz|supply_disruption",
-    "last_alert_summary": "高危舆情触发：...",
-    "last_alert_status": "cooldown_skip",
+    "matched_entries_count": 14,
+    "top_news_count": 5,
     "top_unmatched_titles": [
-      "美国开始使用英国军事基地对伊朗开展行动"
+      "地方政策解读长文"
     ]
   },
   "market_alert_debug": {
@@ -89,11 +95,32 @@ Success `data`:
 说明：
 - 若状态文件尚未生成，接口会返回空列表和初始化提示文案，HTTP 仍为 `200`。
 - 若状态文件内容损坏，接口返回 `UPSTREAM_ERROR`。
-- `news_last_fetch_time` / `news_stale` 用于客户端识别 RSS 拉取是否陈旧。
-- `news_debug` 用于排查“有新闻但未命中 insight”的召回/排序问题。
+- `news_last_fetch_time` / `news_stale` 用于客户端识别新闻抓取是否陈旧。
+- `top_news` 为“今日金融与时政新闻 Top5”结构化列表，已按时效、来源权重、主题关键词和跨源覆盖加权后去重。
+- `watchlist_ntfy_enabled` 表示 Watchlist 行情阈值 ntfy 通知当前开关状态。
+- `news_debug` 用于排查“有新闻但未进入 Top5”的召回/排序问题。
 - `news_debug.entries_filtered_by_source` 反映白名单/黑名单过滤效果。
-- `news_debug.alert_*` 反映高危阈值告警是否已发送或被 cooldown 抑制。
 - `market_alert_debug` 反映 Watchlist 行情阈值通知的发送状态。
+
+## `PUT /api/finance/signals/watchlist-ntfy`
+
+用途：切换 Watchlist 行情阈值的 ntfy 通知开关。
+
+Request:
+
+```json
+{
+  "enabled": false
+}
+```
+
+Success `data`:
+
+```json
+{
+  "enabled": false
+}
+```
 
 ## `POST /api/assets/fill-from-images`
 

@@ -136,6 +136,7 @@ async def run_market_job(config: dict[str, Any]) -> tuple[list[dict[str, Any]], 
                         "symbol": symbol,
                         "price": None,
                         "change_pct": "N/A",
+                        "alert_active": False,
                     }
                 )
                 market_alerts.append(f"{name}（{symbol}）行情拉取为空。")
@@ -149,6 +150,7 @@ async def run_market_job(config: dict[str, Any]) -> tuple[list[dict[str, Any]], 
                         "symbol": symbol,
                         "price": None,
                         "change_pct": "N/A",
+                        "alert_active": False,
                     }
                 )
                 market_alerts.append(f"{name}（{symbol}）缺少收盘价数据。")
@@ -168,6 +170,7 @@ async def run_market_job(config: dict[str, Any]) -> tuple[list[dict[str, Any]], 
                     "symbol": symbol,
                     "price": round(latest_price, price_digits),
                     "change_pct": format_change_pct(change_pct, change_digits),
+                    "alert_active": False,
                 }
             )
 
@@ -179,6 +182,7 @@ async def run_market_job(config: dict[str, Any]) -> tuple[list[dict[str, Any]], 
                 default_drawdown_lookback_days=default_drawdown_lookback_days,
             )
             if triggered:
+                watchlist_preview[-1]["alert_active"] = True
                 market_alerts.append(f"{name}（{symbol}）触发：{alert_text}")
         except Exception as exc:  # noqa: BLE001
             watchlist_preview.append(
@@ -187,6 +191,7 @@ async def run_market_job(config: dict[str, Any]) -> tuple[list[dict[str, Any]], 
                     "symbol": symbol,
                     "price": None,
                     "change_pct": "N/A",
+                    "alert_active": False,
                 }
             )
             market_alerts.append(f"{name}（{symbol}）抓取异常：{exc}")
@@ -289,8 +294,6 @@ TOPIC_STOPWORDS = {
     "人民网",
     "国际",
     "美国",
-    "伊朗",
-    "以色列",
 }
 
 
@@ -386,8 +389,8 @@ def should_keep_recent_item(
 def compute_news_hit_score(
     *,
     title: str,
+    category: str,
     matched_keywords: list[str],
-    hit_kind: str,
     published_dt: datetime | None,
     now_utc: datetime,
     ranking_cfg: dict[str, Any],
@@ -406,12 +409,11 @@ def compute_news_hit_score(
     source_weights = ranking_cfg.get("source_weights")
     if not isinstance(source_weights, dict):
         source_weights = {}
+    category_base_scores = ranking_cfg.get("category_base_scores")
+    if not isinstance(category_base_scores, dict):
+        category_base_scores = {}
     publisher = extract_publisher_label(source_name=source_name, title=title, link=link)
-
-    if hit_kind == "crisis_up":
-        base_score = float(ranking_cfg.get("crisis_up_base_score", 100))
-    else:
-        base_score = float(ranking_cfg.get("crisis_down_base_score", 40))
+    base_score = float(category_base_scores.get(category, 60))
 
     title_lower = title.lower()
     keyword_score = 0.0
@@ -495,6 +497,21 @@ def dedupe_titles(titles: list[dict[str, Any]], *, max_items: int) -> list[str]:
         if len(picked) >= max_items:
             break
     return [title for _, title in picked]
+
+
+def serialize_news_item(item: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "title": str(item.get("title", "")).strip(),
+        "link": str(item.get("link", "")).strip(),
+        "publisher": str(item.get("publisher", "")).strip(),
+        "published": str(item.get("published", "")).strip(),
+        "category": str(item.get("category", "")).strip(),
+        "matched_keywords": [
+            str(keyword).strip()
+            for keyword in item.get("matched_keywords", [])
+            if str(keyword).strip()
+        ],
+    }
 
 
 def resolve_config_relative_path(config: dict[str, Any], raw_path: str) -> Path:
@@ -1027,19 +1044,74 @@ def match_keywords(
     return matched
 
 
-async def run_news_job(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
+def _keyword_bundle_score(
+    matched_keywords: list[str],
+    *,
+    ranking_cfg: dict[str, Any],
+) -> float:
+    keyword_weights = ranking_cfg.get("keyword_weights")
+    if not isinstance(keyword_weights, dict):
+        keyword_weights = {}
+    default_keyword_score = float(ranking_cfg.get("default_keyword_score", 12))
+    return sum(float(keyword_weights.get(keyword, default_keyword_score)) for keyword in matched_keywords)
+
+
+def select_news_category(
+    *,
+    source: dict[str, Any],
+    text: str,
+    topics_cfg: dict[str, Any],
+    ranking_cfg: dict[str, Any],
+    negation_prefixes: list[str],
+) -> tuple[str, list[str]] | None:
+    best_category = ""
+    best_keywords: list[str] = []
+    best_score = -1.0
+    for category, raw_topic_cfg in topics_cfg.items():
+        if not isinstance(raw_topic_cfg, dict):
+            continue
+        keywords = raw_topic_cfg.get("keywords")
+        if not isinstance(keywords, list):
+            continue
+        matched = match_keywords(
+            text,
+            list(keywords),
+            negation_prefixes=negation_prefixes,
+        )
+        if not matched:
+            continue
+        bundle_score = _keyword_bundle_score(matched, ranking_cfg=ranking_cfg)
+        if bundle_score > best_score:
+            best_category = str(category).strip()
+            best_keywords = matched
+            best_score = bundle_score
+
+    if best_category:
+        return best_category, best_keywords
+
+    fallback_category = str(source.get("category", "")).strip().lower()
+    if (
+        bool(source.get("allow_category_fallback", False))
+        and fallback_category
+        and fallback_category in topics_cfg
+    ):
+        return fallback_category, []
+    return None
+
+
+async def run_news_job(config: dict[str, Any]) -> dict[str, Any]:
     """
-    舆情任务：
-    1) 拉取配置中的 RSS 源
-    2) 用危机升级/降温关键词进行匹配
-    3) 返回命中结果供 AI Insight 组装
+    今日新闻任务：
+    1) 拉取金融/时政 RSS 源
+    2) 用新闻软件常见排序因子（时效、来源权重、主题关键词、跨源覆盖）打分
+    3) 去重后输出 Top5
     """
     news_cfg = config["news"]
     sources = news_cfg["sources"]
     poll_cfg = news_cfg["poll"]
     max_items_per_source = int(poll_cfg["max_items_per_source"])
-    max_matched_items = int(poll_cfg["max_matched_items"])
-    max_age_hours = int(poll_cfg.get("recency_max_age_hours", 48))
+    max_top_items = int(poll_cfg.get("max_top_items", 5))
+    max_age_hours = int(poll_cfg.get("recency_max_age_hours", 24))
     allow_missing_published = bool(poll_cfg.get("allow_missing_published", True))
     max_unmatched_titles = int(poll_cfg.get("max_unmatched_titles", 5))
     topic_similarity_threshold = float(poll_cfg.get("topic_similarity_threshold", 0.55))
@@ -1049,30 +1121,26 @@ async def run_news_job(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]
     filters_cfg = news_cfg.get("filters")
     if not isinstance(filters_cfg, dict):
         filters_cfg = {}
+    topics_cfg = news_cfg.get("topics")
+    if not isinstance(topics_cfg, dict):
+        topics_cfg = {}
 
-    keywords_cfg = news_cfg["keywords"]
-    crisis_up_words = list(keywords_cfg["crisis_up"])
-    crisis_down_words = list(keywords_cfg["crisis_down"])
-    exclude_title_words = list(keywords_cfg.get("exclude_title_if_contains", []))
-    negation_prefixes = list(keywords_cfg.get("negation_prefixes", []))
+    exclude_title_words = list(news_cfg.get("exclude_title_if_contains", []))
+    negation_prefixes = list(news_cfg.get("negation_prefixes", []))
     now_utc = datetime.now(timezone.utc)
 
     result: dict[str, Any] = {
-        "crisis_up_hits": [],
-        "crisis_down_hits": [],
+        "top_news": [],
         "debug": {
             "entries_scanned": 0,
             "entries_filtered_by_source": 0,
-            "up_hits_count": 0,
-            "down_hits_count": 0,
+            "matched_entries_count": 0,
+            "top_news_count": 0,
             "top_unmatched_titles": [],
-            "last_alert_time": "",
-            "last_alert_signature": "",
-            "last_alert_summary": "",
-            "last_alert_status": "",
         },
     }
     unmatched_titles: list[dict[str, Any]] = []
+    ranked_candidates: list[dict[str, Any]] = []
 
     for source in sources:
         source_name = str(source["name"])
@@ -1109,122 +1177,94 @@ async def run_news_job(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]
                     continue
                 if match_keywords(title, exclude_title_words):
                     continue
+
                 text = f"{title} {summary}".strip()
+                selected = select_news_category(
+                    source=source,
+                    text=text,
+                    topics_cfg=topics_cfg,
+                    ranking_cfg=ranking_cfg,
+                    negation_prefixes=negation_prefixes,
+                )
+                if selected is None:
+                    if title:
+                        unmatched_titles.append(
+                            {
+                                "title": title,
+                                "published_ts": published_dt.timestamp() if published_dt else 0.0,
+                            }
+                        )
+                    continue
 
-                up_matched = match_keywords(
-                    text,
-                    crisis_up_words,
-                    negation_prefixes=negation_prefixes,
+                category, matched_keywords = selected
+                score, age_hours = compute_news_hit_score(
+                    title=title,
+                    category=category,
+                    matched_keywords=matched_keywords,
+                    published_dt=published_dt,
+                    now_utc=now_utc,
+                    ranking_cfg=ranking_cfg,
+                    source_name=source_name,
+                    link=link,
                 )
-                down_matched = match_keywords(
-                    text,
-                    crisis_down_words,
-                    negation_prefixes=negation_prefixes,
+                ranked_candidates.append(
+                    {
+                        "source": source_name,
+                        "publisher": publisher,
+                        "domain": domain,
+                        "title": title,
+                        "link": link,
+                        "published": published,
+                        "category": category,
+                        "matched_keywords": matched_keywords,
+                        "score": round(score, 4),
+                        "age_hours": round(age_hours, 2) if age_hours is not None else None,
+                        "published_ts": published_dt.timestamp() if published_dt else 0.0,
+                        "topic_key": build_topic_key(title, matched_keywords),
+                        "topic_tokens": build_topic_tokens(title, matched_keywords),
+                    }
                 )
-                title_negated_up = collect_negated_keywords(
-                    title,
-                    crisis_up_words,
-                    negation_prefixes=negation_prefixes,
-                )
-                if title_negated_up:
-                    up_matched = [key for key in up_matched if key not in title_negated_up]
-                title_negated_down = collect_negated_keywords(
-                    title,
-                    crisis_down_words,
-                    negation_prefixes=negation_prefixes,
-                )
-                if title_negated_down:
-                    down_matched = [
-                        key for key in down_matched if key not in title_negated_down
-                    ]
-
-                if up_matched:
-                    score, age_hours = compute_news_hit_score(
-                        title=title,
-                        matched_keywords=up_matched,
-                        hit_kind="crisis_up",
-                        published_dt=published_dt,
-                        now_utc=now_utc,
-                        ranking_cfg=ranking_cfg,
-                        source_name=source_name,
-                        link=link,
-                    )
-                    result["crisis_up_hits"].append(
-                        {
-                            "source": source_name,
-                            "publisher": publisher,
-                            "domain": domain,
-                            "title": title,
-                            "link": link,
-                            "published": published,
-                            "matched_keywords": up_matched,
-                            "score": round(score, 4),
-                            "age_hours": round(age_hours, 2) if age_hours is not None else None,
-                            "published_ts": published_dt.timestamp() if published_dt else 0.0,
-                            "topic_key": build_topic_key(title, up_matched),
-                            "topic_tokens": build_topic_tokens(title, up_matched),
-                        }
-                    )
-                if down_matched:
-                    score, age_hours = compute_news_hit_score(
-                        title=title,
-                        matched_keywords=down_matched,
-                        hit_kind="crisis_down",
-                        published_dt=published_dt,
-                        now_utc=now_utc,
-                        ranking_cfg=ranking_cfg,
-                        source_name=source_name,
-                        link=link,
-                    )
-                    result["crisis_down_hits"].append(
-                        {
-                            "source": source_name,
-                            "publisher": publisher,
-                            "domain": domain,
-                            "title": title,
-                            "link": link,
-                            "published": published,
-                            "matched_keywords": down_matched,
-                            "score": round(score, 4),
-                            "age_hours": round(age_hours, 2) if age_hours is not None else None,
-                            "published_ts": published_dt.timestamp() if published_dt else 0.0,
-                            "topic_key": build_topic_key(title, down_matched),
-                            "topic_tokens": build_topic_tokens(title, down_matched),
-                        }
-                    )
-                if not up_matched and not down_matched and title:
-                    unmatched_titles.append(
-                        {
-                            "title": title,
-                            "published_ts": published_dt.timestamp() if published_dt else 0.0,
-                        }
-                    )
         except Exception as exc:  # noqa: BLE001
-            result["crisis_up_hits"].append(
+            ranked_candidates.append(
                 {
                     "source": source_name,
+                    "publisher": source_name,
+                    "domain": "",
                     "title": f"RSS 拉取异常：{exc}",
                     "link": source_url,
                     "published": "",
+                    "category": str(source.get("category", "")).strip().lower(),
                     "matched_keywords": [],
                     "score": 9999.0,
                     "age_hours": None,
                     "published_ts": now_utc.timestamp(),
+                    "topic_key": normalize_title_key(source_name) or source_name,
+                    "topic_tokens": set(),
                 }
             )
 
-    result["crisis_up_hits"] = dedupe_and_sort_news_hits(
-        result["crisis_up_hits"],
-        max_items=max_matched_items,
+    same_topic_source_bonus = float(ranking_cfg.get("same_topic_source_bonus", 6))
+    topic_publishers: dict[str, set[str]] = {}
+    for item in ranked_candidates:
+        topic_key = str(item.get("topic_key", "")).strip()
+        publisher = str(item.get("publisher", "")).strip() or str(item.get("source", "")).strip()
+        if not topic_key or not publisher:
+            continue
+        topic_publishers.setdefault(topic_key, set()).add(publisher)
+    for item in ranked_candidates:
+        topic_key = str(item.get("topic_key", "")).strip()
+        coverage = max(len(topic_publishers.get(topic_key, set())) - 1, 0)
+        if coverage > 0:
+            item["score"] = round(float(item.get("score", 0.0)) + coverage * same_topic_source_bonus, 4)
+
+    top_news = dedupe_and_sort_news_hits(
+        ranked_candidates,
+        max_items=max_top_items,
         similarity_threshold=topic_similarity_threshold,
     )
-    result["crisis_down_hits"] = dedupe_and_sort_news_hits(
-        result["crisis_down_hits"],
-        max_items=max_matched_items,
-        similarity_threshold=topic_similarity_threshold,
-    )
-    result["debug"]["up_hits_count"] = len(result["crisis_up_hits"])
-    result["debug"]["down_hits_count"] = len(result["crisis_down_hits"])
+    result["top_news"] = [serialize_news_item(item) for item in top_news]
+    result["debug"]["matched_entries_count"] = len(ranked_candidates)
+    result["debug"]["top_news_count"] = len(top_news)
     result["debug"]["top_unmatched_titles"] = dedupe_titles(
         unmatched_titles,
         max_items=max_unmatched_titles,
@@ -1235,43 +1275,19 @@ async def run_news_job(config: dict[str, Any]) -> dict[str, list[dict[str, Any]]
 def build_ai_insight_text(
     *,
     config: dict[str, Any],
-    market_alerts: list[str],
-    news_hits: dict[str, list[dict[str, Any]]],
+    top_news: list[dict[str, Any]],
 ) -> str:
-    """将行情报警与舆情命中组装成前端可直接展示的摘要文本。"""
+    """将 Top 新闻组装成简短摘要，供旧客户端兼容使用。"""
     ai_cfg = config["ai_insight"]
     safe_text = str(ai_cfg["safe_text"])
-    sep = str(ai_cfg["section_separator"])
-    max_market_alerts = int(ai_cfg["max_market_alerts_in_text"])
     max_news_items = int(ai_cfg["max_news_items_in_text"])
-
-    sections: list[str] = []
-
-    if market_alerts:
-        market_text = "；".join(market_alerts[:max_market_alerts])
-        sections.append(f"行情警报：{market_text}")
-
-    crisis_up_hits = news_hits.get("crisis_up_hits", [])
-    crisis_down_hits = news_hits.get("crisis_down_hits", [])
-
-    if crisis_up_hits:
-        picked = crisis_up_hits[:max_news_items]
-        news_text = "；".join(
-            f"《{item['title']}》命中[{','.join(item['matched_keywords'])}]"
-            for item in picked
-        )
-        sections.append(f"舆情高危：{news_text}")
-    if crisis_down_hits:
-        picked = crisis_down_hits[:max_news_items]
-        news_text = "；".join(
-            f"《{item['title']}》命中[{','.join(item['matched_keywords'])}]"
-            for item in picked
-        )
-        sections.append(f"舆情降温：{news_text}")
-
-    if not sections:
+    if not top_news:
         return safe_text
-    return sep.join(sections)
+    picked = top_news[:max_news_items]
+    return "；".join(
+        f"{item['category'] or '新闻'}: {item['title']}"
+        for item in picked
+    )
 
 
 def write_json_atomic_sync(
@@ -1300,34 +1316,26 @@ async def update_dashboard_state(
     Key 必须与前端占位卡片严格对应：
     - update_time
     - watchlist_preview
-    - ai_insight_text
+    - top_news
     """
     payload = {
         "update_time": now_text(config),
         "news_last_fetch_time": str(shared_state.get("news_last_fetch_time", "")).strip(),
         "watchlist_preview": shared_state.get("watchlist_preview", []),
+        "top_news": shared_state.get("top_news", []),
+        "watchlist_ntfy_enabled": bool(shared_state.get("watchlist_ntfy_enabled", False)),
         "ai_insight_text": build_ai_insight_text(
             config=config,
-            market_alerts=shared_state.get("market_alerts", []),
-            news_hits=shared_state.get(
-                "news_hits",
-                {"crisis_up_hits": [], "crisis_down_hits": [], "debug": {}},
-            ),
+            top_news=shared_state.get("top_news", []),
         ),
         "news_debug": shared_state.get(
             "news_debug",
             {
                 "entries_scanned": 0,
                 "entries_filtered_by_source": 0,
-                "up_hits_count": 0,
-                "down_hits_count": 0,
+                "matched_entries_count": 0,
+                "top_news_count": 0,
                 "top_unmatched_titles": [],
-                "enabled": False,
-                "sent": False,
-                "last_alert_time": "",
-                "last_alert_signature": "",
-                "last_alert_summary": "",
-                "last_alert_status": "",
             },
         ),
         "market_alert_debug": shared_state.get(
@@ -1359,14 +1367,15 @@ async def update_dashboard_state(
 
 async def market_loop(
     *,
-    config: dict[str, Any],
+    config_path: Path,
     shared_state: dict[str, Any],
     state_lock: asyncio.Lock,
     file_lock: asyncio.Lock,
 ) -> None:
     """行情定时任务主循环。"""
-    interval = int(config["scheduler"]["market_interval_seconds"])
     while True:
+        config = load_config(config_path)
+        interval = int(config["scheduler"]["market_interval_seconds"])
         try:
             watchlist_preview, market_alerts = await run_market_job(config)
             fetch_time = now_text(config)
@@ -1383,6 +1392,9 @@ async def market_loop(
                 shared_state["watchlist_preview"] = watchlist_preview
                 shared_state["market_alerts"] = market_alerts
                 shared_state["market_alert_debug"] = market_alert_debug
+                shared_state["watchlist_ntfy_enabled"] = bool(
+                    config.get("market_data", {}).get("alerting", {}).get("enabled", False)
+                )
             await update_dashboard_state(config=config, shared_state=shared_state, file_lock=file_lock)
         except Exception as exc:  # noqa: BLE001
             async with state_lock:
@@ -1401,69 +1413,56 @@ async def market_loop(
 
 async def news_loop(
     *,
-    config: dict[str, Any],
+    config_path: Path,
     shared_state: dict[str, Any],
     state_lock: asyncio.Lock,
     file_lock: asyncio.Lock,
 ) -> None:
     """新闻定时任务主循环。"""
-    interval = int(config["scheduler"]["news_interval_seconds"])
     while True:
+        config = load_config(config_path)
+        interval = int(config["scheduler"]["news_interval_seconds"])
         try:
-            news_hits = await run_news_job(config)
+            news_result = await run_news_job(config)
             fetch_time = now_text(config)
-            alert_status = await asyncio.to_thread(
-                maybe_send_high_risk_notification,
-                config=config,
-                alert_payload=build_high_risk_alert_payload(config=config, news_hits=news_hits),
-                fetch_time=fetch_time,
-            )
             news_debug = dict(
-                news_hits.get(
+                news_result.get(
                     "debug",
                     {
                         "entries_scanned": 0,
                         "entries_filtered_by_source": 0,
-                        "up_hits_count": 0,
-                        "down_hits_count": 0,
+                        "matched_entries_count": 0,
+                        "top_news_count": 0,
                         "top_unmatched_titles": [],
                     },
                 )
             )
-            news_debug.update(alert_status)
             async with state_lock:
-                shared_state["news_hits"] = news_hits
+                shared_state["top_news"] = news_result.get("top_news", [])
                 shared_state["news_last_fetch_time"] = fetch_time
                 shared_state["news_debug"] = news_debug
             await update_dashboard_state(config=config, shared_state=shared_state, file_lock=file_lock)
         except Exception as exc:  # noqa: BLE001
             fetch_time = now_text(config)
             async with state_lock:
-                shared_state["news_hits"] = {
-                    "crisis_up_hits": [
-                        {
-                            "source": "news_loop",
-                            "title": f"新闻任务异常：{exc}",
-                            "link": "",
-                            "published": "",
-                            "matched_keywords": [],
-                        }
-                    ],
-                    "crisis_down_hits": [],
-                }
+                shared_state["top_news"] = [
+                    {
+                        "source": "news_loop",
+                        "publisher": "news_loop",
+                        "title": f"新闻任务异常：{exc}",
+                        "link": "",
+                        "published": "",
+                        "category": "system",
+                        "matched_keywords": [],
+                    }
+                ]
                 shared_state["news_last_fetch_time"] = fetch_time
                 shared_state["news_debug"] = {
                     "entries_scanned": 0,
                     "entries_filtered_by_source": 0,
-                    "up_hits_count": 1,
-                    "down_hits_count": 0,
+                    "matched_entries_count": 1,
+                    "top_news_count": 1,
                     "top_unmatched_titles": [],
-                    "enabled": False,
-                    "sent": False,
-                    "last_alert_time": "",
-                    "last_alert_signature": "",
-                    "last_alert_summary": "",
-                    "last_alert_status": "error",
                 }
             await update_dashboard_state(config=config, shared_state=shared_state, file_lock=file_lock)
         await asyncio.sleep(interval)
@@ -1477,6 +1476,9 @@ async def main() -> None:
     shared_state: dict[str, Any] = {
         "watchlist_preview": [],
         "market_alerts": [],
+        "watchlist_ntfy_enabled": bool(
+            config.get("market_data", {}).get("alerting", {}).get("enabled", False)
+        ),
         "market_alert_debug": {
             "enabled": False,
             "sent": False,
@@ -1485,20 +1487,14 @@ async def main() -> None:
             "last_alert_summary": "",
             "last_alert_status": "",
         },
-        "news_hits": {"crisis_up_hits": [], "crisis_down_hits": [], "debug": {}},
+        "top_news": [],
         "news_last_fetch_time": "",
         "news_debug": {
             "entries_scanned": 0,
             "entries_filtered_by_source": 0,
-            "up_hits_count": 0,
-            "down_hits_count": 0,
+            "matched_entries_count": 0,
+            "top_news_count": 0,
             "top_unmatched_titles": [],
-            "enabled": False,
-            "sent": False,
-            "last_alert_time": "",
-            "last_alert_signature": "",
-            "last_alert_summary": "",
-            "last_alert_status": "",
         },
     }
     state_lock = asyncio.Lock()
@@ -1509,13 +1505,13 @@ async def main() -> None:
 
     await asyncio.gather(
         market_loop(
-            config=config,
+            config_path=config_path,
             shared_state=shared_state,
             state_lock=state_lock,
             file_lock=file_lock,
         ),
         news_loop(
-            config=config,
+            config_path=config_path,
             shared_state=shared_state,
             state_lock=state_lock,
             file_lock=file_lock,
