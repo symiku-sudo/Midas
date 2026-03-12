@@ -314,6 +314,7 @@ fun MainScreen(viewModel: MainViewModel) {
         onSaveAssetStats = viewModel::saveAssetStats,
         onDeleteAssetHistoryRecord = viewModel::deleteAssetHistoryRecord,
         onAssetSummaryCopied = viewModel::markAssetSummaryCopied,
+        onGenerateFinanceNewsDigest = viewModel::generateFinanceNewsDigest,
         onToggleWatchlistNtfy = viewModel::setWatchlistNtfyEnabled,
         onFillAssetStatsFromImages = { assetImagePickerLauncher.launch("image/*") },
     )
@@ -355,6 +356,7 @@ fun MainScreenContent(
     onSaveAssetStats: () -> Unit = {},
     onDeleteAssetHistoryRecord: (String) -> Unit = {},
     onAssetSummaryCopied: () -> Unit = {},
+    onGenerateFinanceNewsDigest: () -> Unit = {},
     onToggleWatchlistNtfy: (Boolean) -> Unit = {},
     onFillAssetStatsFromImages: () -> Unit = {},
     enableLifecycleAutoRefresh: Boolean = true,
@@ -494,6 +496,7 @@ fun MainScreenContent(
                     onSaveAssetStats = onSaveAssetStats,
                         onDeleteAssetHistoryRecord = onDeleteAssetHistoryRecord,
                         onAssetSummaryCopied = onAssetSummaryCopied,
+                        onGenerateFinanceNewsDigest = onGenerateFinanceNewsDigest,
                         onToggleWatchlistNtfy = onToggleWatchlistNtfy,
                         onFillAssetStatsFromImages = onFillAssetStatsFromImages,
                         modifier = contentModifier,
@@ -1220,6 +1223,7 @@ private fun FinanceSignalsPanel(
     onSaveAssetStats: () -> Unit,
     onDeleteAssetHistoryRecord: (String) -> Unit,
     onAssetSummaryCopied: () -> Unit,
+    onGenerateFinanceNewsDigest: () -> Unit,
     onToggleWatchlistNtfy: (Boolean) -> Unit,
     onFillAssetStatsFromImages: () -> Unit,
     modifier: Modifier = Modifier,
@@ -1315,6 +1319,58 @@ private fun FinanceSignalsPanel(
                             state.watchlistPreview.forEach { item ->
                                 FinanceWatchlistRow(item = item)
                             }
+                        }
+                    }
+                }
+            }
+
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("24小时新闻摘要", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "按钮触发；距上次生成不足 3 小时会直接复用。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    Text(
+                        text = if (state.digestLastGeneratedAt.isNotBlank()) {
+                            "上次生成：${state.digestLastGeneratedAt}"
+                        } else {
+                            "上次生成：暂无"
+                        },
+                        modifier = Modifier.testTag("finance_digest_last_generated_at"),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    MidasButton(
+                        onClick = onGenerateFinanceNewsDigest,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("finance_digest_button"),
+                        enabled = !state.isGeneratingNewsDigest,
+                        tone = ButtonTone.NEUTRAL,
+                    ) {
+                        SingleLineActionText(
+                            if (state.isGeneratingNewsDigest) "正在生成24小时摘要..." else "生成24小时摘要",
+                        )
+                    }
+                    when {
+                        state.isGeneratingNewsDigest && state.aiInsightText.isBlank() -> {
+                            Text("正在生成摘要...", style = MaterialTheme.typography.bodySmall)
+                        }
+
+                        state.aiInsightText.isBlank() -> {
+                            Text("点击上方按钮后查看过去 24 小时新闻总结。", style = MaterialTheme.typography.bodySmall)
+                        }
+
+                        else -> {
+                            MarkdownText(
+                                markdown = state.aiInsightText,
+                                modifier = Modifier.fillMaxWidth(),
+                            )
                         }
                     }
                 }

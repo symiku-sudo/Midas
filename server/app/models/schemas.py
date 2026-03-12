@@ -32,6 +32,10 @@ class FinanceNewsDebugData(BaseModel):
     entries_filtered_by_source: int = 0
     matched_entries_count: int = 0
     top_news_count: int = 0
+    digest_item_count: int = 0
+    digest_prompt_chars: int = 0
+    digest_status: str = ""
+    digest_last_generated_at: str = ""
     top_unmatched_titles: list[str] = Field(default_factory=list)
 
 

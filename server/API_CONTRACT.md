@@ -71,12 +71,16 @@ Success `data`:
     }
   ],
   "watchlist_ntfy_enabled": true,
-  "ai_insight_text": "finance: 美联储官员释放降息信号；politics: 白宫回应停火会谈进展",
+  "ai_insight_text": "## 24小时摘要\n\n- 原油与黄金波动加剧，市场重新计价通胀与降息路径。\n\n## 核心主线\n\n- 能源价格与利率预期成为共振主线。",
   "news_debug": {
     "entries_scanned": 40,
     "entries_filtered_by_source": 3,
     "matched_entries_count": 14,
     "top_news_count": 5,
+    "digest_item_count": 12,
+    "digest_prompt_chars": 5241,
+    "digest_status": "generated",
+    "digest_last_generated_at": "2026-03-05 12:00:00",
     "top_unmatched_titles": [
       "地方政策解读长文"
     ]
@@ -98,8 +102,10 @@ Success `data`:
 - `news_last_fetch_time` / `news_stale` 用于客户端识别新闻抓取是否陈旧。
 - `top_news` 为“今日金融与时政新闻 Top5”结构化列表，已按时效、来源权重、主题关键词和跨源覆盖加权后去重。
 - `watchlist_ntfy_enabled` 表示 Watchlist 行情阈值 ntfy 通知当前开关状态。
-- `news_debug` 用于排查“有新闻但未进入 Top5”的召回/排序问题。
+- `ai_insight_text` 仅在用户主动触发摘要按钮后写入；未触发时允许为空字符串。
+- `news_debug` 用于排查“有新闻但未进入 Top5”的召回/排序问题，以及观察 24 小时摘要的样本数与单次 prompt 文本长度。
 - `news_debug.entries_filtered_by_source` 反映白名单/黑名单过滤效果。
+- `news_debug.digest_item_count/digest_prompt_chars/digest_status/digest_last_generated_at` 分别表示摘要样本数、单次 prompt 字符数、摘要生成状态和最近一次真实生成时间。
 - `market_alert_debug` 反映 Watchlist 行情阈值通知的发送状态。
 
 ## `PUT /api/finance/signals/watchlist-ntfy`
@@ -113,6 +119,15 @@ Request:
   "enabled": false
 }
 ```
+
+## `POST /api/finance/signals/digest`
+
+用途：按按钮触发“24 小时新闻摘要”生成，并把结果写回 Finance Signals 状态文件。
+
+行为说明：
+- 若距离上一次真实生成不足 `3` 小时（由 `news.digest.reuse_within_seconds` 控制），直接复用上次摘要结果，不再调用 LLM。
+- 若超过 `3` 小时，则基于最近 `24` 小时新闻样本重新生成。
+- 返回值结构与 `GET /api/finance/signals` 相同，便于客户端直接刷新当前面板状态。
 
 Success `data`:
 

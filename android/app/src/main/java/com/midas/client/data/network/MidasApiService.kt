@@ -60,6 +60,9 @@ interface MidasApiService {
         @Body request: FinanceWatchlistNtfyUpdateRequest
     ): Response<ApiEnvelope<FinanceWatchlistNtfyData>>
 
+    @POST("api/finance/signals/digest")
+    suspend fun triggerFinanceNewsDigest(): Response<ApiEnvelope<FinanceSignalsData>>
+
     @Multipart
     @POST("api/assets/fill-from-images")
     suspend fun fillAssetStatsFromImages(

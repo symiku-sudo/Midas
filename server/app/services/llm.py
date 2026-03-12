@@ -70,6 +70,44 @@ _ASSET_IMAGE_FILL_PROMPT = (
     "金额单位统一换算为万元人民币（例如 120000 元 -> 12.00）。"
 )
 
+_FINANCE_NEWS_DIGEST_PROMPT = (
+    "你是中文金融与时政编辑。"
+    "请基于最近24小时新闻样本，输出一份简洁的中文 Markdown 摘要。"
+    "只允许基于输入新闻，不得编造。"
+    "输出结构固定为："
+    "## 24小时摘要、## 核心主线、## 风险与影响、## 接下来关注。"
+    "每个部分尽量简短，避免空话。"
+)
+
+
+def build_finance_news_digest_user_prompt(
+    *,
+    window_hours: int,
+    items: list[dict[str, Any]],
+) -> str:
+    news_lines: list[str] = []
+    for index, item in enumerate(items, start=1):
+        summary = str(item.get("summary", "")).strip() or "（无摘要）"
+        news_lines.append(
+            f"{index}. [{str(item.get('category', '')).strip() or '新闻'}] {str(item.get('title', '')).strip()}\n"
+            f"来源: {str(item.get('publisher', '')).strip() or '未知'} | 时间: {str(item.get('published', '')).strip() or '未知'}\n"
+            f"摘要: {summary}"
+        )
+    return f"窗口: 最近 {window_hours} 小时\n\n新闻样本:\n" + "\n".join(news_lines)
+
+
+def estimate_finance_news_digest_prompt_chars(
+    *,
+    window_hours: int,
+    items: list[dict[str, Any]],
+) -> int:
+    return len(_FINANCE_NEWS_DIGEST_PROMPT) + len(
+        build_finance_news_digest_user_prompt(
+            window_hours=window_hours,
+            items=items,
+        )
+    )
+
 
 class LLMService:
     def __init__(self, settings: Settings) -> None:
@@ -565,6 +603,69 @@ class LLMService:
         return self._enforce_conflict_section_last(
             markdown=normalized,
             fallback_conflict_lines=fallback_conflicts,
+        )
+
+    async def summarize_finance_news_digest(
+        self,
+        *,
+        window_hours: int,
+        items: list[dict[str, Any]],
+    ) -> str:
+        normalized_items: list[dict[str, str]] = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title", "")).strip()
+            if not title:
+                continue
+            normalized_items.append(
+                {
+                    "title": title,
+                    "publisher": str(item.get("publisher", "")).strip(),
+                    "published": str(item.get("published", "")).strip(),
+                    "category": str(item.get("category", "")).strip(),
+                    "summary": str(item.get("summary", "")).strip(),
+                }
+            )
+
+        if not normalized_items:
+            return "## 24小时摘要\n\n- 过去 24 小时暂无可总结新闻。"
+
+        if not self._settings.llm.enabled:
+            bullet_lines = "\n".join(
+                f"- [{item['category'] or '新闻'}] {item['title']}"
+                for item in normalized_items[:8]
+            )
+            return (
+                "## 24小时摘要\n\n"
+                "当前为本地降级输出（未启用 LLM）。\n\n"
+                "## 核心主线\n\n"
+                f"{bullet_lines}\n\n"
+                "## 风险与影响\n\n"
+                "- 建议结合标题逐条人工判断。\n\n"
+                "## 接下来关注\n\n"
+                "- 继续观察后续新增报道。\n"
+            )
+
+        api_key = self._require_api_key()
+        payload = {
+            "model": self._settings.llm.model,
+            "temperature": 0.2,
+            "messages": [
+                {"role": "system", "content": _FINANCE_NEWS_DIGEST_PROMPT},
+                {
+                    "role": "user",
+                    "content": build_finance_news_digest_user_prompt(
+                        window_hours=window_hours,
+                        items=normalized_items,
+                    ),
+                },
+            ],
+        }
+        return await self._request_chat_completion(
+            payload,
+            api_key=api_key,
+            server_error_message="LLM 24小时新闻摘要生成失败。",
         )
 
     def _collect_unique_lines(self, first: str, second: str, *, max_lines: int) -> list[str]:

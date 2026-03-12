@@ -209,6 +209,13 @@ async def update_finance_watchlist_ntfy(
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 
+@router.post("/api/finance/signals/digest")
+async def trigger_finance_news_digest(request: Request) -> dict:
+    service = _get_finance_signals_service()
+    data = await service.trigger_news_digest()
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
 @router.post("/api/assets/fill-from-images")
 async def fill_asset_stats_from_images(
     request: Request,

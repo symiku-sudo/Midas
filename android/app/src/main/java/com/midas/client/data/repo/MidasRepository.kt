@@ -73,6 +73,10 @@ class MidasRepository {
         return request(baseUrl) { getFinanceSignals() }
     }
 
+    suspend fun triggerFinanceNewsDigest(baseUrl: String): AppResult<FinanceSignalsData> {
+        return request(baseUrl) { triggerFinanceNewsDigest() }
+    }
+
     suspend fun fillAssetStatsFromImages(
         baseUrl: String,
         images: List<AssetImageUpload>,

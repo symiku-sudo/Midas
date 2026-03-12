@@ -201,6 +201,7 @@ class MainScreenContentRobolectricSmokeTest {
         composeRule.waitForIdle()
 
         composeRule.onAllNodesWithText("Watchlist").assertCountEquals(1)
+        composeRule.onAllNodesWithText("24小时新闻摘要").assertCountEquals(1)
         composeRule.onAllNodesWithText("今日金融与时政新闻 Top5").assertCountEquals(1)
         composeRule.onAllNodesWithText("资产统计").assertCountEquals(1)
         composeRule.onAllNodesWithTag("asset_amount_bank_current_deposit", useUnmergedTree = true)
@@ -800,5 +801,118 @@ class MainScreenContentRobolectricSmokeTest {
 
         composeRule.onNodeWithText("阈值 >90").assertIsDisplayed()
         composeRule.onNodeWithText("ntfy 已关闭").assertIsDisplayed()
+    }
+
+    @Test
+    fun financePanel_shouldRenderDailyDigestCard() {
+        composeRule.setContent {
+            MaterialTheme {
+                MainScreenContent(
+                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
+                    bilibili = BilibiliUiState(),
+                    xiaohongshu = XiaohongshuUiState(),
+                    notes = NotesUiState(),
+                    finance = FinanceSignalsUiState(
+                        aiInsightText = "## 24小时摘要\n\n- 原油与黄金波动加剧。",
+                        digestLastGeneratedAt = "2026-03-11 09:46:31",
+                    ),
+                    onAppForeground = {},
+                    onBaseUrlChange = {},
+                    onSaveBaseUrl = {},
+                    onTestConnection = {},
+                    onConfigTextChange = { _, _ -> },
+                    onConfigBooleanChange = { _, _ -> },
+                    onResetConfig = {},
+                    onBilibiliVideoUrlChange = {},
+                    onSubmitBilibiliSummary = {},
+                    onSaveBilibiliNote = {},
+                    onXiaohongshuUrlChange = {},
+                    onSummarizeXiaohongshuUrl = {},
+                    onRefreshXiaohongshuAuthConfig = {},
+                    onSaveSingleXiaohongshuNote = {},
+                    onNotesKeywordChange = {},
+                    onRefreshNotes = {},
+                    onDeleteBilibiliNote = {},
+                    onDeleteXiaohongshuNote = {},
+                    onSuggestMergeCandidates = {},
+                    onPreviewMergeCandidate = { _ -> },
+                    onCommitCurrentMerge = {},
+                    onRollbackLastMerge = {},
+                    onFinalizeLastMerge = {},
+                    enableLifecycleAutoRefresh = false,
+                    enableFinanceAutoRefresh = false,
+                    enableCyclicTabs = false,
+                    animateTabSwitch = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("笔记系统").performClick()
+        composeRule.onNodeWithText("资产系统").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("24小时新闻摘要").assertIsDisplayed()
+        composeRule.onNodeWithTag("finance_digest_last_generated_at", useUnmergedTree = true)
+            .performScrollTo()
+            .assertIsDisplayed()
+        composeRule.onNodeWithTag("finance_digest_button", useUnmergedTree = true)
+            .performScrollTo()
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun financePanel_generateDigestButton_shouldTriggerCallback() {
+        var triggerCount = 0
+
+        composeRule.setContent {
+            MaterialTheme {
+                MainScreenContent(
+                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
+                    bilibili = BilibiliUiState(),
+                    xiaohongshu = XiaohongshuUiState(),
+                    notes = NotesUiState(),
+                    finance = FinanceSignalsUiState(),
+                    onAppForeground = {},
+                    onBaseUrlChange = {},
+                    onSaveBaseUrl = {},
+                    onTestConnection = {},
+                    onConfigTextChange = { _, _ -> },
+                    onConfigBooleanChange = { _, _ -> },
+                    onResetConfig = {},
+                    onBilibiliVideoUrlChange = {},
+                    onSubmitBilibiliSummary = {},
+                    onSaveBilibiliNote = {},
+                    onXiaohongshuUrlChange = {},
+                    onSummarizeXiaohongshuUrl = {},
+                    onRefreshXiaohongshuAuthConfig = {},
+                    onSaveSingleXiaohongshuNote = {},
+                    onNotesKeywordChange = {},
+                    onRefreshNotes = {},
+                    onDeleteBilibiliNote = {},
+                    onDeleteXiaohongshuNote = {},
+                    onSuggestMergeCandidates = {},
+                    onPreviewMergeCandidate = { _ -> },
+                    onCommitCurrentMerge = {},
+                    onRollbackLastMerge = {},
+                    onFinalizeLastMerge = {},
+                    onGenerateFinanceNewsDigest = { triggerCount += 1 },
+                    enableLifecycleAutoRefresh = false,
+                    enableFinanceAutoRefresh = false,
+                    enableCyclicTabs = false,
+                    animateTabSwitch = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("笔记系统").performClick()
+        composeRule.onNodeWithText("资产系统").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithTag("finance_digest_button", useUnmergedTree = true)
+            .performScrollTo()
+            .performClick()
+        composeRule.waitForIdle()
+
+        assertEquals(1, triggerCount)
     }
 }

@@ -15,6 +15,11 @@ import feedparser
 import pandas as pd
 import yaml
 import yfinance as yf
+from app.core.config import get_settings
+from app.services.llm import (
+    LLMService,
+    estimate_finance_news_digest_prompt_chars,
+)
 
 
 def load_config(config_path: Path) -> dict[str, Any]:
@@ -41,6 +46,16 @@ def now_text(config: dict[str, Any]) -> str:
     """按配置格式输出当前时间字符串。"""
     time_format = str(config["output"]["time_format"])
     return datetime.now().strftime(time_format)
+
+
+def parse_output_datetime(config: dict[str, Any], raw_text: str) -> datetime | None:
+    value = str(raw_text).strip()
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, str(config["output"]["time_format"]))
+    except Exception:
+        return None
 
 
 def format_change_pct(value: float, digits: int) -> str:
@@ -514,6 +529,161 @@ def serialize_news_item(item: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def serialize_digest_item(item: dict[str, Any], *, max_summary_chars: int) -> dict[str, Any]:
+    summary = str(item.get("summary", "")).strip()
+    if max_summary_chars > 0 and len(summary) > max_summary_chars:
+        summary = f"{summary[:max_summary_chars].rstrip()}..."
+    return {
+        "topic_key": str(item.get("topic_key", "")).strip(),
+        "title": str(item.get("title", "")).strip(),
+        "publisher": str(item.get("publisher", "")).strip(),
+        "published": str(item.get("published", "")).strip(),
+        "category": str(item.get("category", "")).strip(),
+        "summary": summary,
+    }
+
+
+def fit_digest_items_to_limit(
+    *,
+    window_hours: int,
+    items: list[dict[str, Any]],
+    prompt_char_limit: int,
+) -> tuple[list[dict[str, Any]], int]:
+    if prompt_char_limit <= 0:
+        return items, estimate_finance_news_digest_prompt_chars(
+            window_hours=window_hours,
+            items=items,
+        )
+    picked = list(items)
+    while picked:
+        prompt_chars = estimate_finance_news_digest_prompt_chars(
+            window_hours=window_hours,
+            items=picked,
+        )
+        if prompt_chars <= prompt_char_limit:
+            return picked, prompt_chars
+        picked = picked[:-1]
+    return [], 0
+
+
+def build_digest_fallback_text(items: list[dict[str, Any]]) -> str:
+    if not items:
+        return "## 24小时摘要\n\n- 过去 24 小时暂无可总结新闻。"
+    bullet_lines = "\n".join(
+        f"- [{item.get('category') or '新闻'}] {item.get('title', '')}"
+        for item in items[:8]
+    )
+    return (
+        "## 24小时摘要\n\n"
+        "以下为基于过去 24 小时新闻样本的本地降级摘要。\n\n"
+        "## 核心主线\n\n"
+        f"{bullet_lines}\n\n"
+        "## 风险与影响\n\n"
+        "- 建议结合来源与后续报道继续验证。\n\n"
+        "## 接下来关注\n\n"
+        "- 继续跟踪同主题后续增量新闻。\n"
+    )
+
+
+async def generate_news_digest(
+    *,
+    config: dict[str, Any],
+    digest_items: list[dict[str, Any]],
+) -> dict[str, Any]:
+    digest_cfg = config.get("news", {}).get("digest")
+    base_status = {
+        "text": "",
+        "prompt_chars": 0,
+        "item_count": 0,
+        "status": "disabled",
+        "signature": "",
+        "generated_at": "",
+    }
+    if not isinstance(digest_cfg, dict) or not bool(digest_cfg.get("enabled", False)):
+        return base_status
+    if not digest_items:
+        base_status["text"] = build_digest_fallback_text([])
+        base_status["status"] = "empty"
+        return base_status
+
+    window_hours = int(config.get("news", {}).get("poll", {}).get("recency_max_age_hours", 24))
+    prompt_char_limit = int(digest_cfg.get("prompt_char_limit", 7000))
+    reuse_window_seconds = max(int(digest_cfg.get("reuse_within_seconds", 10800)), 0)
+    fitted_items, prompt_chars = fit_digest_items_to_limit(
+        window_hours=window_hours,
+        items=digest_items,
+        prompt_char_limit=prompt_char_limit,
+    )
+    if not fitted_items:
+        base_status["text"] = build_digest_fallback_text([])
+        base_status["status"] = "prompt_limit_exceeded"
+        return base_status
+
+    signature = "|".join(
+        str(item.get("topic_key", "")).strip() or str(item.get("title", "")).strip()
+        for item in fitted_items
+        if str(item.get("topic_key", "")).strip() or str(item.get("title", "")).strip()
+    )
+    state_path = resolve_config_relative_path(
+        config,
+        str(digest_cfg.get("state_file", "../.tmp/finance_news_digest_state.json")),
+    )
+    state = load_json_file(state_path)
+    last_summary = str(state.get("last_summary", "")).strip()
+    last_generated_at = str(state.get("last_generated_at", "")).strip()
+    last_generated_dt = parse_output_datetime(config, last_generated_at)
+    if (
+        last_summary
+        and last_generated_dt is not None
+        and reuse_window_seconds > 0
+        and (datetime.now() - last_generated_dt).total_seconds() < reuse_window_seconds
+    ):
+        return {
+            "text": last_summary,
+            "prompt_chars": max(int(state.get("last_prompt_chars", prompt_chars)), 0),
+            "item_count": max(int(state.get("last_item_count", len(fitted_items))), 0),
+            "status": "reused_recent",
+            "signature": signature,
+            "generated_at": last_generated_at,
+        }
+
+    settings = get_settings()
+    generated_at = now_text(config)
+    if not settings.llm.enabled:
+        digest_text = build_digest_fallback_text(fitted_items)
+        status = "local_fallback"
+    else:
+        llm = LLMService(settings)
+        try:
+            digest_text = await llm.summarize_finance_news_digest(
+                window_hours=window_hours,
+                items=fitted_items,
+            )
+            status = "generated"
+        except Exception:
+            digest_text = build_digest_fallback_text(fitted_items)
+            status = "fallback"
+
+    write_json_file(
+        state_path,
+        {
+            "last_signature": signature,
+            "last_summary": digest_text,
+            "last_prompt_chars": prompt_chars,
+            "last_item_count": len(fitted_items),
+            "last_generated_at": generated_at,
+        },
+    )
+    return {
+        "text": digest_text,
+        "prompt_chars": prompt_chars,
+        "item_count": len(fitted_items),
+        "status": status,
+        "signature": signature,
+        "generated_at": generated_at,
+    }
+
+
 def resolve_config_relative_path(config: dict[str, Any], raw_path: str) -> Path:
     path = Path(str(raw_path).strip())
     if path.is_absolute():
@@ -570,6 +740,10 @@ def normalize_market_alert_key(text: str) -> str:
     value = re.sub(r"（当前[^）]*阈值[^）]*）", "", value)
     value = re.sub(r"抓取异常：.*$", "抓取异常", value)
     return value.strip()
+
+
+def is_threshold_market_alert(text: str) -> bool:
+    return "触发：" in str(text).strip()
 
 
 def build_high_risk_alert_payload(
@@ -642,12 +816,17 @@ def build_market_alert_payload(
     if not isinstance(alerting_cfg, dict) or not bool(alerting_cfg.get("enabled", False)):
         return None
 
+    threshold_alerts = [
+        str(item).strip()
+        for item in market_alerts
+        if is_threshold_market_alert(item)
+    ]
     min_market_alerts = max(int(alerting_cfg.get("min_market_alerts", 1)), 1)
-    if len(market_alerts) < min_market_alerts:
+    if len(threshold_alerts) < min_market_alerts:
         return None
 
     max_items = max(int(alerting_cfg.get("max_items_in_notification", 3)), 1)
-    picked = market_alerts[:max_items]
+    picked = threshold_alerts[:max_items]
     dedupe_keys = [
         normalize_market_alert_key(item)
         for item in picked
@@ -665,8 +844,8 @@ def build_market_alert_payload(
         ],
         "picked_alerts": picked,
         "summary": summary,
-        "notification_summary": f"Watchlist 行情阈值触发：alerts={len(market_alerts)}",
-        "alert_count": len(market_alerts),
+        "notification_summary": f"Watchlist 行情阈值触发：alerts={len(threshold_alerts)}",
+        "alert_count": len(threshold_alerts),
     }
 
 
@@ -1056,9 +1235,44 @@ def _keyword_bundle_score(
     return sum(float(keyword_weights.get(keyword, default_keyword_score)) for keyword in matched_keywords)
 
 
+def _normalize_str_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def _apply_topic_keyword_guards(
+    *,
+    text: str,
+    matched: list[str],
+    topic_cfg: dict[str, Any],
+) -> list[str]:
+    if not matched:
+        return []
+    guarded = list(matched)
+    text_lower = text.lower()
+    context_rules = topic_cfg.get("require_context_if_keywords")
+    if isinstance(context_rules, dict):
+        for keyword, raw_context_terms in context_rules.items():
+            normalized_keyword = str(keyword).strip()
+            if not normalized_keyword or normalized_keyword not in guarded:
+                continue
+            context_terms = [term.lower() for term in _normalize_str_list(raw_context_terms)]
+            if context_terms and not any(term in text_lower for term in context_terms):
+                guarded = [item for item in guarded if item != normalized_keyword]
+    return guarded
+
+
+def _topic_excluded_by_title(*, title: str, topic_cfg: dict[str, Any]) -> bool:
+    title_lower = title.lower()
+    exclude_terms = [term.lower() for term in _normalize_str_list(topic_cfg.get("exclude_title_if_contains"))]
+    return any(term in title_lower for term in exclude_terms)
+
+
 def select_news_category(
     *,
     source: dict[str, Any],
+    title: str,
     text: str,
     topics_cfg: dict[str, Any],
     ranking_cfg: dict[str, Any],
@@ -1070,6 +1284,8 @@ def select_news_category(
     for category, raw_topic_cfg in topics_cfg.items():
         if not isinstance(raw_topic_cfg, dict):
             continue
+        if _topic_excluded_by_title(title=title, topic_cfg=raw_topic_cfg):
+            continue
         keywords = raw_topic_cfg.get("keywords")
         if not isinstance(keywords, list):
             continue
@@ -1077,6 +1293,11 @@ def select_news_category(
             text,
             list(keywords),
             negation_prefixes=negation_prefixes,
+        )
+        matched = _apply_topic_keyword_guards(
+            text=text,
+            matched=matched,
+            topic_cfg=raw_topic_cfg,
         )
         if not matched:
             continue
@@ -1131,11 +1352,15 @@ async def run_news_job(config: dict[str, Any]) -> dict[str, Any]:
 
     result: dict[str, Any] = {
         "top_news": [],
+        "digest_candidates": [],
         "debug": {
             "entries_scanned": 0,
             "entries_filtered_by_source": 0,
             "matched_entries_count": 0,
             "top_news_count": 0,
+            "digest_item_count": 0,
+            "digest_prompt_chars": 0,
+            "digest_status": "",
             "top_unmatched_titles": [],
         },
     }
@@ -1181,6 +1406,7 @@ async def run_news_job(config: dict[str, Any]) -> dict[str, Any]:
                 text = f"{title} {summary}".strip()
                 selected = select_news_category(
                     source=source,
+                    title=title,
                     text=text,
                     topics_cfg=topics_cfg,
                     ranking_cfg=ranking_cfg,
@@ -1262,9 +1488,25 @@ async def run_news_job(config: dict[str, Any]) -> dict[str, Any]:
         max_items=max_top_items,
         similarity_threshold=topic_similarity_threshold,
     )
+    digest_cfg = news_cfg.get("digest")
+    max_digest_items = 12
+    max_summary_chars = 240
+    if isinstance(digest_cfg, dict):
+        max_digest_items = max(int(digest_cfg.get("max_items", 12)), 1)
+        max_summary_chars = max(int(digest_cfg.get("max_summary_chars_per_item", 240)), 0)
+    digest_candidates = dedupe_and_sort_news_hits(
+        ranked_candidates,
+        max_items=max_digest_items,
+        similarity_threshold=topic_similarity_threshold,
+    )
     result["top_news"] = [serialize_news_item(item) for item in top_news]
+    result["digest_candidates"] = [
+        serialize_digest_item(item, max_summary_chars=max_summary_chars)
+        for item in digest_candidates
+    ]
     result["debug"]["matched_entries_count"] = len(ranked_candidates)
     result["debug"]["top_news_count"] = len(top_news)
+    result["debug"]["digest_item_count"] = len(digest_candidates)
     result["debug"]["top_unmatched_titles"] = dedupe_titles(
         unmatched_titles,
         max_items=max_unmatched_titles,
@@ -1318,26 +1560,74 @@ async def update_dashboard_state(
     - watchlist_preview
     - top_news
     """
+    output_path = resolve_output_path(config)
+    existing_payload = load_json_file(output_path)
+    shared_news_debug = shared_state.get("news_debug", {})
+    if not isinstance(shared_news_debug, dict):
+        shared_news_debug = {}
+    existing_news_debug = existing_payload.get("news_debug", {})
+    if not isinstance(existing_news_debug, dict):
+        existing_news_debug = {}
+    shared_digest_generated_at = parse_output_datetime(
+        config,
+        str(shared_news_debug.get("digest_last_generated_at", "")).strip(),
+    )
+    existing_digest_generated_at = parse_output_datetime(
+        config,
+        str(existing_news_debug.get("digest_last_generated_at", "")).strip(),
+    )
+    prefer_existing_digest = (
+        existing_digest_generated_at is not None
+        and (
+            shared_digest_generated_at is None
+            or existing_digest_generated_at > shared_digest_generated_at
+        )
+    )
+    news_debug = dict(shared_news_debug)
+    if prefer_existing_digest:
+        for key in (
+            "digest_item_count",
+            "digest_prompt_chars",
+            "digest_status",
+            "digest_last_generated_at",
+        ):
+            news_debug[key] = existing_news_debug.get(key)
+        digest_text = str(existing_payload.get("ai_insight_text", "")).strip()
+    else:
+        for key in (
+            "digest_item_count",
+            "digest_prompt_chars",
+            "digest_status",
+            "digest_last_generated_at",
+        ):
+            current_value = news_debug.get(key)
+            if current_value not in {"", 0, None}:
+                continue
+            existing_value = existing_news_debug.get(key)
+            if existing_value in {"", 0, None}:
+                continue
+            news_debug[key] = existing_value
+        digest_text = str(shared_state.get("daily_digest_text", "")).strip() or str(
+            existing_payload.get("ai_insight_text", "")
+        ).strip()
     payload = {
         "update_time": now_text(config),
         "news_last_fetch_time": str(shared_state.get("news_last_fetch_time", "")).strip(),
         "watchlist_preview": shared_state.get("watchlist_preview", []),
         "top_news": shared_state.get("top_news", []),
         "watchlist_ntfy_enabled": bool(shared_state.get("watchlist_ntfy_enabled", False)),
-        "ai_insight_text": build_ai_insight_text(
-            config=config,
-            top_news=shared_state.get("top_news", []),
-        ),
-        "news_debug": shared_state.get(
-            "news_debug",
-            {
-                "entries_scanned": 0,
-                "entries_filtered_by_source": 0,
-                "matched_entries_count": 0,
-                "top_news_count": 0,
-                "top_unmatched_titles": [],
-            },
-        ),
+        "ai_insight_text": digest_text,
+        "news_debug": news_debug or {
+            "entries_scanned": 0,
+            "entries_filtered_by_source": 0,
+            "matched_entries_count": 0,
+            "top_news_count": 0,
+            "digest_item_count": 0,
+            "digest_prompt_chars": 0,
+            "digest_status": "",
+            "digest_last_generated_at": "",
+            "top_unmatched_titles": [],
+        },
         "market_alert_debug": shared_state.get(
             "market_alert_debug",
             {
@@ -1351,7 +1641,6 @@ async def update_dashboard_state(
         ),
     }
 
-    output_path = resolve_output_path(config)
     indent = int(config["output"]["json_indent"])
     ensure_ascii = bool(config["output"]["ensure_ascii"])
 
@@ -1425,6 +1714,19 @@ async def news_loop(
         try:
             news_result = await run_news_job(config)
             fetch_time = now_text(config)
+            async with state_lock:
+                previous_digest_text = str(shared_state.get("daily_digest_text", "")).strip()
+                previous_news_debug = dict(
+                    shared_state.get(
+                        "news_debug",
+                        {
+                            "digest_item_count": 0,
+                            "digest_prompt_chars": 0,
+                            "digest_status": "",
+                            "digest_last_generated_at": "",
+                        },
+                    )
+                )
             news_debug = dict(
                 news_result.get(
                     "debug",
@@ -1433,13 +1735,30 @@ async def news_loop(
                         "entries_filtered_by_source": 0,
                         "matched_entries_count": 0,
                         "top_news_count": 0,
+                        "digest_item_count": 0,
+                        "digest_prompt_chars": 0,
+                        "digest_status": "",
+                        "digest_last_generated_at": "",
                         "top_unmatched_titles": [],
                     },
                 )
             )
+            news_debug["digest_prompt_chars"] = int(
+                previous_news_debug.get("digest_prompt_chars", 0)
+            )
+            news_debug["digest_item_count"] = int(
+                previous_news_debug.get("digest_item_count", 0)
+            )
+            news_debug["digest_status"] = str(
+                previous_news_debug.get("digest_status", "")
+            ).strip()
+            news_debug["digest_last_generated_at"] = str(
+                previous_news_debug.get("digest_last_generated_at", "")
+            ).strip()
             async with state_lock:
                 shared_state["top_news"] = news_result.get("top_news", [])
                 shared_state["news_last_fetch_time"] = fetch_time
+                shared_state["daily_digest_text"] = previous_digest_text
                 shared_state["news_debug"] = news_debug
             await update_dashboard_state(config=config, shared_state=shared_state, file_lock=file_lock)
         except Exception as exc:  # noqa: BLE001
@@ -1462,6 +1781,10 @@ async def news_loop(
                     "entries_filtered_by_source": 0,
                     "matched_entries_count": 1,
                     "top_news_count": 1,
+                    "digest_item_count": 0,
+                    "digest_prompt_chars": 0,
+                    "digest_status": "error",
+                    "digest_last_generated_at": "",
                     "top_unmatched_titles": [],
                 }
             await update_dashboard_state(config=config, shared_state=shared_state, file_lock=file_lock)
@@ -1472,30 +1795,45 @@ async def main() -> None:
     """程序入口：并发启动行情与舆情任务。"""
     config_path = Path(__file__).with_name("financial_config.yaml")
     config = load_config(config_path)
+    existing_status = load_json_file(resolve_output_path(config))
 
     shared_state: dict[str, Any] = {
-        "watchlist_preview": [],
+        "watchlist_preview": existing_status.get("watchlist_preview", []),
         "market_alerts": [],
         "watchlist_ntfy_enabled": bool(
-            config.get("market_data", {}).get("alerting", {}).get("enabled", False)
+            existing_status.get(
+                "watchlist_ntfy_enabled",
+                config.get("market_data", {}).get("alerting", {}).get("enabled", False),
+            )
         ),
-        "market_alert_debug": {
-            "enabled": False,
-            "sent": False,
-            "last_alert_time": "",
-            "last_alert_signature": "",
-            "last_alert_summary": "",
-            "last_alert_status": "",
-        },
-        "top_news": [],
-        "news_last_fetch_time": "",
-        "news_debug": {
-            "entries_scanned": 0,
-            "entries_filtered_by_source": 0,
-            "matched_entries_count": 0,
-            "top_news_count": 0,
-            "top_unmatched_titles": [],
-        },
+        "market_alert_debug": existing_status.get(
+            "market_alert_debug",
+            {
+                "enabled": False,
+                "sent": False,
+                "last_alert_time": "",
+                "last_alert_signature": "",
+                "last_alert_summary": "",
+                "last_alert_status": "",
+            },
+        ),
+        "top_news": existing_status.get("top_news", []),
+        "news_last_fetch_time": str(existing_status.get("news_last_fetch_time", "")).strip(),
+        "daily_digest_text": str(existing_status.get("ai_insight_text", "")).strip(),
+        "news_debug": existing_status.get(
+            "news_debug",
+            {
+                "entries_scanned": 0,
+                "entries_filtered_by_source": 0,
+                "matched_entries_count": 0,
+                "top_news_count": 0,
+                "digest_item_count": 0,
+                "digest_prompt_chars": 0,
+                "digest_status": "",
+                "digest_last_generated_at": "",
+                "top_unmatched_titles": [],
+            },
+        ),
     }
     state_lock = asyncio.Lock()
     file_lock = asyncio.Lock()

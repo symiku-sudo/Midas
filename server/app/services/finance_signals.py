@@ -18,6 +18,7 @@ from app.models.schemas import (
     FinanceSignalsData,
     FinanceWatchlistItem,
 )
+from finance_signals import main as worker_main
 
 _CONFIG_WRITE_LOCK = threading.RLock()
 
@@ -112,8 +113,6 @@ class FinanceSignalsService:
                 )
 
         ai_insight_text = str(payload.get("ai_insight_text", "")).strip()
-        if not ai_insight_text:
-            ai_insight_text = "今日暂无高优先级金融与时政新闻。"
 
         news_last_fetch_time = str(payload.get("news_last_fetch_time", "")).strip()
         news_debug_raw = payload.get("news_debug")
@@ -128,6 +127,14 @@ class FinanceSignalsService:
                     news_debug_raw.get("matched_entries_count")
                 ),
                 top_news_count=self._safe_int(news_debug_raw.get("top_news_count")),
+                digest_item_count=self._safe_int(news_debug_raw.get("digest_item_count")),
+                digest_prompt_chars=self._safe_int(
+                    news_debug_raw.get("digest_prompt_chars")
+                ),
+                digest_status=str(news_debug_raw.get("digest_status", "")).strip(),
+                digest_last_generated_at=str(
+                    news_debug_raw.get("digest_last_generated_at", "")
+                ).strip(),
                 top_unmatched_titles=self._safe_str_list(
                     news_debug_raw.get("top_unmatched_titles")
                 ),
@@ -165,6 +172,73 @@ class FinanceSignalsService:
             news_debug=news_debug,
             market_alert_debug=market_alert_debug,
         )
+
+    async def trigger_news_digest(self) -> FinanceSignalsData:
+        config = worker_main.load_config(self._config_path)
+        news_result = await worker_main.run_news_job(config)
+        fetch_time = worker_main.now_text(config)
+        digest_state = await worker_main.generate_news_digest(
+            config=config,
+            digest_items=list(news_result.get("digest_candidates", [])),
+        )
+
+        status_path = self._resolve_status_path()
+        existing_payload = self._load_status_payload(status_path)
+        news_debug = dict(
+            news_result.get(
+                "debug",
+                {
+                    "entries_scanned": 0,
+                    "entries_filtered_by_source": 0,
+                    "matched_entries_count": 0,
+                    "top_news_count": 0,
+                    "digest_item_count": 0,
+                    "digest_prompt_chars": 0,
+                    "digest_status": "",
+                    "digest_last_generated_at": "",
+                    "top_unmatched_titles": [],
+                },
+            )
+        )
+        news_debug["digest_prompt_chars"] = int(digest_state.get("prompt_chars", 0))
+        news_debug["digest_item_count"] = int(digest_state.get("item_count", 0))
+        news_debug["digest_status"] = str(digest_state.get("status", "")).strip()
+        news_debug["digest_last_generated_at"] = str(
+            digest_state.get("generated_at", "")
+        ).strip()
+
+        payload = {
+            "update_time": fetch_time,
+            "news_last_fetch_time": fetch_time,
+            "watchlist_preview": existing_payload.get("watchlist_preview", []),
+            "top_news": news_result.get("top_news", []),
+            "watchlist_ntfy_enabled": bool(
+                existing_payload.get("watchlist_ntfy_enabled", self.get_watchlist_ntfy_enabled())
+            ),
+            "ai_insight_text": str(digest_state.get("text", "")).strip(),
+            "news_debug": news_debug,
+            "market_alert_debug": existing_payload.get(
+                "market_alert_debug",
+                {
+                    "enabled": False,
+                    "sent": False,
+                    "last_alert_time": "",
+                    "last_alert_signature": "",
+                    "last_alert_summary": "",
+                    "last_alert_status": "",
+                },
+            ),
+        }
+        output_cfg = config.get("output", {})
+        indent = int(output_cfg.get("json_indent", 2))
+        ensure_ascii = bool(output_cfg.get("ensure_ascii", False))
+        worker_main.write_json_atomic_sync(
+            target_path=status_path,
+            payload=payload,
+            indent=indent,
+            ensure_ascii=ensure_ascii,
+        )
+        return self.get_dashboard_state()
 
     def get_watchlist_ntfy_enabled(self) -> bool:
         cfg = self._load_config()
@@ -210,6 +284,27 @@ class FinanceSignalsService:
         if raw_path.is_absolute():
             return raw_path
         return (config_dir / raw_path).resolve()
+
+    def _load_status_payload(self, status_path: Path) -> dict[str, Any]:
+        if not status_path.exists():
+            return {}
+        try:
+            payload = json.loads(status_path.read_text(encoding="utf-8"))
+        except Exception as exc:  # noqa: BLE001
+            raise AppError(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message="Finance Signals 状态文件解析失败。",
+                status_code=502,
+                details={"error": str(exc), "path": str(status_path)},
+            ) from exc
+        if not isinstance(payload, dict):
+            raise AppError(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message="Finance Signals 状态文件格式非法。",
+                status_code=502,
+                details={"path": str(status_path), "type": type(payload).__name__},
+            )
+        return payload
 
     def _load_alert_hints(self) -> dict[str, str]:
         cfg = self._load_config()

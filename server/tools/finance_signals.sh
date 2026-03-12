@@ -215,10 +215,14 @@ start_job() {
   fi
 
   mkdir -p "$TMP_DIR"
+  local pythonpath_value="$SERVER_DIR"
+  if [[ -n "${PYTHONPATH:-}" ]]; then
+    pythonpath_value="$SERVER_DIR:$PYTHONPATH"
+  fi
   if command -v setsid >/dev/null 2>&1; then
-    setsid "$PYTHON_BIN" "$APP_FILE" > "$LOG_FILE" 2>&1 < /dev/null &
+    env PYTHONPATH="$pythonpath_value" setsid "$PYTHON_BIN" "$APP_FILE" > "$LOG_FILE" 2>&1 < /dev/null &
   else
-    nohup "$PYTHON_BIN" "$APP_FILE" > "$LOG_FILE" 2>&1 < /dev/null &
+    env PYTHONPATH="$pythonpath_value" nohup "$PYTHON_BIN" "$APP_FILE" > "$LOG_FILE" 2>&1 < /dev/null &
   fi
 
   local pid

@@ -160,6 +160,41 @@ def test_update_finance_watchlist_ntfy(monkeypatch) -> None:
     assert body["data"]["enabled"] is False
 
 
+def test_trigger_finance_news_digest(monkeypatch) -> None:
+    class _FakeFinanceSignalsService:
+        async def trigger_news_digest(self) -> FinanceSignalsData:
+            return FinanceSignalsData(
+                update_time="2026-03-10 18:00:00",
+                news_last_fetch_time="2026-03-10 18:00:00",
+                news_stale=False,
+                watchlist_preview=[],
+                top_news=[],
+                watchlist_ntfy_enabled=False,
+                ai_insight_text="## 24小时摘要\n\n- 已生成。",
+                news_debug=FinanceNewsDebugData(
+                    digest_item_count=12,
+                    digest_prompt_chars=1412,
+                    digest_status="generated",
+                    digest_last_generated_at="2026-03-10 18:00:00",
+                ),
+                market_alert_debug=FinanceMarketAlertDebugData(),
+            )
+
+    monkeypatch.setattr(
+        routes_module,
+        "_get_finance_signals_service",
+        lambda: _FakeFinanceSignalsService(),
+    )
+
+    resp = client.post("/api/finance/signals/digest")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["data"]["ai_insight_text"].startswith("## 24小时摘要")
+    assert body["data"]["news_debug"]["digest_status"] == "generated"
+    assert body["data"]["news_debug"]["digest_prompt_chars"] == 1412
+
+
 def test_asset_fill_from_images_returns_structured_amounts() -> None:
     files = [
         ("images", ("asset-1.jpg", b"\xff\xd8\xff\xdbmock1", "image/jpeg")),

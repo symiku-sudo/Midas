@@ -143,6 +143,8 @@ data class FinanceSignalsUiState(
     val topNews: List<FinanceNewsItem> = emptyList(),
     val watchlistNtfyEnabled: Boolean = false,
     val isUpdatingWatchlistNtfy: Boolean = false,
+    val isGeneratingNewsDigest: Boolean = false,
+    val digestLastGeneratedAt: String = "",
     val aiInsightText: String = "",
     val assetDrafts: List<AssetCategoryDraft> = defaultAssetDrafts(),
     val assetTotalAmount: Double = 0.0,
@@ -1513,25 +1515,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 when (val result = apiRepository.getFinanceSignals(baseUrl)) {
                     is AppResult.Success -> {
-                        val insight = result.data.aiInsightText.ifBlank {
-                            "市场与舆情暂无异常信号，维持常规观察。"
-                        }
                         val status = if (result.data.updateTime.isNotBlank()) {
                             "最近更新：${result.data.updateTime}"
                         } else {
                             "已拉取财经信号面板数据。"
                         }
                         _financeState.update {
-                            it.copy(
+                            applyFinanceSignalsData(
+                                current = it,
+                                data = result.data,
                                 isLoading = false,
-                                updateTime = result.data.updateTime,
-                                newsLastFetchTime = result.data.newsLastFetchTime,
-                                newsIsStale = result.data.newsStale,
-                                watchlistPreview = result.data.watchlistPreview,
-                                topNews = result.data.topNews,
-                                watchlistNtfyEnabled = result.data.watchlistNtfyEnabled,
-                                aiInsightText = insight,
-                                errorMessage = "",
                                 statusMessage = status,
                             )
                         }
@@ -1554,6 +1547,63 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             } finally {
                 financeSignalsJob = null
+            }
+        }
+    }
+
+    fun generateFinanceNewsDigest() {
+        val baseUrl = requireBaseUrl {
+            _financeState.update {
+                it.copy(
+                    isGeneratingNewsDigest = false,
+                    errorMessage = "请先填写服务端地址。",
+                    statusMessage = "",
+                )
+            }
+        } ?: return
+        if (_financeState.value.isGeneratingNewsDigest) {
+            return
+        }
+        viewModelScope.launch {
+            _financeState.update {
+                it.copy(
+                    isGeneratingNewsDigest = true,
+                    errorMessage = "",
+                    statusMessage = "正在生成24小时新闻摘要...",
+                )
+            }
+            when (val result = apiRepository.triggerFinanceNewsDigest(baseUrl)) {
+                is AppResult.Success -> {
+                    val digestStatus = result.data.newsDebug.digestStatus
+                    val status = when (digestStatus) {
+                        "reused_recent" -> "距上次摘要不足 3 小时，已复用上次结果。"
+                        "local_fallback" -> "LLM 不可用，已返回本地摘要。"
+                        "fallback" -> "摘要生成失败，已回退本地摘要。"
+                        else -> "24小时新闻摘要已更新。"
+                    }
+                    _financeState.update {
+                        applyFinanceSignalsData(
+                            current = it,
+                            data = result.data,
+                            isGeneratingNewsDigest = false,
+                            statusMessage = status,
+                        )
+                    }
+                }
+
+                is AppResult.Error -> {
+                    _financeState.update {
+                        it.copy(
+                            isGeneratingNewsDigest = false,
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.CONNECTION,
+                            ),
+                            statusMessage = "",
+                        )
+                    }
+                }
             }
         }
     }
@@ -1608,6 +1658,29 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 }
             }
         }
+    }
+
+    private fun applyFinanceSignalsData(
+        current: FinanceSignalsUiState,
+        data: com.midas.client.data.model.FinanceSignalsData,
+        isLoading: Boolean = current.isLoading,
+        isGeneratingNewsDigest: Boolean = current.isGeneratingNewsDigest,
+        statusMessage: String = current.statusMessage,
+    ): FinanceSignalsUiState {
+        return current.copy(
+            isLoading = isLoading,
+            updateTime = data.updateTime,
+            newsLastFetchTime = data.newsLastFetchTime,
+            newsIsStale = data.newsStale,
+            watchlistPreview = data.watchlistPreview,
+            topNews = data.topNews,
+            watchlistNtfyEnabled = data.watchlistNtfyEnabled,
+            isGeneratingNewsDigest = isGeneratingNewsDigest,
+            digestLastGeneratedAt = data.newsDebug.digestLastGeneratedAt,
+            aiInsightText = data.aiInsightText,
+            errorMessage = "",
+            statusMessage = statusMessage,
+        )
     }
 
     private fun loadLocalAssetStats() {

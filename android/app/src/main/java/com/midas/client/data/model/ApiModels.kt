@@ -40,6 +40,27 @@ data class FinanceNewsItem(
     @Json(name = "matched_keywords") val matchedKeywords: List<String> = emptyList(),
 )
 
+data class FinanceNewsDebugData(
+    @Json(name = "entries_scanned") val entriesScanned: Int = 0,
+    @Json(name = "entries_filtered_by_source") val entriesFilteredBySource: Int = 0,
+    @Json(name = "matched_entries_count") val matchedEntriesCount: Int = 0,
+    @Json(name = "top_news_count") val topNewsCount: Int = 0,
+    @Json(name = "digest_item_count") val digestItemCount: Int = 0,
+    @Json(name = "digest_prompt_chars") val digestPromptChars: Int = 0,
+    @Json(name = "digest_status") val digestStatus: String = "",
+    @Json(name = "digest_last_generated_at") val digestLastGeneratedAt: String = "",
+    @Json(name = "top_unmatched_titles") val topUnmatchedTitles: List<String> = emptyList(),
+)
+
+data class FinanceMarketAlertDebugData(
+    @Json(name = "alert_enabled") val alertEnabled: Boolean = false,
+    @Json(name = "alert_sent") val alertSent: Boolean = false,
+    @Json(name = "last_alert_time") val lastAlertTime: String = "",
+    @Json(name = "last_alert_signature") val lastAlertSignature: String = "",
+    @Json(name = "last_alert_summary") val lastAlertSummary: String = "",
+    @Json(name = "last_alert_status") val lastAlertStatus: String = "",
+)
+
 data class FinanceSignalsData(
     @Json(name = "update_time") val updateTime: String = "",
     @Json(name = "news_last_fetch_time") val newsLastFetchTime: String = "",
@@ -48,6 +69,8 @@ data class FinanceSignalsData(
     @Json(name = "top_news") val topNews: List<FinanceNewsItem> = emptyList(),
     @Json(name = "watchlist_ntfy_enabled") val watchlistNtfyEnabled: Boolean = false,
     @Json(name = "ai_insight_text") val aiInsightText: String = "",
+    @Json(name = "news_debug") val newsDebug: FinanceNewsDebugData = FinanceNewsDebugData(),
+    @Json(name = "market_alert_debug") val marketAlertDebug: FinanceMarketAlertDebugData = FinanceMarketAlertDebugData(),
 )
 
 data class FinanceWatchlistNtfyUpdateRequest(

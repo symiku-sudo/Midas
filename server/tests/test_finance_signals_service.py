@@ -60,6 +60,10 @@ market_data:
             "entries_filtered_by_source": 2,
             "matched_entries_count": 7,
             "top_news_count": 5,
+            "digest_item_count": 11,
+            "digest_prompt_chars": 5241,
+            "digest_status": "generated",
+            "digest_last_generated_at": "2026-03-10 12:00:00",
             "top_unmatched_titles": ["地方政策解读长文"],
         },
         "market_alert_debug": {
@@ -87,6 +91,10 @@ market_data:
     assert data.news_debug.entries_filtered_by_source == 2
     assert data.news_debug.matched_entries_count == 7
     assert data.news_debug.top_news_count == 5
+    assert data.news_debug.digest_item_count == 11
+    assert data.news_debug.digest_prompt_chars == 5241
+    assert data.news_debug.digest_status == "generated"
+    assert data.news_debug.digest_last_generated_at == "2026-03-10 12:00:00"
     assert data.news_debug.top_unmatched_titles == ["地方政策解读长文"]
     assert data.market_alert_debug.alert_sent is True
     assert data.market_alert_debug.last_alert_status == "sent"
@@ -127,6 +135,7 @@ market_data:
 
     assert data.news_last_fetch_time == ""
     assert data.news_stale is True
+    assert data.ai_insight_text == ""
 
 
 def test_finance_signals_service_updates_watchlist_ntfy_toggle(tmp_path: Path) -> None:

@@ -21,7 +21,7 @@ market_data:
   price_round_digits: 2
   change_round_digits: 2
   alerting:
-    enabled: false
+    enabled: true
     ntfy_config_file: ../../.tmp/ntfy/notify.env
     state_file: ../.tmp/finance_market_alert_state.json
     cooldown_seconds: 1800
@@ -73,8 +73,30 @@ news:
     max_unmatched_titles: 5
     stale_after_seconds: 900
     topic_similarity_threshold: 0.55
+  digest:
+    enabled: true
+    max_items: 12
+    max_summary_chars_per_item: 240
+    prompt_char_limit: 7000
+    reuse_within_seconds: 10800
+    state_file: ../.tmp/finance_news_digest_state.json
   filters:
-    source_allowlist: []
+    source_allowlist:
+    - Reuters
+    - 路透
+    - Bloomberg
+    - 彭博社
+    - Financial Times
+    - 华尔街见闻
+    - 财联社
+    - 新华网
+    - 央视新闻
+    - 人民日报
+    - 人民网
+    - BBC
+    - 美国之音
+    - CME Group
+    - 新浪财经
     source_blocklist: []
     domain_allowlist: []
     domain_blocklist: []
@@ -163,6 +185,26 @@ news:
       - 外交
       - 军援
       - 预算
+      exclude_title_if_contains:
+      - 董事会
+      - 职工董事
+      - 换届
+      - 校友会
+      - 校友
+      - 学校
+      require_context_if_keywords:
+        选举:
+        - 大选
+        - 总统
+        - 国会
+        - 议会
+        - 政府
+        - 白宫
+        - 候选人
+        - 选民
+        - 投票
+        - 内阁
+        - 总理
   negation_prefixes:
   - 未
   - 并未
