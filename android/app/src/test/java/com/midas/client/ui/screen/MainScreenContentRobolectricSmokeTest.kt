@@ -482,6 +482,9 @@ class MainScreenContentRobolectricSmokeTest {
         composeRule.waitForIdle()
 
         composeRule.onNodeWithText("复制资产情况").performScrollTo().performClick()
+        composeRule.onNodeWithTag("asset_toggle_history_button", useUnmergedTree = true)
+            .performScrollTo()
+            .performClick()
         composeRule.onNodeWithTag("asset_history_open_$historyId").performScrollTo().performClick()
         composeRule.onNodeWithText("返回列表").performScrollTo().performClick()
         composeRule.onNodeWithTag("asset_history_menu_$historyId").performScrollTo().performClick()

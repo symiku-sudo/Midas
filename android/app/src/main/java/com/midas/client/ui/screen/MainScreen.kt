@@ -1772,6 +1772,24 @@ private fun financeReasonLabel(code: String): String {
     }
 }
 
+private data class AssetBreakdownItem(
+    val label: String,
+    val amountWan: Double,
+)
+
+private fun collectNonZeroAssetBreakdown(
+    drafts: List<AssetCategoryDraft>,
+): List<AssetBreakdownItem> {
+    return drafts.mapNotNull { draft ->
+        val amount = draft.amountInput.trim().replace(",", "").toDoubleOrNull() ?: 0.0
+        if (amount > 0.0) {
+            AssetBreakdownItem(label = draft.label, amountWan = amount)
+        } else {
+            null
+        }
+    }.sortedByDescending { it.amountWan }
+}
+
 @Composable
 private fun AssetStatsCard(
     state: FinanceSignalsUiState,
@@ -1784,6 +1802,11 @@ private fun AssetStatsCard(
     val context = LocalContext.current
     var selectedHistoryId by remember { mutableStateOf<String?>(null) }
     val selectedHistory = state.assetHistory.firstOrNull { it.id == selectedHistoryId }
+    val nonZeroBreakdown = collectNonZeroAssetBreakdown(state.assetDrafts)
+    var showEditor by remember(state.assetHistory.size) {
+        mutableStateOf(state.assetHistory.isEmpty() && nonZeroBreakdown.isEmpty())
+    }
+    var showHistory by remember(state.assetHistory.size) { mutableStateOf(false) }
     BackHandler(enabled = selectedHistoryId != null) {
         selectedHistoryId = null
     }
@@ -1797,43 +1820,89 @@ private fun AssetStatsCard(
         return
     }
 
-    GlassCard(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text("资产分类录入", style = MaterialTheme.typography.titleSmall)
-            Text(
-                "按风险从高到低排序，单位：万元人民币。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            Text(
-                "资产合计：${formatAmountWanRmb(state.assetTotalAmount)}",
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            state.assetDrafts.forEach { draft ->
-                OutlinedTextField(
-                    value = draft.amountInput,
-                    onValueChange = { value ->
-                        onAssetAmountChange(draft.key, value)
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text("资产总览", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    text = formatAmountWanRmb(state.assetTotalAmount),
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = if (state.assetHistory.isNotEmpty()) {
+                        "最近保存：${state.assetHistory.first().savedAt}"
+                    } else {
+                        "最近保存：暂无历史记录"
                     },
-                    label = { Text(draft.label) },
-                    placeholder = { Text("例如：12.50（万元）") },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = "非零分类 ${nonZeroBreakdown.size} 项 · 历史记录 ${state.assetHistory.size} 条",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (nonZeroBreakdown.isEmpty()) {
+                    Text(
+                        "还没有录入资产分类，先展开下方“编辑资产分类”。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    nonZeroBreakdown.take(3).forEach { item ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                text = item.label,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                            Text(
+                                text = formatAmountWanRmb(item.amountWan),
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                    if (nonZeroBreakdown.size > 3) {
+                        Text(
+                            "其余 ${nonZeroBreakdown.size - 3} 项已折叠到编辑区。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                MidasButton(
+                    onClick = { showEditor = !showEditor },
                     modifier = Modifier
                         .fillMaxWidth()
-                        .testTag("asset_amount_${draft.key}"),
-                    singleLine = true,
-                )
-            }
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MidasButton(
-                    onClick = onSaveAssetStats,
-                    enabled = !state.isSavingAssetStats && !state.isFillingAssetFromImages,
-                    tone = ButtonTone.SUCCESS,
+                        .testTag("asset_toggle_editor_button"),
+                    tone = if (showEditor) ButtonTone.NEUTRAL else ButtonTone.SUCCESS,
                 ) {
-                    SingleLineActionText(if (state.isSavingAssetStats) "保存中..." else "保存资产统计")
+                    SingleLineActionText(if (showEditor) "收起资产录入" else "编辑资产分类")
+                }
+                if (state.assetHistory.isNotEmpty()) {
+                    MidasButton(
+                        onClick = { showHistory = !showHistory },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("asset_toggle_history_button"),
+                        tone = ButtonTone.NEUTRAL,
+                    ) {
+                        SingleLineActionText(
+                            if (showHistory) {
+                                "收起历史记录"
+                            } else {
+                                "查看历史记录（${state.assetHistory.size}）"
+                            },
+                        )
+                    }
                 }
                 MidasButton(
                     onClick = {
@@ -1843,41 +1912,90 @@ private fun AssetStatsCard(
                         onAssetSummaryCopied()
                     },
                     enabled = !state.isFillingAssetFromImages,
+                    modifier = Modifier.fillMaxWidth(),
                     tone = ButtonTone.NEUTRAL,
                 ) {
                     SingleLineActionText("复制资产情况")
                 }
+                if (state.assetErrorMessage.isNotBlank()) {
+                    Text(text = state.assetErrorMessage, color = ErrorStatusColor)
+                }
+                if (state.assetStatusMessage.isNotBlank()) {
+                    Text(text = state.assetStatusMessage, color = SuccessStatusColor)
+                }
             }
-            MidasButton(
-                onClick = onFillAssetStatsFromImages,
-                enabled = !state.isFillingAssetFromImages && !state.isSavingAssetStats,
-                modifier = Modifier.testTag("asset_fill_from_images_button"),
-            ) {
-                SingleLineActionText(if (state.isFillingAssetFromImages) "识别中..." else "图片识别回填")
-            }
-            Text(
-                text = "支持最多上传 5 张图片，回填后不会自动保存。",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            if (state.assetErrorMessage.isNotBlank()) {
-                Text(text = state.assetErrorMessage, color = ErrorStatusColor)
-            }
-            if (state.assetStatusMessage.isNotBlank()) {
-                Text(text = state.assetStatusMessage, color = SuccessStatusColor)
-            }
+        }
 
-            HorizontalDivider()
-            Text("历史记录（近到远）", style = MaterialTheme.typography.titleSmall)
-            if (state.assetHistory.isEmpty()) {
-                Text("暂无历史记录。", style = MaterialTheme.typography.bodySmall)
-            } else {
-                state.assetHistory.forEach { record ->
-                    AssetHistoryListItem(
-                        record = record,
-                        onOpen = { selectedHistoryId = record.id },
-                        onDelete = { onDeleteAssetHistoryRecord(record.id) },
+        if (showEditor) {
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("资产分类录入", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "按风险从高到低排序，单位：万元人民币。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
+                    state.assetDrafts.forEach { draft ->
+                        OutlinedTextField(
+                            value = draft.amountInput,
+                            onValueChange = { value ->
+                                onAssetAmountChange(draft.key, value)
+                            },
+                            label = { Text(draft.label) },
+                            placeholder = { Text("例如：12.50（万元）") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("asset_amount_${draft.key}"),
+                            singleLine = true,
+                        )
+                    }
+                    MidasButton(
+                        onClick = onSaveAssetStats,
+                        enabled = !state.isSavingAssetStats && !state.isFillingAssetFromImages,
+                        modifier = Modifier.fillMaxWidth(),
+                        tone = ButtonTone.SUCCESS,
+                    ) {
+                        SingleLineActionText(
+                            if (state.isSavingAssetStats) "保存中..." else "保存资产统计",
+                        )
+                    }
+                    MidasButton(
+                        onClick = onFillAssetStatsFromImages,
+                        enabled = !state.isFillingAssetFromImages && !state.isSavingAssetStats,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("asset_fill_from_images_button"),
+                    ) {
+                        SingleLineActionText(
+                            if (state.isFillingAssetFromImages) "识别中..." else "图片识别回填",
+                        )
+                    }
+                    Text(
+                        text = "支持最多上传 5 张图片，回填后不会自动保存。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+        }
+
+        if (showHistory) {
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("历史记录（近到远）", style = MaterialTheme.typography.titleSmall)
+                    state.assetHistory.forEach { record ->
+                        AssetHistoryListItem(
+                            record = record,
+                            onOpen = { selectedHistoryId = record.id },
+                            onDelete = { onDeleteAssetHistoryRecord(record.id) },
+                        )
+                    }
                 }
             }
         }
