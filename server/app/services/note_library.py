@@ -20,6 +20,8 @@ from app.models.schemas import (
     NotesMergePreviewData,
     NotesMergeRollbackData,
     NotesMergeSuggestData,
+    UnifiedNoteItem,
+    UnifiedNotesData,
     XiaohongshuSavedNote,
     XiaohongshuSavedNotesData,
     XiaohongshuSyncedNotesPruneData,
@@ -189,6 +191,34 @@ class NoteLibraryService:
             for item in self._repository.list_xiaohongshu_notes()
         ]
         return XiaohongshuSavedNotesData(total=len(items), items=items)
+
+    def search_notes(
+        self,
+        *,
+        keyword: str = "",
+        source: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> UnifiedNotesData:
+        source_value = source.strip().lower()
+        if source_value and source_value not in _SUPPORTED_MERGE_SOURCES:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message=f"不支持的 notes source: {source}",
+                status_code=400,
+            )
+        total, items = self._repository.search_notes(
+            keyword=keyword,
+            source=source_value,
+            limit=limit,
+            offset=offset,
+        )
+        return UnifiedNotesData(
+            total=total,
+            limit=limit,
+            offset=offset,
+            items=[UnifiedNoteItem(**item) for item in items],
+        )
 
     def delete_xiaohongshu_note(self, note_id: str) -> int:
         return self._repository.delete_xiaohongshu_note(note_id)

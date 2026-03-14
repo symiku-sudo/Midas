@@ -7,6 +7,10 @@
 - 服务端（FastAPI）：已完成
   - `GET /health`
   - `GET /api/finance/signals`
+  - `POST /api/jobs/bilibili-summarize|xiaohongshu/summarize-url`
+  - `GET /api/jobs|/api/jobs/{job_id}`
+  - `POST /api/jobs/{job_id}/retry`
+  - `GET /api/notes/search`
   - `POST /api/bilibili/summarize`（`video_url` 支持完整链接或直接传 `BV` 号）
   - `POST /api/xiaohongshu/summarize-url`
   - `POST /api/xiaohongshu/auth/update`
@@ -144,6 +148,12 @@ tools/ntfy_notify.sh --config .tmp/ntfy/notify.env
 ## 说明
 
 - 当前小红书能力为“按 URL 总结单篇”。
+- 服务端异步任务中心支持任务历史、结果回看和失败/中断任务重试；历史保存在 `server/.tmp/async_jobs.json`。
+- 服务端支持可选访问令牌保护：当 `server/config.yaml` 里配置 `auth.access_token` 后，客户端需带 `Authorization: Bearer <token>`。
+- Android 端的 B 站/小红书面板现在都内置“最近任务”卡片，可刷新任务列表、查看成功结果，并对失败/中断任务直接重试。
+- Finance Signals 现在会把 Top5 新闻和 watchlist 标的做一层关联：新闻卡会显示“影响哪些关注项”，Watchlist 行会显示“最近关联新闻数”和命中关键词。
+- Finance Signals 还会返回第一版“今日关注建议”，把阈值触发和影响到 watchlist 的新闻整理成优先级更高的关注卡片，并附上建议动作。
+- 这些关注建议现在也带结构化 `action_type/reasons`，后面继续做筛选、排序和自动化动作时不用再从自然语言里反推。
 - Android 端左上角可切换“笔记系统 / 资产系统”；资产系统分为两屏：`Watchlist+新闻` 与 `资产统计`。
 - `Watchlist+新闻` 面板会在资产系统打开时自动轮询刷新；若新闻拉取超过阈值未更新，会显示“数据可能陈旧”提示。
 - Watchlist 行会显式展示监控阈值标签；当阈值触发时，标签颜色会切到高亮态，不再把行情警报混进新闻板块。

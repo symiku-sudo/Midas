@@ -29,6 +29,8 @@ data class FinanceWatchlistItem(
     @Json(name = "change_pct") val changePct: String = "N/A",
     @Json(name = "alert_hint") val alertHint: String = "",
     @Json(name = "alert_active") val alertActive: Boolean = false,
+    @Json(name = "related_news_count") val relatedNewsCount: Int = 0,
+    @Json(name = "related_keywords") val relatedKeywords: List<String> = emptyList(),
 )
 
 data class FinanceNewsItem(
@@ -38,6 +40,8 @@ data class FinanceNewsItem(
     val published: String = "",
     val category: String = "",
     @Json(name = "matched_keywords") val matchedKeywords: List<String> = emptyList(),
+    @Json(name = "related_symbols") val relatedSymbols: List<String> = emptyList(),
+    @Json(name = "related_watchlist_names") val relatedWatchlistNames: List<String> = emptyList(),
 )
 
 data class FinanceNewsDebugData(
@@ -61,12 +65,26 @@ data class FinanceMarketAlertDebugData(
     @Json(name = "last_alert_status") val lastAlertStatus: String = "",
 )
 
+data class FinanceFocusCard(
+    val title: String,
+    val summary: String = "",
+    val priority: String = "MEDIUM",
+    val kind: String = "NEWS",
+    @Json(name = "action_type") val actionType: String = "MONITOR",
+    @Json(name = "action_label") val actionLabel: String = "",
+    @Json(name = "action_hint") val actionHint: String = "",
+    val reasons: List<String> = emptyList(),
+    @Json(name = "related_symbols") val relatedSymbols: List<String> = emptyList(),
+    @Json(name = "related_watchlist_names") val relatedWatchlistNames: List<String> = emptyList(),
+)
+
 data class FinanceSignalsData(
     @Json(name = "update_time") val updateTime: String = "",
     @Json(name = "news_last_fetch_time") val newsLastFetchTime: String = "",
     @Json(name = "news_stale") val newsStale: Boolean = false,
     @Json(name = "watchlist_preview") val watchlistPreview: List<FinanceWatchlistItem> = emptyList(),
     @Json(name = "top_news") val topNews: List<FinanceNewsItem> = emptyList(),
+    @Json(name = "focus_cards") val focusCards: List<FinanceFocusCard> = emptyList(),
     @Json(name = "watchlist_ntfy_enabled") val watchlistNtfyEnabled: Boolean = false,
     @Json(name = "ai_insight_text") val aiInsightText: String = "",
     @Json(name = "news_debug") val newsDebug: FinanceNewsDebugData = FinanceNewsDebugData(),
@@ -116,6 +134,51 @@ data class AssetCurrentUpdateRequest(
     val amounts: Map<String, Double>,
 )
 
+data class AsyncJobCreateData(
+    @Json(name = "job_id") val jobId: String,
+    @Json(name = "job_type") val jobType: String,
+    val status: String,
+    val message: String,
+    @Json(name = "submitted_at") val submittedAt: String,
+    @Json(name = "retry_of_job_id") val retryOfJobId: String = "",
+)
+
+data class AsyncJobErrorData(
+    val code: String,
+    val message: String,
+    val details: Map<String, Any?>? = null,
+)
+
+data class AsyncJobListItemData(
+    @Json(name = "job_id") val jobId: String,
+    @Json(name = "job_type") val jobType: String,
+    val status: String,
+    val message: String,
+    @Json(name = "submitted_at") val submittedAt: String,
+    @Json(name = "started_at") val startedAt: String = "",
+    @Json(name = "finished_at") val finishedAt: String = "",
+    @Json(name = "retry_of_job_id") val retryOfJobId: String = "",
+)
+
+data class AsyncJobListData(
+    val total: Int,
+    val items: List<AsyncJobListItemData>,
+)
+
+data class AsyncJobStatusData(
+    @Json(name = "job_id") val jobId: String,
+    @Json(name = "job_type") val jobType: String,
+    val status: String,
+    val message: String,
+    @Json(name = "submitted_at") val submittedAt: String,
+    @Json(name = "started_at") val startedAt: String = "",
+    @Json(name = "finished_at") val finishedAt: String = "",
+    @Json(name = "retry_of_job_id") val retryOfJobId: String = "",
+    @Json(name = "request_payload") val requestPayload: Map<String, Any?> = emptyMap(),
+    val result: Map<String, Any?>? = null,
+    val error: AsyncJobErrorData? = null,
+)
+
 data class BilibiliSummaryRequest(
     @Json(name = "video_url") val videoUrl: String
 )
@@ -148,6 +211,22 @@ data class BilibiliSavedNote(
 data class BilibiliSavedNotesData(
     val total: Int,
     val items: List<BilibiliSavedNote>
+)
+
+data class UnifiedNoteItem(
+    val source: String,
+    @Json(name = "note_id") val noteId: String,
+    val title: String,
+    @Json(name = "source_url") val sourceUrl: String,
+    @Json(name = "summary_markdown") val summaryMarkdown: String,
+    @Json(name = "saved_at") val savedAt: String,
+)
+
+data class UnifiedNotesData(
+    val total: Int,
+    val limit: Int,
+    val offset: Int,
+    val items: List<UnifiedNoteItem>,
 )
 
 data class XiaohongshuSummarizeUrlRequest(

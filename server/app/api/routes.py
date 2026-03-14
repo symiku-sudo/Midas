@@ -6,12 +6,15 @@ from functools import lru_cache
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, File, Request, UploadFile
+from fastapi import APIRouter, File, Query, Request, UploadFile
 
 from app.core.config import clear_settings_cache, get_settings
 from app.core.errors import AppError, ErrorCode
 from app.core.response import success_response
 from app.models.schemas import (
+    AsyncJobCreateData,
+    AsyncJobListData,
+    AsyncJobStatusData,
     AssetCurrentData,
     AssetCurrentUpdateRequest,
     AssetSnapshotHistoryData,
@@ -37,6 +40,7 @@ from app.models.schemas import (
     NotesMergeSuggestRequest,
     NotesDeleteData,
     NotesSaveBatchData,
+    UnifiedNotesData,
     XiaohongshuAuthUpdateData,
     XiaohongshuAuthUpdateRequest,
     XiaohongshuCaptureRefreshData,
@@ -45,6 +49,7 @@ from app.models.schemas import (
     XiaohongshuSyncedNotesPruneData,
 )
 from app.services.bilibili import BilibiliSummarizer
+from app.services.async_jobs import AsyncJobService
 from app.services.asset_image_fill import AssetImageFillService
 from app.services.asset_snapshots import AssetSnapshotService
 from app.services.editable_config import EditableConfigService
@@ -105,6 +110,17 @@ def _reload_runtime_services() -> None:
     _get_finance_signals_service.cache_clear()
     _get_asset_image_fill_service.cache_clear()
     _get_asset_snapshot_service.cache_clear()
+
+
+def _get_async_job_service(request: Request) -> AsyncJobService:
+    service = getattr(request.app.state, "async_job_service", None)
+    if service is None:
+        raise AppError(
+            code=ErrorCode.INTERNAL_ERROR,
+            message="异步任务服务尚未初始化。",
+            status_code=500,
+        )
+    return service
 
 
 def _count_cookie_pairs(raw_cookie: str) -> int:
@@ -183,6 +199,16 @@ async def _probe_xiaohongshu_web_identity(
     if guest is None:
         return None
     return user_id, guest
+
+
+async def run_bilibili_summary_job(video_url: str):
+    summarizer = _get_summarizer()
+    return await summarizer.summarize(video_url)
+
+
+async def run_xiaohongshu_summary_job(url: str):
+    service = _get_xiaohongshu_sync_service()
+    return await service.summarize_url(url)
 
 
 @router.get("/health")
@@ -270,6 +296,63 @@ async def delete_asset_snapshot(record_id: str, request: Request) -> dict:
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 
+@router.post("/api/jobs/bilibili-summarize")
+async def create_bilibili_summarize_job(
+    payload: BilibiliSummaryRequest, request: Request
+) -> dict:
+    service = _get_async_job_service(request)
+    data: AsyncJobCreateData = await service.create_bilibili_summary_job(
+        video_url=payload.video_url,
+        request_id=request.state.request_id,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/jobs/xiaohongshu/summarize-url")
+async def create_xiaohongshu_summarize_job(
+    payload: XiaohongshuUrlSummaryRequest, request: Request
+) -> dict:
+    service = _get_async_job_service(request)
+    data: AsyncJobCreateData = await service.create_xiaohongshu_summary_job(
+        url=payload.url,
+        request_id=request.state.request_id,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/jobs")
+async def list_async_jobs(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+    status: str = Query(default=""),
+    job_type: str = Query(default=""),
+) -> dict:
+    service = _get_async_job_service(request)
+    data: AsyncJobListData = await service.list_jobs(
+        limit=limit,
+        status=status,
+        job_type=job_type,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/jobs/{job_id}")
+async def get_async_job(job_id: str, request: Request) -> dict:
+    service = _get_async_job_service(request)
+    data: AsyncJobStatusData = await service.get_job(job_id)
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/jobs/{job_id}/retry")
+async def retry_async_job(job_id: str, request: Request) -> dict:
+    service = _get_async_job_service(request)
+    data: AsyncJobCreateData = await service.retry_job(
+        job_id=job_id,
+        request_id=request.state.request_id,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
 @router.post("/api/bilibili/summarize")
 async def bilibili_summarize(payload: BilibiliSummaryRequest, request: Request) -> dict:
     logger.info("Receive summarize request: %s", payload.video_url)
@@ -295,6 +378,24 @@ async def save_bilibili_note(payload: BilibiliNoteSaveRequest, request: Request)
 async def list_bilibili_notes(request: Request) -> dict:
     service = _get_note_library_service()
     result = service.list_bilibili_notes()
+    return success_response(data=result.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/notes/search")
+async def search_notes(
+    request: Request,
+    keyword: str = Query(default=""),
+    source: str = Query(default=""),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    service = _get_note_library_service()
+    result: UnifiedNotesData = service.search_notes(
+        keyword=keyword,
+        source=source,
+        limit=limit,
+        offset=offset,
+    )
     return success_response(data=result.model_dump(), request_id=request.state.request_id)
 
 

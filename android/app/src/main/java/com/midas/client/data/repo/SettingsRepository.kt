@@ -2,6 +2,7 @@ package com.midas.client.data.repo
 
 import android.content.Context
 import androidx.core.content.edit
+import com.midas.client.data.network.ServerAuthState
 import com.midas.client.util.UrlNormalizer
 import org.json.JSONArray
 import org.json.JSONObject
@@ -26,6 +27,19 @@ class SettingsRepository(context: Context) {
         prefs.edit {
             putString(KEY_SERVER_BASE_URL, normalized)
         }
+        return normalized
+    }
+
+    fun getServerAccessToken(): String {
+        return prefs.getString(KEY_SERVER_ACCESS_TOKEN, "")?.trim().orEmpty()
+    }
+
+    fun saveServerAccessToken(token: String): String {
+        val normalized = token.trim()
+        prefs.edit {
+            putString(KEY_SERVER_ACCESS_TOKEN, normalized)
+        }
+        ServerAuthState.updateAccessToken(normalized)
         return normalized
     }
 
@@ -135,6 +149,7 @@ class SettingsRepository(context: Context) {
     companion object {
         private const val PREFS_NAME = "midas_client_prefs"
         private const val KEY_SERVER_BASE_URL = "server_base_url"
+        private const val KEY_SERVER_ACCESS_TOKEN = "server_access_token"
         private const val KEY_ASSET_CATEGORY_AMOUNTS = "asset_category_amounts"
         private const val KEY_ASSET_SNAPSHOT_HISTORY = "asset_snapshot_history"
         private const val DEFAULT_SERVER_BASE_URL = "http://100.98.44.5:8000/"

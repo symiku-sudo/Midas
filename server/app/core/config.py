@@ -142,6 +142,10 @@ class RuntimeConfig(BaseModel):
     backup: BackupConfig = Field(default_factory=BackupConfig)
 
 
+class AuthConfig(BaseModel):
+    access_token: str = ""
+
+
 class NotesMergeConfig(BaseModel):
     semantic_similarity_enabled: bool = True
     semantic_model_name: str = "BAAI/bge-small-zh-v1.5"
@@ -163,6 +167,7 @@ class Settings(BaseModel):
         default_factory=AssetImageFillConfig
     )
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
     notes_merge: NotesMergeConfig = Field(default_factory=NotesMergeConfig)
 
 

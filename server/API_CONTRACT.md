@@ -26,6 +26,12 @@ Failure:
 }
 ```
 
+## Authentication
+
+- 默认关闭。
+- 当 `config.yaml` 配置了 `auth.access_token` 且非空时，除 `GET /health` 外的接口都需要携带 `Authorization: Bearer <token>` 或 `X-Midas-Token: <token>`。
+- 缺失或错误时返回 `401` + `AUTH_EXPIRED`。
+
 ## Endpoints
 
 ## `GET /health`
@@ -57,7 +63,9 @@ Success `data`:
       "price": 91.23,
       "change_pct": "+1.2%",
       "alert_hint": ">90",
-      "alert_active": true
+      "alert_active": true,
+      "related_news_count": 1,
+      "related_keywords": ["原油"]
     }
   ],
   "top_news": [
@@ -67,7 +75,23 @@ Success `data`:
       "publisher": "Reuters",
       "published": "2026-03-05 11:40:00",
       "category": "finance",
-      "matched_keywords": ["美联储", "降息"]
+      "matched_keywords": ["美联储", "降息"],
+      "related_symbols": ["BZ=F"],
+      "related_watchlist_names": ["布伦特原油"]
+    }
+  ],
+  "focus_cards": [
+    {
+      "title": "布伦特原油 已触发监控阈值",
+      "summary": "阈值条件：>90；最近关联新闻 1 条",
+      "priority": "HIGH",
+      "kind": "ALERT",
+      "action_type": "REVIEW_NOW",
+      "action_label": "立即复核",
+      "action_hint": "先看价格异动和关联新闻，再决定是否提升观察频率。",
+      "reasons": ["threshold_triggered", "related_news_present"],
+      "related_symbols": ["BZ=F"],
+      "related_watchlist_names": ["布伦特原油"]
     }
   ],
   "watchlist_ntfy_enabled": true,
@@ -101,6 +125,12 @@ Success `data`:
 - 若状态文件内容损坏，接口返回 `UPSTREAM_ERROR`。
 - `news_last_fetch_time` / `news_stale` 用于客户端识别新闻抓取是否陈旧。
 - `top_news` 为“今日金融与时政新闻 Top5”结构化列表，已按时效、来源权重、主题关键词和跨源覆盖加权后去重。
+- `focus_cards` 为服务端按规则生成的“今日关注建议”，当前会优先覆盖“阈值已触发的标的”和“明确影响 watchlist 的新闻”两类信号。
+- `focus_cards[].action_type` 为结构化动作类型，当前包括 `REVIEW_NOW`、`FOLLOW_UP`、`MONITOR`。
+- `focus_cards[].action_label/action_hint` 提供建议动作和一句解释，便于客户端直接展示“现在该做什么”。
+- `focus_cards[].reasons` 为触发理由代码，当前会覆盖 `threshold_triggered`、`related_news_present`、`keyword_overlap`、`recent_alert_sent`、`news_impacts_watchlist`、`linked_alert_active`、`multi_asset_impact`。
+- `watchlist_preview[].related_news_count/related_keywords` 表示该关注标的在当前 Top5 新闻里的关联数量与命中关键词。
+- `top_news[].related_symbols/related_watchlist_names` 表示该新闻可能影响的关注标的，服务端会根据 `finance_signals/financial_config.yaml` 里的 `market_data.instruments[].aliases` 做映射。
 - `watchlist_ntfy_enabled` 表示 Watchlist 行情阈值 ntfy 通知当前开关状态。
 - `ai_insight_text` 仅在用户主动触发摘要按钮后写入；未触发时允许为空字符串。
 - `news_debug` 用于排查“有新闻但未进入 Top5”的召回/排序问题，以及观察 24 小时摘要的样本数与单次 prompt 文本长度。
@@ -133,7 +163,27 @@ Success `data`:
 
 ```json
 {
-  "enabled": false
+  "update_time": "2026-03-10 18:00:00",
+  "news_last_fetch_time": "2026-03-10 18:00:00",
+  "news_stale": false,
+  "watchlist_preview": [],
+  "top_news": [],
+  "watchlist_ntfy_enabled": false,
+  "ai_insight_text": "## 24小时摘要\n\n- 已生成。",
+  "news_debug": {
+    "digest_item_count": 12,
+    "digest_prompt_chars": 1412,
+    "digest_status": "generated",
+    "digest_last_generated_at": "2026-03-10 18:00:00"
+  },
+  "market_alert_debug": {
+    "alert_enabled": false,
+    "alert_sent": false,
+    "last_alert_time": "",
+    "last_alert_signature": "",
+    "last_alert_summary": "",
+    "last_alert_status": ""
+  }
 }
 ```
 
@@ -306,6 +356,146 @@ Success `data`:
 }
 ```
 
+## `POST /api/jobs/bilibili-summarize`
+
+用途：以异步任务方式提交 B 站总结，请求会立即返回 `job_id`，实际总结由服务端后台 worker 顺序执行。
+
+Request:
+
+```json
+{
+  "video_url": "BV1xx411c7mD"
+}
+```
+
+Success `data`:
+
+```json
+{
+  "job_id": "9a7c4a1b4f6d4f1dbde7bdfce95d0d0e",
+  "job_type": "bilibili_summarize",
+  "status": "PENDING",
+  "message": "任务已入队，等待执行。",
+  "submitted_at": "2026-03-12 12:30:00",
+  "retry_of_job_id": ""
+}
+```
+
+说明：
+- `video_url` 规则与同步接口 `POST /api/bilibili/summarize` 一致。
+- 历史任务会持久化到 `server/.tmp/async_jobs.json`。
+
+## `POST /api/jobs/xiaohongshu/summarize-url`
+
+用途：以异步任务方式提交小红书单篇 URL 总结，请求会立即返回 `job_id`。
+
+Request:
+
+```json
+{
+  "url": "https://www.xiaohongshu.com/explore/67b8d0d1000000001d03f09a"
+}
+```
+
+Success `data`:
+
+```json
+{
+  "job_id": "92efc62e49024659adf843d60e2f7b16",
+  "job_type": "xiaohongshu_summarize_url",
+  "status": "PENDING",
+  "message": "任务已入队，等待执行。",
+  "submitted_at": "2026-03-12 12:31:00",
+  "retry_of_job_id": ""
+}
+```
+
+## `GET /api/jobs`
+
+用途：读取最近异步任务历史。
+
+Query：
+- `limit`：返回条数，默认 `20`，范围 `1~100`
+- `status`：可选，按 `PENDING/RUNNING/SUCCEEDED/FAILED/INTERRUPTED` 过滤
+- `job_type`：可选，当前支持 `bilibili_summarize`、`xiaohongshu_summarize_url`
+
+Success `data`:
+
+```json
+{
+  "total": 1,
+  "items": [
+    {
+      "job_id": "9a7c4a1b4f6d4f1dbde7bdfce95d0d0e",
+      "job_type": "bilibili_summarize",
+      "status": "SUCCEEDED",
+      "message": "任务执行完成。",
+      "submitted_at": "2026-03-12 12:30:00",
+      "started_at": "2026-03-12 12:30:01",
+      "finished_at": "2026-03-12 12:31:00",
+      "retry_of_job_id": ""
+    }
+  ]
+}
+```
+
+字段说明：
+- `retry_of_job_id`：若本任务由历史失败/中断任务重试创建，则这里会记录原任务 `job_id`；首次提交时为空字符串。
+
+## `GET /api/jobs/{job_id}`
+
+用途：读取单个异步任务状态和结果。
+
+Success `data`:
+
+```json
+{
+  "job_id": "9a7c4a1b4f6d4f1dbde7bdfce95d0d0e",
+  "job_type": "bilibili_summarize",
+  "status": "SUCCEEDED",
+  "message": "任务执行完成。",
+  "submitted_at": "2026-03-12 12:30:00",
+  "started_at": "2026-03-12 12:30:01",
+  "finished_at": "2026-03-12 12:31:00",
+  "retry_of_job_id": "",
+  "request_payload": {
+    "video_url": "https://www.bilibili.com/video/BV1xx411c7mD"
+  },
+  "result": {
+    "video_url": "https://www.bilibili.com/video/BV1xx411c7mD",
+    "summary_markdown": "# 总结",
+    "elapsed_ms": 1234,
+    "transcript_chars": 4567
+  },
+  "error": null
+}
+```
+
+失败说明：
+- 当 `job_id` 不存在时，返回 `404` + `JOB_NOT_FOUND`。
+- 服务启动时若发现历史任务残留在 `RUNNING`，会将其改写为 `INTERRUPTED`，并保留原请求体以便重新提交。
+
+## `POST /api/jobs/{job_id}/retry`
+
+用途：重试单个异步任务。当前仅支持 `FAILED` 或 `INTERRUPTED` 状态。
+
+Success `data`:
+
+```json
+{
+  "job_id": "4fd0a8dcb6d0493f8df59cbb0c383d91",
+  "job_type": "bilibili_summarize",
+  "status": "PENDING",
+  "message": "任务已入队，等待执行。",
+  "submitted_at": "2026-03-12 12:40:00",
+  "retry_of_job_id": "9a7c4a1b4f6d4f1dbde7bdfce95d0d0e"
+}
+```
+
+失败说明：
+- 当 `job_id` 不存在时，返回 `404` + `JOB_NOT_FOUND`。
+- 当原任务不是 `FAILED/INTERRUPTED`，或缺少原始请求参数时，返回 `400` + `INVALID_INPUT`。
+
 ## `POST /api/bilibili/summarize`
 
 Request:
@@ -385,6 +575,44 @@ Success `data`:
       "elapsed_ms": 12345,
       "transcript_chars": 8888,
       "saved_at": "2026-02-25 13:20:00"
+    }
+  ]
+}
+```
+
+## `GET /api/notes/search`
+
+用途：统一检索已保存笔记，当前会聚合 B 站和小红书结果，支持关键词、来源、分页。
+
+Query：
+- `keyword`：可选，按标题和摘要内容模糊匹配
+- `source`：可选，支持 `bilibili`、`xiaohongshu`
+- `limit`：默认 `50`，范围 `1~200`
+- `offset`：默认 `0`
+
+Success `data`:
+
+```json
+{
+  "total": 2,
+  "limit": 20,
+  "offset": 0,
+  "items": [
+    {
+      "source": "xiaohongshu",
+      "note_id": "x1",
+      "title": "美联储观察",
+      "source_url": "https://www.xiaohongshu.com/explore/x1",
+      "summary_markdown": "# 降息交易",
+      "saved_at": "2026-03-03 08:00:00"
+    },
+    {
+      "source": "bilibili",
+      "note_id": "b1",
+      "title": "宏观复盘",
+      "source_url": "https://www.bilibili.com/video/BV1xx411c7mD",
+      "summary_markdown": "# 美联储与降息",
+      "saved_at": "2026-03-01 08:00:00"
     }
   ]
 }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import tempfile
 import threading
 from datetime import datetime
@@ -12,6 +13,7 @@ import yaml
 
 from app.core.errors import AppError, ErrorCode
 from app.models.schemas import (
+    FinanceFocusCard,
     FinanceMarketAlertDebugData,
     FinanceNewsItem,
     FinanceNewsDebugData,
@@ -62,7 +64,8 @@ class FinanceSignalsService:
             )
 
         watchlist_raw = payload.get("watchlist_preview") or []
-        watchlist: list[FinanceWatchlistItem] = []
+        watchlist_seed: list[dict[str, Any]] = []
+        instrument_aliases = self._load_instrument_aliases()
         if isinstance(watchlist_raw, list):
             for item in watchlist_raw:
                 if not isinstance(item, dict):
@@ -81,19 +84,20 @@ class FinanceSignalsService:
                         price_value = float(raw_price)
                     except (TypeError, ValueError):
                         price_value = None
-                watchlist.append(
-                    FinanceWatchlistItem(
-                        name=name,
-                        symbol=symbol,
-                        price=price_value,
-                        change_pct=change_pct,
-                        alert_hint=alert_hints.get(symbol, ""),
-                        alert_active=bool(item.get("alert_active", False)),
-                    )
+                watchlist_seed.append(
+                    {
+                        "name": name,
+                        "symbol": symbol,
+                        "price": price_value,
+                        "change_pct": change_pct,
+                        "alert_hint": alert_hints.get(symbol, ""),
+                        "alert_active": bool(item.get("alert_active", False)),
+                        "aliases": instrument_aliases.get(symbol, []),
+                    }
                 )
 
         top_news_raw = payload.get("top_news") or []
-        top_news: list[FinanceNewsItem] = []
+        top_news_seed: list[dict[str, Any]] = []
         if isinstance(top_news_raw, list):
             for item in top_news_raw:
                 if not isinstance(item, dict):
@@ -101,16 +105,21 @@ class FinanceSignalsService:
                 title = str(item.get("title", "")).strip()
                 if not title:
                     continue
-                top_news.append(
-                    FinanceNewsItem(
-                        title=title,
-                        link=str(item.get("link", "")).strip(),
-                        publisher=str(item.get("publisher", "")).strip(),
-                        published=str(item.get("published", "")).strip(),
-                        category=str(item.get("category", "")).strip(),
-                        matched_keywords=self._safe_str_list(item.get("matched_keywords")),
-                    )
+                top_news_seed.append(
+                    {
+                        "title": title,
+                        "link": str(item.get("link", "")).strip(),
+                        "publisher": str(item.get("publisher", "")).strip(),
+                        "published": str(item.get("published", "")).strip(),
+                        "category": str(item.get("category", "")).strip(),
+                        "matched_keywords": self._safe_str_list(item.get("matched_keywords")),
+                    }
                 )
+
+        watchlist, top_news = self._build_watchlist_news_links(
+            watchlist_seed=watchlist_seed,
+            top_news_seed=top_news_seed,
+        )
 
         ai_insight_text = str(payload.get("ai_insight_text", "")).strip()
 
@@ -165,6 +174,11 @@ class FinanceSignalsService:
             news_stale=self._compute_news_stale(news_last_fetch_time),
             watchlist_preview=watchlist,
             top_news=top_news,
+            focus_cards=self._build_focus_cards(
+                watchlist=watchlist,
+                top_news=top_news,
+                market_alert_debug=market_alert_debug,
+            ),
             watchlist_ntfy_enabled=bool(
                 payload.get("watchlist_ntfy_enabled", self.get_watchlist_ntfy_enabled())
             ),
@@ -330,6 +344,29 @@ class FinanceSignalsService:
                 hints[symbol] = hint
         return hints
 
+    def _load_instrument_aliases(self) -> dict[str, list[str]]:
+        cfg = self._load_config()
+        market_data = cfg.get("market_data")
+        if not isinstance(market_data, dict):
+            return {}
+        instruments = market_data.get("instruments")
+        if not isinstance(instruments, list):
+            return {}
+
+        aliases_by_symbol: dict[str, list[str]] = {}
+        for item in instruments:
+            if not isinstance(item, dict):
+                continue
+            symbol = str(item.get("symbol", "")).strip()
+            if not symbol:
+                continue
+            aliases_by_symbol[symbol] = self._expand_aliases(
+                name=str(item.get("name", "")).strip(),
+                symbol=symbol,
+                aliases=self._safe_str_list(item.get("aliases")),
+            )
+        return aliases_by_symbol
+
     def _compute_news_stale(self, news_last_fetch_time: str) -> bool:
         if not news_last_fetch_time:
             return True
@@ -376,6 +413,240 @@ class FinanceSignalsService:
             if text:
                 items.append(text)
         return items
+
+    def _build_watchlist_news_links(
+        self,
+        *,
+        watchlist_seed: list[dict[str, Any]],
+        top_news_seed: list[dict[str, Any]],
+    ) -> tuple[list[FinanceWatchlistItem], list[FinanceNewsItem]]:
+        watchlist_links: dict[str, dict[str, Any]] = {}
+        for item in watchlist_seed:
+            symbol = str(item.get("symbol", "")).strip()
+            if not symbol:
+                continue
+            watchlist_links[symbol] = {
+                "item": item,
+                "aliases": self._expand_aliases(
+                    name=str(item.get("name", "")).strip(),
+                    symbol=symbol,
+                    aliases=self._safe_str_list(item.get("aliases")),
+                ),
+                "related_titles": [],
+                "related_keywords": set(),
+            }
+
+        top_news: list[FinanceNewsItem] = []
+        for news in top_news_seed:
+            title = str(news.get("title", "")).strip()
+            matched_keywords = self._safe_str_list(news.get("matched_keywords"))
+            related_symbols: list[str] = []
+            related_names: list[str] = []
+            for symbol, link_data in watchlist_links.items():
+                aliases = list(link_data["aliases"])
+                if not self._news_matches_watchlist(
+                    title=title,
+                    matched_keywords=matched_keywords,
+                    aliases=aliases,
+                ):
+                    continue
+                related_symbols.append(symbol)
+                display_name = str(link_data["item"].get("name", "")).strip() or symbol
+                related_names.append(display_name)
+                link_data["related_titles"].append(title)
+                for keyword in matched_keywords:
+                    if self._keyword_matches_aliases(keyword, aliases):
+                        link_data["related_keywords"].add(keyword)
+            top_news.append(
+                FinanceNewsItem(
+                    title=title,
+                    link=str(news.get("link", "")).strip(),
+                    publisher=str(news.get("publisher", "")).strip(),
+                    published=str(news.get("published", "")).strip(),
+                    category=str(news.get("category", "")).strip(),
+                    matched_keywords=matched_keywords,
+                    related_symbols=related_symbols,
+                    related_watchlist_names=related_names,
+                )
+            )
+
+        watchlist: list[FinanceWatchlistItem] = []
+        for symbol, link_data in watchlist_links.items():
+            item = dict(link_data["item"])
+            watchlist.append(
+                FinanceWatchlistItem(
+                    name=str(item.get("name", "")).strip(),
+                    symbol=symbol,
+                    price=item.get("price"),
+                    change_pct=str(item.get("change_pct", "N/A")).strip() or "N/A",
+                    alert_hint=str(item.get("alert_hint", "")).strip(),
+                    alert_active=bool(item.get("alert_active", False)),
+                    related_news_count=len(link_data["related_titles"]),
+                    related_keywords=sorted(link_data["related_keywords"]),
+                )
+            )
+        return watchlist, top_news
+
+    def _build_focus_cards(
+        self,
+        *,
+        watchlist: list[FinanceWatchlistItem],
+        top_news: list[FinanceNewsItem],
+        market_alert_debug: FinanceMarketAlertDebugData,
+    ) -> list[FinanceFocusCard]:
+        cards: list[FinanceFocusCard] = []
+        seen: set[tuple[str, tuple[str, ...], str]] = set()
+        watchlist_by_symbol = {item.symbol: item for item in watchlist}
+
+        for item in watchlist:
+            if not item.alert_active:
+                continue
+            related_names = [item.name.strip() or item.symbol]
+            related_symbols = [item.symbol]
+            title = f"{related_names[0]} 已触发监控阈值"
+            summary_parts = [f"阈值条件：{item.alert_hint or '已触发关注条件'}"]
+            reasons = ["threshold_triggered"]
+            if item.related_news_count > 0:
+                summary_parts.append(f"最近关联新闻 {item.related_news_count} 条")
+                reasons.append("related_news_present")
+            if item.related_keywords:
+                summary_parts.append(f"关键词：{' / '.join(item.related_keywords[:3])}")
+                reasons.append("keyword_overlap")
+            if market_alert_debug.last_alert_time:
+                summary_parts.append(f"最近告警：{market_alert_debug.last_alert_time}")
+                reasons.append("recent_alert_sent")
+            key = ("ALERT", tuple(related_symbols), title)
+            if key in seen:
+                continue
+            seen.add(key)
+            cards.append(
+                FinanceFocusCard(
+                    title=title,
+                    summary="；".join(summary_parts),
+                    priority="HIGH",
+                    kind="ALERT",
+                    action_type="REVIEW_NOW",
+                    action_label="立即复核",
+                    action_hint="先看价格异动和关联新闻，再决定是否提升观察频率。",
+                    reasons=reasons,
+                    related_symbols=related_symbols,
+                    related_watchlist_names=related_names,
+                )
+            )
+
+        for item in top_news:
+            if not item.related_watchlist_names:
+                continue
+            related_names = item.related_watchlist_names[:3]
+            related_symbols = item.related_symbols[:3]
+            has_active_alert = any(
+                watchlist_by_symbol.get(symbol) is not None
+                and bool(watchlist_by_symbol[symbol].alert_active)
+                for symbol in related_symbols
+            )
+            summary_parts = [f"影响标的：{' / '.join(related_names)}"]
+            reasons = ["news_impacts_watchlist"]
+            if item.matched_keywords:
+                summary_parts.append(f"关键词：{' / '.join(item.matched_keywords[:4])}")
+                reasons.append("keyword_overlap")
+            if item.publisher or item.published:
+                meta = " · ".join(value for value in [item.publisher, item.published] if value)
+                if meta:
+                    summary_parts.append(meta)
+            key = ("NEWS", tuple(related_symbols), item.title)
+            if key in seen:
+                continue
+            seen.add(key)
+            action_label = "优先跟踪" if len(related_symbols) >= 2 or has_active_alert else "持续跟踪"
+            action_hint = (
+                "先复核已触发阈值的标的，再看同主题新闻是否继续发酵。"
+                if has_active_alert
+                else "关注后续同主题新闻和相关标的波动是否继续扩散。"
+            )
+            if has_active_alert:
+                reasons.append("linked_alert_active")
+            if len(related_symbols) >= 2:
+                reasons.append("multi_asset_impact")
+            cards.append(
+                FinanceFocusCard(
+                    title=item.title,
+                    summary="；".join(summary_parts),
+                    priority="HIGH" if has_active_alert else "MEDIUM",
+                    kind="NEWS",
+                    action_type="FOLLOW_UP" if has_active_alert or len(related_symbols) >= 2 else "MONITOR",
+                    action_label=action_label,
+                    action_hint=action_hint,
+                    reasons=reasons,
+                    related_symbols=related_symbols,
+                    related_watchlist_names=related_names,
+                )
+            )
+
+        cards.sort(
+            key=lambda item: (
+                {"HIGH": 0, "MEDIUM": 1, "LOW": 2}.get(item.priority, 9),
+                {"ALERT": 0, "NEWS": 1}.get(item.kind, 9),
+                item.title,
+            )
+        )
+        return cards[:4]
+
+    def _expand_aliases(
+        self,
+        *,
+        name: str,
+        symbol: str,
+        aliases: list[str],
+    ) -> list[str]:
+        values = [name, symbol, *aliases]
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            candidate = value.strip()
+            if not candidate:
+                continue
+            lowered = candidate.lower()
+            if lowered in seen:
+                continue
+            seen.add(lowered)
+            normalized.append(candidate)
+        return normalized
+
+    def _news_matches_watchlist(
+        self,
+        *,
+        title: str,
+        matched_keywords: list[str],
+        aliases: list[str],
+    ) -> bool:
+        for alias in aliases:
+            if self._text_matches_alias(alias, title):
+                return True
+        for keyword in matched_keywords:
+            if self._keyword_matches_aliases(keyword, aliases):
+                return True
+        return False
+
+    def _keyword_matches_aliases(self, keyword: str, aliases: list[str]) -> bool:
+        for alias in aliases:
+            if self._text_matches_alias(alias, keyword) or self._text_matches_alias(keyword, alias):
+                return True
+        return False
+
+    def _text_matches_alias(self, alias: str, text: str) -> bool:
+        normalized_alias = self._normalize_match_text(alias)
+        normalized_text = self._normalize_match_text(text)
+        if not normalized_alias or not normalized_text:
+            return False
+        if len(normalized_alias) <= 2 and self._is_ascii_token(normalized_alias):
+            return False
+        return normalized_alias in normalized_text
+
+    def _normalize_match_text(self, value: str) -> str:
+        return re.sub(r"[\s\-_()/（）·,.，。:：]+", "", value.strip().lower())
+
+    def _is_ascii_token(self, value: str) -> bool:
+        return value.isascii()
 
     def _rule_to_hint(self, rule: dict[str, Any]) -> str:
         rule_type = str(rule.get("type", "")).strip()

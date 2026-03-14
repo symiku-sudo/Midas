@@ -158,3 +158,70 @@ def test_backup_database_prunes_old_timestamp_backups(tmp_path: Path) -> None:
     )
     assert len(timestamped) == 10
     assert (backup_dir / "notes_latest.db").exists()
+
+
+def test_search_notes_supports_keyword_source_limit_and_offset(tmp_path: Path) -> None:
+    db_path = tmp_path / "notes.db"
+    repo = NoteLibraryRepository(str(db_path))
+    repo.save_bilibili_note(
+        note_id="b1",
+        title="宏观复盘",
+        video_url="https://www.bilibili.com/video/BV1xx411c7mD",
+        summary_markdown="# 美联储与降息",
+        elapsed_ms=1,
+        transcript_chars=2,
+    )
+    repo.save_bilibili_note(
+        note_id="b2",
+        title="科技行业",
+        video_url="https://www.bilibili.com/video/BV1xx411c7mE",
+        summary_markdown="# AI 芯片",
+        elapsed_ms=1,
+        transcript_chars=2,
+    )
+    repo.save_xiaohongshu_notes(
+        [
+            {
+                "note_id": "x1",
+                "title": "美联储观察",
+                "source_url": "https://www.xiaohongshu.com/explore/x1",
+                "summary_markdown": "# 降息交易",
+            }
+        ]
+    )
+    _update_saved_at(
+        db_path=db_path,
+        table="saved_bilibili_notes",
+        note_id="b1",
+        saved_at="2026-03-01 00:00:00",
+    )
+    _update_saved_at(
+        db_path=db_path,
+        table="saved_bilibili_notes",
+        note_id="b2",
+        saved_at="2026-03-02 00:00:00",
+    )
+    _update_saved_at(
+        db_path=db_path,
+        table="saved_xiaohongshu_notes",
+        note_id="x1",
+        saved_at="2026-03-03 00:00:00",
+    )
+
+    total_all, all_items = repo.search_notes(keyword="美联储", limit=10, offset=0)
+    assert total_all == 2
+    assert [item["note_id"] for item in all_items] == ["x1", "b1"]
+
+    total_bili, bili_items = repo.search_notes(
+        keyword="AI",
+        source="bilibili",
+        limit=10,
+        offset=0,
+    )
+    assert total_bili == 1
+    assert bili_items[0]["note_id"] == "b2"
+    assert bili_items[0]["source"] == "bilibili"
+
+    total_page, page_items = repo.search_notes(limit=1, offset=1)
+    assert total_page == 3
+    assert len(page_items) == 1

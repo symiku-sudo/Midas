@@ -16,6 +16,8 @@ class FinanceWatchlistItem(BaseModel):
     change_pct: str = "N/A"
     alert_hint: str = ""
     alert_active: bool = False
+    related_news_count: int = 0
+    related_keywords: list[str] = Field(default_factory=list)
 
 
 class FinanceNewsItem(BaseModel):
@@ -25,6 +27,8 @@ class FinanceNewsItem(BaseModel):
     published: str = ""
     category: str = ""
     matched_keywords: list[str] = Field(default_factory=list)
+    related_symbols: list[str] = Field(default_factory=list)
+    related_watchlist_names: list[str] = Field(default_factory=list)
 
 
 class FinanceNewsDebugData(BaseModel):
@@ -48,12 +52,26 @@ class FinanceMarketAlertDebugData(BaseModel):
     last_alert_status: str = ""
 
 
+class FinanceFocusCard(BaseModel):
+    title: str
+    summary: str = ""
+    priority: str = "MEDIUM"
+    kind: str = "NEWS"
+    action_type: str = "MONITOR"
+    action_label: str = ""
+    action_hint: str = ""
+    reasons: list[str] = Field(default_factory=list)
+    related_symbols: list[str] = Field(default_factory=list)
+    related_watchlist_names: list[str] = Field(default_factory=list)
+
+
 class FinanceSignalsData(BaseModel):
     update_time: str
     news_last_fetch_time: str = ""
     news_stale: bool = False
     watchlist_preview: list[FinanceWatchlistItem]
     top_news: list[FinanceNewsItem] = Field(default_factory=list)
+    focus_cards: list[FinanceFocusCard] = Field(default_factory=list)
     watchlist_ntfy_enabled: bool = False
     ai_insight_text: str
     news_debug: FinanceNewsDebugData = Field(default_factory=FinanceNewsDebugData)
@@ -116,6 +134,51 @@ class BilibiliSummaryData(BaseModel):
     transcript_chars: int
 
 
+class AsyncJobCreateData(BaseModel):
+    job_id: str
+    job_type: str
+    status: str
+    message: str
+    submitted_at: str
+    retry_of_job_id: str = ""
+
+
+class AsyncJobErrorData(BaseModel):
+    code: str
+    message: str
+    details: dict[str, Any] | None = None
+
+
+class AsyncJobListItem(BaseModel):
+    job_id: str
+    job_type: str
+    status: str
+    message: str
+    submitted_at: str
+    started_at: str = ""
+    finished_at: str = ""
+    retry_of_job_id: str = ""
+
+
+class AsyncJobListData(BaseModel):
+    total: int
+    items: list[AsyncJobListItem]
+
+
+class AsyncJobStatusData(BaseModel):
+    job_id: str
+    job_type: str
+    status: str
+    message: str
+    submitted_at: str
+    started_at: str = ""
+    finished_at: str = ""
+    retry_of_job_id: str = ""
+    request_payload: dict[str, Any] = Field(default_factory=dict)
+    result: dict[str, Any] | None = None
+    error: AsyncJobErrorData | None = None
+
+
 class BilibiliNoteSaveRequest(BaseModel):
     video_url: str = Field(min_length=3, max_length=2000)
     summary_markdown: str = Field(min_length=1)
@@ -137,6 +200,22 @@ class BilibiliSavedNote(BaseModel):
 class BilibiliSavedNotesData(BaseModel):
     total: int
     items: list[BilibiliSavedNote]
+
+
+class UnifiedNoteItem(BaseModel):
+    source: str
+    note_id: str
+    title: str
+    source_url: str
+    summary_markdown: str
+    saved_at: str
+
+
+class UnifiedNotesData(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[UnifiedNoteItem]
 
 
 class XiaohongshuSyncRequest(BaseModel):

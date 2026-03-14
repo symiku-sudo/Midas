@@ -372,6 +372,69 @@ class NoteLibraryRepository:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def search_notes(
+        self,
+        *,
+        keyword: str = "",
+        source: str = "",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> tuple[int, list[dict[str, Any]]]:
+        normalized_keyword = keyword.strip()
+        normalized_source = source.strip().lower()
+        pattern = f"%{normalized_keyword.lower()}%"
+        conditions_bilibili = []
+        params_bilibili: list[Any] = []
+        conditions_xhs = []
+        params_xhs: list[Any] = []
+        if normalized_keyword:
+            clause = "LOWER(title || '\n' || summary_markdown) LIKE ?"
+            conditions_bilibili.append(clause)
+            conditions_xhs.append(clause)
+            params_bilibili.append(pattern)
+            params_xhs.append(pattern)
+        where_bilibili = f"WHERE {' AND '.join(conditions_bilibili)}" if conditions_bilibili else ""
+        where_xhs = f"WHERE {' AND '.join(conditions_xhs)}" if conditions_xhs else ""
+
+        bilibili_sql = f"""
+            SELECT 'bilibili' AS source, note_id, title, video_url AS source_url, summary_markdown,
+                   strftime('%Y-%m-%d %H:%M:%S', datetime(saved_at, '+8 hours')) AS saved_at
+            FROM saved_bilibili_notes
+            {where_bilibili}
+        """
+        xhs_sql = f"""
+            SELECT 'xiaohongshu' AS source, note_id, title, source_url, summary_markdown,
+                   strftime('%Y-%m-%d %H:%M:%S', datetime(saved_at, '+8 hours')) AS saved_at
+            FROM saved_xiaohongshu_notes
+            {where_xhs}
+        """
+        if normalized_source == "bilibili":
+            union_sql = bilibili_sql
+            params = params_bilibili
+        elif normalized_source == "xiaohongshu":
+            union_sql = xhs_sql
+            params = params_xhs
+        else:
+            union_sql = f"{bilibili_sql} UNION ALL {xhs_sql}"
+            params = params_bilibili + params_xhs
+
+        with self._connect() as conn:
+            count_row = conn.execute(
+                f"SELECT COUNT(*) AS total FROM ({union_sql}) AS unified_notes",
+                tuple(params),
+            ).fetchone()
+            rows = conn.execute(
+                f"""
+                SELECT source, note_id, title, source_url, summary_markdown, saved_at
+                FROM ({union_sql}) AS unified_notes
+                ORDER BY saved_at DESC, note_id DESC
+                LIMIT ? OFFSET ?
+                """,
+                tuple(params) + (limit, offset),
+            ).fetchall()
+        total = int(dict(count_row or {}).get("total", 0) or 0)
+        return total, [dict(row) for row in rows]
+
     def get_xiaohongshu_notes_by_ids(self, note_ids: list[str]) -> list[dict[str, Any]]:
         if not note_ids:
             return []

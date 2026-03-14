@@ -1,6 +1,9 @@
 package com.midas.client.data.network
 
 import com.midas.client.data.model.ApiEnvelope
+import com.midas.client.data.model.AsyncJobCreateData
+import com.midas.client.data.model.AsyncJobListData
+import com.midas.client.data.model.AsyncJobStatusData
 import com.midas.client.data.model.AssetCurrentData
 import com.midas.client.data.model.AssetCurrentUpdateRequest
 import com.midas.client.data.model.AssetImageFillData
@@ -30,6 +33,7 @@ import com.midas.client.data.model.NotesMergeSuggestData
 import com.midas.client.data.model.NotesMergeSuggestRequest
 import com.midas.client.data.model.NotesDeleteData
 import com.midas.client.data.model.NotesSaveBatchData
+import com.midas.client.data.model.UnifiedNotesData
 import com.midas.client.data.model.XiaohongshuAuthUpdateData
 import com.midas.client.data.model.XiaohongshuAuthUpdateRequest
 import com.midas.client.data.model.XiaohongshuCaptureRefreshData
@@ -46,6 +50,7 @@ import retrofit2.http.Part
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
+import retrofit2.http.Query
 import okhttp3.MultipartBody
 
 interface MidasApiService {
@@ -90,6 +95,33 @@ interface MidasApiService {
         @Path("recordId") recordId: String
     ): Response<ApiEnvelope<NotesDeleteData>>
 
+    @POST("api/jobs/bilibili-summarize")
+    suspend fun createBilibiliSummaryJob(
+        @Body request: BilibiliSummaryRequest
+    ): Response<ApiEnvelope<AsyncJobCreateData>>
+
+    @POST("api/jobs/xiaohongshu/summarize-url")
+    suspend fun createXiaohongshuSummaryJob(
+        @Body request: XiaohongshuSummarizeUrlRequest
+    ): Response<ApiEnvelope<AsyncJobCreateData>>
+
+    @GET("api/jobs")
+    suspend fun listAsyncJobs(
+        @Query("limit") limit: Int = 20,
+        @Query("status") status: String = "",
+        @Query("job_type") jobType: String = "",
+    ): Response<ApiEnvelope<AsyncJobListData>>
+
+    @GET("api/jobs/{jobId}")
+    suspend fun getAsyncJob(
+        @Path("jobId") jobId: String
+    ): Response<ApiEnvelope<AsyncJobStatusData>>
+
+    @POST("api/jobs/{jobId}/retry")
+    suspend fun retryAsyncJob(
+        @Path("jobId") jobId: String
+    ): Response<ApiEnvelope<AsyncJobCreateData>>
+
     @POST("api/bilibili/summarize")
     suspend fun summarizeBilibili(
         @Body request: BilibiliSummaryRequest
@@ -102,6 +134,14 @@ interface MidasApiService {
 
     @GET("api/notes/bilibili")
     suspend fun listBilibiliNotes(): Response<ApiEnvelope<BilibiliSavedNotesData>>
+
+    @GET("api/notes/search")
+    suspend fun searchNotes(
+        @Query("keyword") keyword: String = "",
+        @Query("source") source: String = "",
+        @Query("limit") limit: Int = 50,
+        @Query("offset") offset: Int = 0,
+    ): Response<ApiEnvelope<UnifiedNotesData>>
 
     @DELETE("api/notes/bilibili/{noteId}")
     suspend fun deleteBilibiliNote(

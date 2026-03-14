@@ -1,6 +1,9 @@
 package com.midas.client.data.repo
 
 import com.midas.client.data.model.ApiEnvelope
+import com.midas.client.data.model.AsyncJobCreateData
+import com.midas.client.data.model.AsyncJobListData
+import com.midas.client.data.model.AsyncJobStatusData
 import com.midas.client.data.model.AssetCurrentData
 import com.midas.client.data.model.AssetCurrentUpdateRequest
 import com.midas.client.data.model.AssetImageFillData
@@ -30,6 +33,7 @@ import com.midas.client.data.model.NotesMergeSuggestData
 import com.midas.client.data.model.NotesMergeSuggestRequest
 import com.midas.client.data.model.NotesDeleteData
 import com.midas.client.data.model.NotesSaveBatchData
+import com.midas.client.data.model.UnifiedNotesData
 import com.midas.client.data.model.XiaohongshuAuthUpdateData
 import com.midas.client.data.model.XiaohongshuAuthUpdateRequest
 import com.midas.client.data.model.XiaohongshuCaptureRefreshData
@@ -150,6 +154,47 @@ class MidasRepository {
         return request(baseUrl) { deleteAssetSnapshot(recordId) }
     }
 
+    suspend fun createBilibiliSummaryJob(
+        baseUrl: String,
+        videoUrl: String,
+    ): AppResult<AsyncJobCreateData> {
+        return request(baseUrl) {
+            createBilibiliSummaryJob(BilibiliSummaryRequest(videoUrl = videoUrl))
+        }
+    }
+
+    suspend fun createXiaohongshuSummaryJob(
+        baseUrl: String,
+        url: String,
+    ): AppResult<AsyncJobCreateData> {
+        return request(baseUrl) {
+            createXiaohongshuSummaryJob(XiaohongshuSummarizeUrlRequest(url = url))
+        }
+    }
+
+    suspend fun getAsyncJob(
+        baseUrl: String,
+        jobId: String,
+    ): AppResult<AsyncJobStatusData> {
+        return request(baseUrl) { getAsyncJob(jobId) }
+    }
+
+    suspend fun listAsyncJobs(
+        baseUrl: String,
+        limit: Int = 20,
+        status: String = "",
+        jobType: String = "",
+    ): AppResult<AsyncJobListData> {
+        return request(baseUrl) { listAsyncJobs(limit, status, jobType) }
+    }
+
+    suspend fun retryAsyncJob(
+        baseUrl: String,
+        jobId: String,
+    ): AppResult<AsyncJobCreateData> {
+        return request(baseUrl) { retryAsyncJob(jobId) }
+    }
+
     suspend fun summarizeBilibili(baseUrl: String, videoUrl: String): AppResult<BilibiliSummaryData> {
         return request(baseUrl) {
             summarizeBilibili(BilibiliSummaryRequest(videoUrl = videoUrl))
@@ -176,6 +221,16 @@ class MidasRepository {
 
     suspend fun listBilibiliNotes(baseUrl: String): AppResult<BilibiliSavedNotesData> {
         return request(baseUrl) { listBilibiliNotes() }
+    }
+
+    suspend fun searchNotes(
+        baseUrl: String,
+        keyword: String = "",
+        source: String = "",
+        limit: Int = 50,
+        offset: Int = 0,
+    ): AppResult<UnifiedNotesData> {
+        return request(baseUrl) { searchNotes(keyword, source, limit, offset) }
     }
 
     suspend fun deleteBilibiliNote(baseUrl: String, noteId: String): AppResult<NotesDeleteData> {

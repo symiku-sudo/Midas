@@ -6,6 +6,7 @@ import shutil
 from pathlib import Path
 
 import app.api.routes as routes_module
+import app.middleware.access_token as access_token_module
 from fastapi.testclient import TestClient
 
 from app.api.routes import (
@@ -18,11 +19,18 @@ from app.api.routes import (
 from app.core.config import get_settings
 from app.main import app
 from app.models.schemas import (
+    AsyncJobCreateData,
+    AsyncJobListData,
+    AsyncJobListItem,
+    AsyncJobStatusData,
+    FinanceFocusCard,
     FinanceMarketAlertDebugData,
     FinanceNewsDebugData,
     FinanceNewsItem,
     FinanceSignalsData,
     FinanceWatchlistItem,
+    UnifiedNoteItem,
+    UnifiedNotesData,
 )
 from app.repositories.note_repo import NoteLibraryRepository
 from app.services.asset_categories import ASSET_CATEGORY_KEYS
@@ -84,6 +92,8 @@ def test_finance_signals_ok(monkeypatch) -> None:
                         change_pct="+1.2%",
                         alert_hint=">90",
                         alert_active=True,
+                        related_news_count=1,
+                        related_keywords=["原油"],
                     )
                 ],
                 top_news=[
@@ -93,6 +103,22 @@ def test_finance_signals_ok(monkeypatch) -> None:
                         published="2026-03-05 11:30:00",
                         category="finance",
                         matched_keywords=["美联储", "降息"],
+                        related_symbols=["BZ=F"],
+                        related_watchlist_names=["布伦特原油"],
+                    )
+                ],
+                focus_cards=[
+                    FinanceFocusCard(
+                        title="布伦特原油 已触发监控阈值",
+                        summary="阈值条件：>90；最近关联新闻 1 条",
+                        priority="HIGH",
+                        kind="ALERT",
+                        action_type="REVIEW_NOW",
+                        action_label="立即复核",
+                        action_hint="先看价格异动和关联新闻，再决定是否提升观察频率。",
+                        reasons=["threshold_triggered", "related_news_present"],
+                        related_symbols=["BZ=F"],
+                        related_watchlist_names=["布伦特原油"],
                     )
                 ],
                 watchlist_ntfy_enabled=True,
@@ -130,7 +156,14 @@ def test_finance_signals_ok(monkeypatch) -> None:
     assert body["data"]["watchlist_preview"][0]["price"] == 91.23
     assert body["data"]["watchlist_preview"][0]["alert_hint"] == ">90"
     assert body["data"]["watchlist_preview"][0]["alert_active"] is True
+    assert body["data"]["watchlist_preview"][0]["related_news_count"] == 1
     assert body["data"]["top_news"][0]["title"] == "美联储官员释放降息信号"
+    assert body["data"]["top_news"][0]["related_symbols"] == ["BZ=F"]
+    assert body["data"]["focus_cards"][0]["kind"] == "ALERT"
+    assert body["data"]["focus_cards"][0]["priority"] == "HIGH"
+    assert body["data"]["focus_cards"][0]["action_type"] == "REVIEW_NOW"
+    assert body["data"]["focus_cards"][0]["action_label"] == "立即复核"
+    assert "threshold_triggered" in body["data"]["focus_cards"][0]["reasons"]
     assert body["data"]["watchlist_ntfy_enabled"] is True
     assert body["data"]["ai_insight_text"]
     assert body["data"]["news_debug"]["entries_scanned"] == 12
@@ -169,6 +202,7 @@ def test_trigger_finance_news_digest(monkeypatch) -> None:
                 news_stale=False,
                 watchlist_preview=[],
                 top_news=[],
+                focus_cards=[],
                 watchlist_ntfy_enabled=False,
                 ai_insight_text="## 24小时摘要\n\n- 已生成。",
                 news_debug=FinanceNewsDebugData(
@@ -193,6 +227,201 @@ def test_trigger_finance_news_digest(monkeypatch) -> None:
     assert body["data"]["ai_insight_text"].startswith("## 24小时摘要")
     assert body["data"]["news_debug"]["digest_status"] == "generated"
     assert body["data"]["news_debug"]["digest_prompt_chars"] == 1412
+
+
+def test_async_job_endpoints(monkeypatch) -> None:
+    class _FakeAsyncJobService:
+        async def create_bilibili_summary_job(
+            self, *, video_url: str, request_id: str
+        ) -> AsyncJobCreateData:
+            assert video_url == "https://www.bilibili.com/video/BV1xx411c7mD"
+            assert request_id
+            return AsyncJobCreateData(
+                job_id="job-bili-1",
+                job_type="bilibili_summarize",
+                status="PENDING",
+                message="任务已入队，等待执行。",
+                submitted_at="2026-03-12 12:30:00",
+            )
+
+        async def create_xiaohongshu_summary_job(
+            self, *, url: str, request_id: str
+        ) -> AsyncJobCreateData:
+            assert url == "https://www.xiaohongshu.com/explore/test-id"
+            assert request_id
+            return AsyncJobCreateData(
+                job_id="job-xhs-1",
+                job_type="xiaohongshu_summarize_url",
+                status="PENDING",
+                message="任务已入队，等待执行。",
+                submitted_at="2026-03-12 12:31:00",
+            )
+
+        async def list_jobs(
+            self, *, limit: int = 20, status: str = "", job_type: str = ""
+        ) -> AsyncJobListData:
+            assert limit == 10
+            assert status == "SUCCEEDED"
+            assert job_type == "bilibili_summarize"
+            return AsyncJobListData(
+                total=1,
+                items=[
+                    AsyncJobListItem(
+                        job_id="job-bili-1",
+                        job_type="bilibili_summarize",
+                        status="SUCCEEDED",
+                        message="任务执行完成。",
+                        submitted_at="2026-03-12 12:30:00",
+                        started_at="2026-03-12 12:30:01",
+                        finished_at="2026-03-12 12:31:00",
+                    )
+                ],
+            )
+
+        async def get_job(self, job_id: str) -> AsyncJobStatusData:
+            assert job_id == "job-bili-1"
+            return AsyncJobStatusData(
+                job_id=job_id,
+                job_type="bilibili_summarize",
+                status="SUCCEEDED",
+                message="任务执行完成。",
+                submitted_at="2026-03-12 12:30:00",
+                started_at="2026-03-12 12:30:01",
+                finished_at="2026-03-12 12:31:00",
+                request_payload={
+                    "video_url": "https://www.bilibili.com/video/BV1xx411c7mD"
+                },
+                result={
+                    "video_url": "https://www.bilibili.com/video/BV1xx411c7mD",
+                    "summary_markdown": "# done",
+                    "elapsed_ms": 1200,
+                    "transcript_chars": 3456,
+                },
+                error=None,
+            )
+
+        async def retry_job(self, job_id: str, *, request_id: str) -> AsyncJobCreateData:
+            assert job_id == "job-bili-1"
+            assert request_id
+            return AsyncJobCreateData(
+                job_id="job-bili-2",
+                job_type="bilibili_summarize",
+                status="PENDING",
+                message="任务已入队，等待执行。",
+                submitted_at="2026-03-12 12:32:00",
+                retry_of_job_id="job-bili-1",
+            )
+
+    monkeypatch.setattr(app.state, "async_job_service", _FakeAsyncJobService(), raising=False)
+
+    create_bili = client.post(
+        "/api/jobs/bilibili-summarize",
+        json={"video_url": "https://www.bilibili.com/video/BV1xx411c7mD"},
+    )
+    assert create_bili.status_code == 200
+    assert create_bili.json()["data"]["job_id"] == "job-bili-1"
+
+    create_xhs = client.post(
+        "/api/jobs/xiaohongshu/summarize-url",
+        json={"url": "https://www.xiaohongshu.com/explore/test-id"},
+    )
+    assert create_xhs.status_code == 200
+    assert create_xhs.json()["data"]["job_type"] == "xiaohongshu_summarize_url"
+
+    listing = client.get(
+        "/api/jobs",
+        params={"limit": 10, "status": "SUCCEEDED", "job_type": "bilibili_summarize"},
+    )
+    assert listing.status_code == 200
+    assert listing.json()["data"]["total"] == 1
+
+    detail = client.get("/api/jobs/job-bili-1")
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["data"]["status"] == "SUCCEEDED"
+    assert body["data"]["result"]["transcript_chars"] == 3456
+
+    retried = client.post("/api/jobs/job-bili-1/retry")
+    assert retried.status_code == 200
+    assert retried.json()["data"]["retry_of_job_id"] == "job-bili-1"
+
+
+def test_search_notes_endpoint(monkeypatch) -> None:
+    class _FakeNoteLibraryService:
+        def search_notes(
+            self,
+            *,
+            keyword: str = "",
+            source: str = "",
+            limit: int = 50,
+            offset: int = 0,
+        ) -> UnifiedNotesData:
+            assert keyword == "美联储"
+            assert source == "bilibili"
+            assert limit == 10
+            assert offset == 5
+            return UnifiedNotesData(
+                total=1,
+                limit=10,
+                offset=5,
+                items=[
+                    UnifiedNoteItem(
+                        source="bilibili",
+                        note_id="b1",
+                        title="宏观复盘",
+                        source_url="https://www.bilibili.com/video/BV1xx411c7mD",
+                        summary_markdown="# 美联储与降息",
+                        saved_at="2026-03-03 08:00:00",
+                    )
+                ],
+            )
+
+    monkeypatch.setattr(
+        routes_module,
+        "_get_note_library_service",
+        lambda: _FakeNoteLibraryService(),
+    )
+
+    resp = client.get(
+        "/api/notes/search",
+        params={"keyword": "美联储", "source": "bilibili", "limit": 10, "offset": 5},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["data"]["total"] == 1
+    assert body["data"]["items"][0]["source"] == "bilibili"
+    assert body["data"]["items"][0]["note_id"] == "b1"
+
+
+def test_access_token_middleware_rejects_missing_token(monkeypatch) -> None:
+    settings = get_settings().model_copy(deep=True)
+    settings.auth.access_token = "secret-token"
+    monkeypatch.setattr(access_token_module, "get_settings", lambda: settings)
+
+    resp = client.get("/api/finance/signals")
+    assert resp.status_code == 401
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["code"] == "AUTH_EXPIRED"
+
+
+def test_access_token_middleware_accepts_bearer_token(monkeypatch) -> None:
+    settings = get_settings().model_copy(deep=True)
+    settings.auth.access_token = "secret-token"
+    monkeypatch.setattr(access_token_module, "get_settings", lambda: settings)
+
+    resp = client.get(
+        "/health",
+        headers={"Authorization": "Bearer secret-token"},
+    )
+    assert resp.status_code == 200
+
+    resp_protected = client.get(
+        "/api/finance/signals",
+        headers={"Authorization": "Bearer secret-token"},
+    )
+    assert resp_protected.status_code == 200
 
 
 def test_asset_fill_from_images_returns_structured_amounts() -> None:

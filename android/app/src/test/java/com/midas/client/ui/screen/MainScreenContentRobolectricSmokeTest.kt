@@ -15,8 +15,11 @@ import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.text.TextLayoutResult
+import com.midas.client.data.model.AsyncJobListItemData
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSummaryData
+import com.midas.client.data.model.FinanceFocusCard
+import com.midas.client.data.model.FinanceNewsItem
 import com.midas.client.data.model.FinanceWatchlistItem
 import com.midas.client.data.model.XiaohongshuSavedNote
 import com.midas.client.data.model.XiaohongshuSummaryItem
@@ -141,7 +144,7 @@ class MainScreenContentRobolectricSmokeTest {
         composeRule.waitForIdle()
         composeRule.onNodeWithText("保存").performClick()
         composeRule.onNodeWithText("连接测试").performClick()
-        composeRule.onNodeWithText("恢复默认").performClick()
+        composeRule.onNodeWithText("恢复默认").performScrollTo().performClick()
         composeRule.waitForIdle()
 
         assertEquals(1, bilibiliSubmitClicks)
@@ -152,6 +155,88 @@ class MainScreenContentRobolectricSmokeTest {
         assertEquals(1, saveBaseUrlClicks)
         assertEquals(1, testConnectionClicks)
         assertEquals(1, resetConfigClicks)
+    }
+
+    @Test
+    fun bilibiliRecentJobsCard_shouldSupportRefreshOpenAndRetry() {
+        var refreshClicks = 0
+        var openedJobId = ""
+        var retriedJobId = ""
+
+        composeRule.setContent {
+            MaterialTheme {
+                MainScreenContent(
+                    settings = SettingsUiState(
+                        baseUrlInput = "http://127.0.0.1:8000/",
+                    ),
+                    bilibili = BilibiliUiState(
+                        recentJobs = listOf(
+                            AsyncJobListItemData(
+                                jobId = "job-bili-ok",
+                                jobType = "bilibili_summarize",
+                                status = "SUCCEEDED",
+                                message = "任务执行完成。",
+                                submittedAt = "2026-03-12 12:30:00",
+                                finishedAt = "2026-03-12 12:31:00",
+                            ),
+                            AsyncJobListItemData(
+                                jobId = "job-bili-failed",
+                                jobType = "bilibili_summarize",
+                                status = "FAILED",
+                                message = "上游暂时不可用。",
+                                submittedAt = "2026-03-12 12:32:00",
+                                finishedAt = "2026-03-12 12:33:00",
+                            ),
+                        ),
+                    ),
+                    xiaohongshu = XiaohongshuUiState(),
+                    notes = NotesUiState(),
+                    onAppForeground = {},
+                    onBaseUrlChange = {},
+                    onSaveBaseUrl = {},
+                    onTestConnection = {},
+                    onConfigTextChange = { _, _ -> },
+                    onConfigBooleanChange = { _, _ -> },
+                    onResetConfig = {},
+                    onBilibiliVideoUrlChange = {},
+                    onSubmitBilibiliSummary = {},
+                    onSaveBilibiliNote = {},
+                    onRefreshBilibiliJobs = { refreshClicks += 1 },
+                    onOpenBilibiliJob = { openedJobId = it },
+                    onRetryBilibiliJob = { retriedJobId = it },
+                    onXiaohongshuUrlChange = {},
+                    onSummarizeXiaohongshuUrl = {},
+                    onRefreshXiaohongshuAuthConfig = {},
+                    onSaveSingleXiaohongshuNote = {},
+                    onNotesKeywordChange = {},
+                    onRefreshNotes = {},
+                    onDeleteBilibiliNote = {},
+                    onDeleteXiaohongshuNote = {},
+                    onSuggestMergeCandidates = {},
+                    onPreviewMergeCandidate = { _ -> },
+                    onCommitCurrentMerge = {},
+                    onRollbackLastMerge = {},
+                    onFinalizeLastMerge = {},
+                    enableLifecycleAutoRefresh = false,
+                    enableCyclicTabs = false,
+                    animateTabSwitch = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("Signals").performClick()
+        composeRule.waitForIdle()
+        composeRule.onNodeWithText("刷新任务").performScrollTo().performClick()
+        composeRule.onNodeWithTag("job_open_job-bili-ok", useUnmergedTree = true)
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithTag("job_retry_job-bili-failed", useUnmergedTree = true)
+            .performScrollTo()
+            .performClick()
+
+        assertEquals(1, refreshClicks)
+        assertEquals("job-bili-ok", openedJobId)
+        assertEquals("job-bili-failed", retriedJobId)
     }
 
     @Test
@@ -614,9 +699,12 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onAllNodesWithText("合并笔记")[1].performClick()
+        composeRule.onNodeWithTag("saved_note_open_merged_note_abc123", useUnmergedTree = true)
+            .performScrollTo()
+            .performClick()
+        composeRule.waitForIdle()
 
-        composeRule.onNodeWithText("Merge Note · 来源请见正文末尾链接").assertIsDisplayed()
+        composeRule.onAllNodesWithText("Merge Note · 来源请见正文末尾链接").assertCountEquals(1)
         composeRule.onAllNodesWithText(mergedUrl).assertCountEquals(0)
     }
 
@@ -677,10 +765,14 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("普通笔记").performClick()
+        composeRule.onNodeWithTag("saved_note_open_b-normal-1", useUnmergedTree = true)
+            .performScrollTo()
+            .performClick()
+        composeRule.waitForIdle()
 
+        composeRule.onAllNodesWithTag("bili_source_url_detail", useUnmergedTree = true)
+            .assertCountEquals(1)
         val linkNode = composeRule.onNodeWithTag("bili_source_url_detail", useUnmergedTree = true)
-        linkNode.assertIsDisplayed()
         linkNode.assertHasClickAction()
 
         val layoutResults = mutableListOf<TextLayoutResult>()
@@ -801,6 +893,99 @@ class MainScreenContentRobolectricSmokeTest {
 
         composeRule.onNodeWithText("阈值 >90").assertIsDisplayed()
         composeRule.onNodeWithText("ntfy 已关闭").assertIsDisplayed()
+    }
+
+    @Test
+    fun financePanel_shouldRenderWatchlistNewsLinks() {
+        composeRule.setContent {
+            MaterialTheme {
+                MainScreenContent(
+                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
+                    bilibili = BilibiliUiState(),
+                    xiaohongshu = XiaohongshuUiState(),
+                    notes = NotesUiState(),
+                    finance = FinanceSignalsUiState(
+                        focusCards = listOf(
+                            FinanceFocusCard(
+                                title = "布伦特原油 已触发监控阈值",
+                                summary = "阈值条件：>90；最近关联新闻 2 条",
+                                priority = "HIGH",
+                                kind = "ALERT",
+                                actionType = "REVIEW_NOW",
+                                actionLabel = "立即复核",
+                                actionHint = "先看价格异动和关联新闻，再决定是否提升观察频率。",
+                                reasons = listOf("threshold_triggered", "related_news_present"),
+                                relatedWatchlistNames = listOf("布伦特原油"),
+                            ),
+                        ),
+                        watchlistPreview = listOf(
+                            FinanceWatchlistItem(
+                                name = "布伦特原油",
+                                symbol = "BZ=F",
+                                price = 92.69,
+                                changePct = "+8.52%",
+                                relatedNewsCount = 2,
+                                relatedKeywords = listOf("原油", "油价"),
+                            ),
+                        ),
+                        topNews = listOf(
+                            FinanceNewsItem(
+                                title = "原油与黄金同步走高",
+                                publisher = "Reuters",
+                                published = "2026-03-12 11:30:00",
+                                category = "finance",
+                                matchedKeywords = listOf("原油", "黄金"),
+                                relatedSymbols = listOf("BZ=F"),
+                                relatedWatchlistNames = listOf("布伦特原油"),
+                            ),
+                        ),
+                    ),
+                    onAppForeground = {},
+                    onBaseUrlChange = {},
+                    onSaveBaseUrl = {},
+                    onTestConnection = {},
+                    onConfigTextChange = { _, _ -> },
+                    onConfigBooleanChange = { _, _ -> },
+                    onResetConfig = {},
+                    onBilibiliVideoUrlChange = {},
+                    onSubmitBilibiliSummary = {},
+                    onSaveBilibiliNote = {},
+                    onXiaohongshuUrlChange = {},
+                    onSummarizeXiaohongshuUrl = {},
+                    onRefreshXiaohongshuAuthConfig = {},
+                    onSaveSingleXiaohongshuNote = {},
+                    onNotesKeywordChange = {},
+                    onRefreshNotes = {},
+                    onDeleteBilibiliNote = {},
+                    onDeleteXiaohongshuNote = {},
+                    onSuggestMergeCandidates = {},
+                    onPreviewMergeCandidate = { _ -> },
+                    onCommitCurrentMerge = {},
+                    onRollbackLastMerge = {},
+                    onFinalizeLastMerge = {},
+                    enableLifecycleAutoRefresh = false,
+                    enableFinanceAutoRefresh = false,
+                    enableCyclicTabs = false,
+                    animateTabSwitch = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("笔记系统").performClick()
+        composeRule.onNodeWithText("资产系统").performClick()
+        composeRule.waitForIdle()
+
+        composeRule.onNodeWithText("今日关注建议").assertIsDisplayed()
+        composeRule.onNodeWithText("阈值提醒").assertIsDisplayed()
+        composeRule.onNodeWithText("立即复核 · 立即处理").assertIsDisplayed()
+        composeRule.onNodeWithText("布伦特原油 已触发监控阈值").assertIsDisplayed()
+        composeRule.onNodeWithText("建议动作：先看价格异动和关联新闻，再决定是否提升观察频率。").performScrollTo()
+            .assertIsDisplayed()
+        composeRule.onNodeWithText("触发原因：阈值触发 / 已有关联新闻").performScrollTo()
+            .assertIsDisplayed()
+        composeRule.onNodeWithText("关联新闻 2").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("原油 / 油价").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("影响 布伦特原油").performScrollTo().assertIsDisplayed()
     }
 
     @Test

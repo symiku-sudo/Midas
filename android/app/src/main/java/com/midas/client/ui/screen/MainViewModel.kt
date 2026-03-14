@@ -4,16 +4,20 @@ import android.app.Application
 import android.net.Uri
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.midas.client.data.model.AsyncJobListItemData
 import com.midas.client.data.model.AssetSnapshotRecordData
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSummaryData
+import com.midas.client.data.model.FinanceFocusCard
 import com.midas.client.data.model.FinanceNewsItem
 import com.midas.client.data.model.FinanceWatchlistItem
 import com.midas.client.data.model.NotesMergeCandidateItem
 import com.midas.client.data.model.NotesMergeCommitData
 import com.midas.client.data.model.NotesMergePreviewData
+import com.midas.client.data.model.UnifiedNoteItem
 import com.midas.client.data.model.XiaohongshuSavedNote
 import com.midas.client.data.model.XiaohongshuSummaryItem
+import com.midas.client.data.network.ServerAuthState
 import com.midas.client.data.repo.AssetImageUpload
 import com.midas.client.data.repo.MidasRepository
 import com.midas.client.data.repo.SettingsRepository
@@ -41,6 +45,7 @@ import kotlin.math.round
 
 data class SettingsUiState(
     val baseUrlInput: String = "",
+    val accessTokenInput: String = "",
     val isTesting: Boolean = false,
     val testStatus: String = "",
     val saveStatus: String = "",
@@ -56,8 +61,13 @@ data class BilibiliUiState(
     val videoUrlInput: String = "",
     val isLoading: Boolean = false,
     val isSavingNote: Boolean = false,
+    val isRecentJobsLoading: Boolean = false,
     val errorMessage: String = "",
+    val submitStatus: String = "",
+    val currentJobId: String = "",
+    val recentJobsStatus: String = "",
     val saveStatus: String = "",
+    val recentJobs: List<AsyncJobListItemData> = emptyList(),
     val result: BilibiliSummaryData? = null,
 )
 
@@ -65,12 +75,16 @@ data class XiaohongshuUiState(
     val urlInput: String = "",
     val isSummarizingUrl: Boolean = false,
     val isRefreshingCaptureConfig: Boolean = false,
+    val isRecentJobsLoading: Boolean = false,
     val savingSingleNoteIds: Set<String> = emptySet(),
     val savedNoteIds: Set<String> = emptySet(),
     val errorMessage: String = "",
     val saveStatus: String = "",
     val captureRefreshStatus: String = "",
     val summarizeUrlStatus: String = "",
+    val currentJobId: String = "",
+    val recentJobsStatus: String = "",
+    val recentJobs: List<AsyncJobListItemData> = emptyList(),
     val summaries: List<XiaohongshuSummaryItem> = emptyList(),
 )
 
@@ -123,6 +137,8 @@ private val assetCategorySpecs = listOf(
     AssetCategorySpec(key = "housing_fund", label = "公积金"),
 )
 private const val MAX_ASSET_IMAGE_UPLOAD = 5
+private const val ASYNC_JOB_POLL_INTERVAL_MS = 1500L
+private const val ASYNC_JOB_POLL_MAX_ATTEMPTS = 800
 
 private fun defaultAssetDrafts(): List<AssetCategoryDraft> {
     return assetCategorySpecs.map { spec ->
@@ -139,6 +155,7 @@ data class FinanceSignalsUiState(
     val updateTime: String = "",
     val newsLastFetchTime: String = "",
     val newsIsStale: Boolean = false,
+    val focusCards: List<FinanceFocusCard> = emptyList(),
     val watchlistPreview: List<FinanceWatchlistItem> = emptyList(),
     val topNews: List<FinanceNewsItem> = emptyList(),
     val watchlistNtfyEnabled: Boolean = false,
@@ -162,7 +179,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val apiRepository = MidasRepository()
 
     private val _settingsState = MutableStateFlow(
-        SettingsUiState(baseUrlInput = settingsRepository.getServerBaseUrl())
+        SettingsUiState(
+            baseUrlInput = settingsRepository.getServerBaseUrl(),
+            accessTokenInput = settingsRepository.getServerAccessToken(),
+        )
     )
     val settingsState: StateFlow<SettingsUiState> = _settingsState.asStateFlow()
 
@@ -182,11 +202,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private var financeSignalsJob: Job? = null
     private var assetCurrentJob: Job? = null
     private var assetHistoryJob: Job? = null
+    private var notesSearchJob: Job? = null
+    private var bilibiliSummaryJob: Job? = null
+    private var xiaohongshuSummaryJob: Job? = null
 
     init {
+        ServerAuthState.updateAccessToken(settingsRepository.getServerAccessToken())
         loadLocalAssetStats()
         loadEditableConfig()
         loadSavedNotes()
+        refreshAsyncJobHistories()
         loadFinanceSignals()
         loadAssetCurrent()
         loadAssetSnapshotHistory()
@@ -194,6 +219,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun onAppForeground() {
         loadSavedNotes()
+        refreshAsyncJobHistories()
         loadFinanceSignals()
         loadAssetCurrent()
         loadAssetSnapshotHistory()
@@ -508,15 +534,33 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun onAccessTokenInputChange(newValue: String) {
+        _settingsState.update {
+            it.copy(
+                accessTokenInput = newValue,
+                saveStatus = "",
+                testStatus = "",
+                configStatus = "",
+            )
+        }
+    }
+
     fun saveBaseUrl() {
         val normalized = settingsRepository.saveServerBaseUrl(_settingsState.value.baseUrlInput)
+        val token = settingsRepository.saveServerAccessToken(_settingsState.value.accessTokenInput)
         _settingsState.update {
             it.copy(
                 baseUrlInput = normalized,
-                saveStatus = "已保存服务端地址。",
+                accessTokenInput = token,
+                saveStatus = if (token.isBlank()) {
+                    "已保存服务端地址。"
+                } else {
+                    "已保存服务端地址和访问令牌。"
+                },
             )
         }
         loadEditableConfig()
+        refreshAsyncJobHistories()
         loadFinanceSignals()
         loadAssetCurrent()
         loadAssetSnapshotHistory()
@@ -781,7 +825,15 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun onBilibiliUrlInputChange(newValue: String) {
-        _bilibiliState.update { it.copy(videoUrlInput = newValue, errorMessage = "", saveStatus = "") }
+        _bilibiliState.update {
+            it.copy(
+                videoUrlInput = newValue,
+                errorMessage = "",
+                submitStatus = "",
+                currentJobId = "",
+                saveStatus = "",
+            )
+        }
     }
 
     fun submitBilibiliSummary() {
@@ -794,15 +846,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        viewModelScope.launch {
+        bilibiliSummaryJob?.cancel()
+        bilibiliSummaryJob = viewModelScope.launch {
             _bilibiliState.update {
-                it.copy(isLoading = true, errorMessage = "", saveStatus = "", result = null)
+                it.copy(
+                    isLoading = true,
+                    errorMessage = "",
+                    submitStatus = "",
+                    saveStatus = "",
+                    currentJobId = "",
+                    result = null,
+                )
             }
-            when (val result = apiRepository.summarizeBilibili(baseUrl, videoUrl)) {
+            when (val jobResult = apiRepository.createBilibiliSummaryJob(baseUrl, videoUrl)) {
                 is AppResult.Success -> {
                     _bilibiliState.update {
-                        it.copy(isLoading = false, result = result.data)
+                        it.copy(
+                            currentJobId = jobResult.data.jobId,
+                            submitStatus = "任务已提交，正在后台总结...（${jobResult.data.jobId.take(8)}）",
+                        )
                     }
+                    refreshBilibiliAsyncJobs(baseUrl)
+                    awaitBilibiliSummaryJob(baseUrl, jobResult.data.jobId)
                 }
 
                 is AppResult.Error -> {
@@ -810,8 +875,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         it.copy(
                             isLoading = false,
                             errorMessage = ErrorMessageMapper.format(
-                                code = result.code,
-                                message = result.message,
+                                code = jobResult.code,
+                                message = jobResult.message,
                                 context = ErrorContext.BILIBILI,
                             ),
                         )
@@ -866,6 +931,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 urlInput = newValue,
                 errorMessage = "",
                 summarizeUrlStatus = "",
+                currentJobId = "",
                 saveStatus = "",
                 captureRefreshStatus = "",
             )
@@ -882,28 +948,28 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             return
         }
 
-        viewModelScope.launch {
+        xiaohongshuSummaryJob?.cancel()
+        xiaohongshuSummaryJob = viewModelScope.launch {
             _xiaohongshuState.update {
                 it.copy(
                     isSummarizingUrl = true,
                     errorMessage = "",
                     summarizeUrlStatus = "",
+                    currentJobId = "",
                     saveStatus = "",
                     captureRefreshStatus = "",
                 )
             }
-            when (val result = apiRepository.summarizeXiaohongshuUrl(baseUrl, url)) {
+            when (val jobResult = apiRepository.createXiaohongshuSummaryJob(baseUrl, url)) {
                 is AppResult.Success -> {
                     _xiaohongshuState.update {
-                        val currentList = it.summaries.filter { summary ->
-                            summary.noteId != result.data.noteId
-                        }
                         it.copy(
-                            isSummarizingUrl = false,
-                            summaries = listOf(result.data) + currentList,
-                            summarizeUrlStatus = "单篇笔记总结完成，可直接保存。",
+                            currentJobId = jobResult.data.jobId,
+                            summarizeUrlStatus = "任务已提交，正在后台总结...（${jobResult.data.jobId.take(8)}）",
                         )
                     }
+                    refreshXiaohongshuAsyncJobs(baseUrl)
+                    awaitXiaohongshuSummaryJob(baseUrl, jobResult.data.jobId)
                 }
 
                 is AppResult.Error -> {
@@ -911,8 +977,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         it.copy(
                             isSummarizingUrl = false,
                             errorMessage = ErrorMessageMapper.format(
-                                code = result.code,
-                                message = result.message,
+                                code = jobResult.code,
+                                message = jobResult.message,
                                 context = ErrorContext.XIAOHONGSHU_SYNC,
                             ),
                         )
@@ -1085,8 +1151,182 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun refreshAsyncJobHistories() {
+        val baseUrl = settingsRepository.getServerBaseUrl().trim()
+        if (baseUrl.isBlank()) {
+            return
+        }
+        viewModelScope.launch {
+            refreshBilibiliAsyncJobs(baseUrl)
+            refreshXiaohongshuAsyncJobs(baseUrl)
+        }
+    }
+
+    fun refreshBilibiliJobHistory() {
+        val baseUrl = requireBaseUrl {
+            _bilibiliState.update { it.copy(errorMessage = "请先填写服务端地址。") }
+        } ?: return
+        viewModelScope.launch {
+            refreshBilibiliAsyncJobs(baseUrl)
+        }
+    }
+
+    fun refreshXiaohongshuJobHistory() {
+        val baseUrl = requireBaseUrl {
+            _xiaohongshuState.update { it.copy(errorMessage = "请先填写服务端地址。") }
+        } ?: return
+        viewModelScope.launch {
+            refreshXiaohongshuAsyncJobs(baseUrl)
+        }
+    }
+
+    fun openBilibiliJob(jobId: String) {
+        val normalizedJobId = jobId.trim()
+        if (normalizedJobId.isEmpty()) {
+            return
+        }
+        val baseUrl = requireBaseUrl {
+            _bilibiliState.update { it.copy(errorMessage = "请先填写服务端地址。") }
+        } ?: return
+        bilibiliSummaryJob?.cancel()
+        bilibiliSummaryJob = viewModelScope.launch {
+            _bilibiliState.update {
+                it.copy(
+                    isLoading = true,
+                    errorMessage = "",
+                    submitStatus = "正在加载任务结果...（${normalizedJobId.take(8)}）",
+                    currentJobId = normalizedJobId,
+                )
+            }
+            awaitBilibiliSummaryJob(baseUrl, normalizedJobId)
+        }
+    }
+
+    fun retryBilibiliJob(jobId: String) {
+        val normalizedJobId = jobId.trim()
+        if (normalizedJobId.isEmpty()) {
+            return
+        }
+        val baseUrl = requireBaseUrl {
+            _bilibiliState.update { it.copy(errorMessage = "请先填写服务端地址。") }
+        } ?: return
+        bilibiliSummaryJob?.cancel()
+        bilibiliSummaryJob = viewModelScope.launch {
+            _bilibiliState.update {
+                it.copy(
+                    isLoading = true,
+                    errorMessage = "",
+                    submitStatus = "",
+                    saveStatus = "",
+                    result = null,
+                )
+            }
+            when (val result = apiRepository.retryAsyncJob(baseUrl, normalizedJobId)) {
+                is AppResult.Success -> {
+                    _bilibiliState.update {
+                        it.copy(
+                            currentJobId = result.data.jobId,
+                            submitStatus = "已重新提交后台总结...（${result.data.jobId.take(8)}）",
+                        )
+                    }
+                    refreshBilibiliAsyncJobs(baseUrl)
+                    awaitBilibiliSummaryJob(baseUrl, result.data.jobId)
+                }
+
+                is AppResult.Error -> {
+                    _bilibiliState.update {
+                        it.copy(
+                            isLoading = false,
+                            submitStatus = "",
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.BILIBILI,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    fun openXiaohongshuJob(jobId: String) {
+        val normalizedJobId = jobId.trim()
+        if (normalizedJobId.isEmpty()) {
+            return
+        }
+        val baseUrl = requireBaseUrl {
+            _xiaohongshuState.update { it.copy(errorMessage = "请先填写服务端地址。") }
+        } ?: return
+        xiaohongshuSummaryJob?.cancel()
+        xiaohongshuSummaryJob = viewModelScope.launch {
+            _xiaohongshuState.update {
+                it.copy(
+                    isSummarizingUrl = true,
+                    errorMessage = "",
+                    summarizeUrlStatus = "正在加载任务结果...（${normalizedJobId.take(8)}）",
+                    currentJobId = normalizedJobId,
+                )
+            }
+            awaitXiaohongshuSummaryJob(baseUrl, normalizedJobId)
+        }
+    }
+
+    fun retryXiaohongshuJob(jobId: String) {
+        val normalizedJobId = jobId.trim()
+        if (normalizedJobId.isEmpty()) {
+            return
+        }
+        val baseUrl = requireBaseUrl {
+            _xiaohongshuState.update { it.copy(errorMessage = "请先填写服务端地址。") }
+        } ?: return
+        xiaohongshuSummaryJob?.cancel()
+        xiaohongshuSummaryJob = viewModelScope.launch {
+            _xiaohongshuState.update {
+                it.copy(
+                    isSummarizingUrl = true,
+                    errorMessage = "",
+                    summarizeUrlStatus = "",
+                    saveStatus = "",
+                    captureRefreshStatus = "",
+                )
+            }
+            when (val result = apiRepository.retryAsyncJob(baseUrl, normalizedJobId)) {
+                is AppResult.Success -> {
+                    _xiaohongshuState.update {
+                        it.copy(
+                            currentJobId = result.data.jobId,
+                            summarizeUrlStatus = "已重新提交后台总结...（${result.data.jobId.take(8)}）",
+                        )
+                    }
+                    refreshXiaohongshuAsyncJobs(baseUrl)
+                    awaitXiaohongshuSummaryJob(baseUrl, result.data.jobId)
+                }
+
+                is AppResult.Error -> {
+                    _xiaohongshuState.update {
+                        it.copy(
+                            isSummarizingUrl = false,
+                            summarizeUrlStatus = "",
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+    }
+
     fun onNotesKeywordInputChange(newValue: String) {
         _notesState.update { it.copy(keywordInput = newValue) }
+        notesSearchJob?.cancel()
+        notesSearchJob = viewModelScope.launch {
+            delay(300)
+            loadSavedNotes()
+        }
     }
 
     fun suggestMergeCandidates() {
@@ -1672,6 +1912,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             updateTime = data.updateTime,
             newsLastFetchTime = data.newsLastFetchTime,
             newsIsStale = data.newsStale,
+            focusCards = data.focusCards,
             watchlistPreview = data.watchlistPreview,
             topNews = data.topNews,
             watchlistNtfyEnabled = data.watchlistNtfyEnabled,
@@ -1933,9 +2174,342 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    private suspend fun refreshBilibiliAsyncJobs(baseUrl: String) {
+        _bilibiliState.update {
+            it.copy(
+                isRecentJobsLoading = true,
+                recentJobsStatus = "",
+            )
+        }
+        when (
+            val result = apiRepository.listAsyncJobs(
+                baseUrl = baseUrl,
+                limit = 6,
+                jobType = "bilibili_summarize",
+            )
+        ) {
+            is AppResult.Success -> {
+                _bilibiliState.update {
+                    it.copy(
+                        isRecentJobsLoading = false,
+                        recentJobs = result.data.items,
+                        recentJobsStatus = if (result.data.items.isEmpty()) {
+                            "暂无最近任务。"
+                        } else {
+                            ""
+                        },
+                    )
+                }
+            }
+
+            is AppResult.Error -> {
+                _bilibiliState.update {
+                    it.copy(
+                        isRecentJobsLoading = false,
+                        recentJobsStatus = ErrorMessageMapper.format(
+                            code = result.code,
+                            message = result.message,
+                            context = ErrorContext.BILIBILI,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    private suspend fun refreshXiaohongshuAsyncJobs(baseUrl: String) {
+        _xiaohongshuState.update {
+            it.copy(
+                isRecentJobsLoading = true,
+                recentJobsStatus = "",
+            )
+        }
+        when (
+            val result = apiRepository.listAsyncJobs(
+                baseUrl = baseUrl,
+                limit = 6,
+                jobType = "xiaohongshu_summarize_url",
+            )
+        ) {
+            is AppResult.Success -> {
+                _xiaohongshuState.update {
+                    it.copy(
+                        isRecentJobsLoading = false,
+                        recentJobs = result.data.items,
+                        recentJobsStatus = if (result.data.items.isEmpty()) {
+                            "暂无最近任务。"
+                        } else {
+                            ""
+                        },
+                    )
+                }
+            }
+
+            is AppResult.Error -> {
+                _xiaohongshuState.update {
+                    it.copy(
+                        isRecentJobsLoading = false,
+                        recentJobsStatus = ErrorMessageMapper.format(
+                            code = result.code,
+                            message = result.message,
+                            context = ErrorContext.XIAOHONGSHU_SYNC,
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
     private fun currentTimestamp(): String {
         val formatter = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault())
         return formatter.format(Date())
+    }
+
+    private fun UnifiedNoteItem.toBilibiliSavedNote(): BilibiliSavedNote {
+        return BilibiliSavedNote(
+            noteId = noteId,
+            title = title,
+            videoUrl = sourceUrl,
+            summaryMarkdown = summaryMarkdown,
+            elapsedMs = 0,
+            transcriptChars = 0,
+            savedAt = savedAt,
+        )
+    }
+
+    private fun UnifiedNoteItem.toXiaohongshuSavedNote(): XiaohongshuSavedNote {
+        return XiaohongshuSavedNote(
+            noteId = noteId,
+            title = title,
+            sourceUrl = sourceUrl,
+            summaryMarkdown = summaryMarkdown,
+            savedAt = savedAt,
+        )
+    }
+
+    private suspend fun awaitBilibiliSummaryJob(baseUrl: String, jobId: String) {
+        repeat(ASYNC_JOB_POLL_MAX_ATTEMPTS) { attempt ->
+            when (val status = apiRepository.getAsyncJob(baseUrl, jobId)) {
+                is AppResult.Success -> {
+                    when (status.data.status) {
+                        "PENDING", "RUNNING" -> {
+                            _bilibiliState.update {
+                                it.copy(
+                                    submitStatus = if (status.data.status == "PENDING") {
+                                        "任务排队中...（${jobId.take(8)}）"
+                                    } else {
+                                        "后台总结中...（${jobId.take(8)}）"
+                                    },
+                                )
+                            }
+                            if (attempt < ASYNC_JOB_POLL_MAX_ATTEMPTS - 1) {
+                                delay(ASYNC_JOB_POLL_INTERVAL_MS)
+                            }
+                        }
+
+                        "SUCCEEDED" -> {
+                            val parsed = status.data.result?.toBilibiliSummaryData()
+                            if (parsed == null) {
+                                _bilibiliState.update {
+                                    it.copy(
+                                        isLoading = false,
+                                        submitStatus = "",
+                                        errorMessage = "任务完成，但结果格式无法识别。",
+                                    )
+                                }
+                            } else {
+                                _bilibiliState.update {
+                                    it.copy(
+                                        isLoading = false,
+                                        result = parsed,
+                                        submitStatus = "总结完成，可直接保存。",
+                                    )
+                                }
+                            }
+                            refreshBilibiliAsyncJobs(baseUrl)
+                            return
+                        }
+
+                        else -> {
+                            _bilibiliState.update {
+                                it.copy(
+                                    isLoading = false,
+                                    submitStatus = "",
+                                    errorMessage = status.data.error?.message
+                                        ?: status.data.message.ifBlank { "后台总结失败。" },
+                                )
+                            }
+                            refreshBilibiliAsyncJobs(baseUrl)
+                            return
+                        }
+                    }
+                }
+
+                is AppResult.Error -> {
+                    _bilibiliState.update {
+                        it.copy(
+                            isLoading = false,
+                            submitStatus = "",
+                            errorMessage = ErrorMessageMapper.format(
+                                code = status.code,
+                                message = status.message,
+                                context = ErrorContext.BILIBILI,
+                            ),
+                        )
+                    }
+                    refreshBilibiliAsyncJobs(baseUrl)
+                    return
+                }
+            }
+        }
+        _bilibiliState.update {
+            it.copy(
+                isLoading = false,
+                submitStatus = "",
+                errorMessage = "后台任务等待超时，请稍后重试。任务ID：$jobId",
+            )
+        }
+        refreshBilibiliAsyncJobs(baseUrl)
+    }
+
+    private suspend fun awaitXiaohongshuSummaryJob(baseUrl: String, jobId: String) {
+        repeat(ASYNC_JOB_POLL_MAX_ATTEMPTS) { attempt ->
+            when (val status = apiRepository.getAsyncJob(baseUrl, jobId)) {
+                is AppResult.Success -> {
+                    when (status.data.status) {
+                        "PENDING", "RUNNING" -> {
+                            _xiaohongshuState.update {
+                                it.copy(
+                                    summarizeUrlStatus = if (status.data.status == "PENDING") {
+                                        "任务排队中...（${jobId.take(8)}）"
+                                    } else {
+                                        "后台总结中...（${jobId.take(8)}）"
+                                    },
+                                )
+                            }
+                            if (attempt < ASYNC_JOB_POLL_MAX_ATTEMPTS - 1) {
+                                delay(ASYNC_JOB_POLL_INTERVAL_MS)
+                            }
+                        }
+
+                        "SUCCEEDED" -> {
+                            val parsed = status.data.result?.toXiaohongshuSummaryItem()
+                            if (parsed == null) {
+                                _xiaohongshuState.update {
+                                    it.copy(
+                                        isSummarizingUrl = false,
+                                        summarizeUrlStatus = "",
+                                        errorMessage = "任务完成，但结果格式无法识别。",
+                                    )
+                                }
+                            } else {
+                                _xiaohongshuState.update {
+                                    val currentList = it.summaries.filter { summary ->
+                                        summary.noteId != parsed.noteId
+                                    }
+                                    it.copy(
+                                        isSummarizingUrl = false,
+                                        summaries = listOf(parsed) + currentList,
+                                        summarizeUrlStatus = "单篇笔记总结完成，可直接保存。",
+                                    )
+                                }
+                            }
+                            refreshXiaohongshuAsyncJobs(baseUrl)
+                            return
+                        }
+
+                        else -> {
+                            _xiaohongshuState.update {
+                                it.copy(
+                                    isSummarizingUrl = false,
+                                    summarizeUrlStatus = "",
+                                    errorMessage = status.data.error?.message
+                                        ?: status.data.message.ifBlank { "后台总结失败。" },
+                                )
+                            }
+                            refreshXiaohongshuAsyncJobs(baseUrl)
+                            return
+                        }
+                    }
+                }
+
+                is AppResult.Error -> {
+                    _xiaohongshuState.update {
+                        it.copy(
+                            isSummarizingUrl = false,
+                            summarizeUrlStatus = "",
+                            errorMessage = ErrorMessageMapper.format(
+                                code = status.code,
+                                message = status.message,
+                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                            ),
+                        )
+                    }
+                    refreshXiaohongshuAsyncJobs(baseUrl)
+                    return
+                }
+            }
+        }
+        _xiaohongshuState.update {
+            it.copy(
+                isSummarizingUrl = false,
+                summarizeUrlStatus = "",
+                errorMessage = "后台任务等待超时，请稍后重试。任务ID：$jobId",
+            )
+        }
+        refreshXiaohongshuAsyncJobs(baseUrl)
+    }
+
+    private fun Map<String, Any?>.toBilibiliSummaryData(): BilibiliSummaryData? {
+        val videoUrl = stringValue("video_url")
+        val summaryMarkdown = stringValue("summary_markdown")
+        val elapsedMs = intValue("elapsed_ms")
+        val transcriptChars = intValue("transcript_chars")
+        if (videoUrl.isBlank() || summaryMarkdown.isBlank()) {
+            return null
+        }
+        return BilibiliSummaryData(
+            videoUrl = videoUrl,
+            summaryMarkdown = summaryMarkdown,
+            elapsedMs = elapsedMs,
+            transcriptChars = transcriptChars,
+        )
+    }
+
+    private fun Map<String, Any?>.toXiaohongshuSummaryItem(): XiaohongshuSummaryItem? {
+        val noteId = stringValue("note_id")
+        val title = stringValue("title")
+        val sourceUrl = stringValue("source_url")
+        val summaryMarkdown = stringValue("summary_markdown")
+        if (noteId.isBlank() || sourceUrl.isBlank() || summaryMarkdown.isBlank()) {
+            return null
+        }
+        return XiaohongshuSummaryItem(
+            noteId = noteId,
+            title = title,
+            sourceUrl = sourceUrl,
+            summaryMarkdown = summaryMarkdown,
+        )
+    }
+
+    private fun Map<String, Any?>.stringValue(key: String): String {
+        return when (val value = this[key]) {
+            null -> ""
+            is String -> value.trim()
+            else -> value.toString().trim()
+        }
+    }
+
+    private fun Map<String, Any?>.intValue(key: String): Int {
+        val value = this[key] ?: return 0
+        return when (value) {
+            is Int -> value
+            is Long -> value.toInt()
+            is Double -> value.toInt()
+            is Float -> value.toInt()
+            is String -> value.toIntOrNull() ?: 0
+            else -> 0
+        }
     }
 
     fun loadSavedNotes() {
@@ -1949,45 +2523,47 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } ?: return
         viewModelScope.launch {
             _notesState.update { it.copy(isLoading = true, errorMessage = "", actionStatus = "") }
-
-            val bilibiliResult = apiRepository.listBilibiliNotes(baseUrl)
-            if (bilibiliResult is AppResult.Error) {
-                _notesState.update {
-                    it.copy(
-                        isLoading = false,
-                        errorMessage = ErrorMessageMapper.format(
-                            code = bilibiliResult.code,
-                            message = bilibiliResult.message,
-                            context = ErrorContext.BILIBILI,
-                        ),
-                    )
-                }
-                return@launch
-            }
-
-            val xhsResult = apiRepository.listXiaohongshuNotes(baseUrl)
-            if (xhsResult is AppResult.Error) {
-                _notesState.update {
-                    it.copy(
-                        isLoading = false,
-                        errorMessage = ErrorMessageMapper.format(
-                            code = xhsResult.code,
-                            message = xhsResult.message,
-                            context = ErrorContext.XIAOHONGSHU_SYNC,
-                        ),
-                    )
-                }
-                return@launch
-            }
-
-            val bilibiliData = (bilibiliResult as AppResult.Success).data
-            val xhsData = (xhsResult as AppResult.Success).data
-            _notesState.update {
-                it.copy(
-                    isLoading = false,
-                    bilibiliNotes = bilibiliData.items,
-                    xiaohongshuNotes = xhsData.items,
+            when (
+                val result = apiRepository.searchNotes(
+                    baseUrl = baseUrl,
+                    keyword = _notesState.value.keywordInput.trim(),
+                    limit = 200,
+                    offset = 0,
                 )
+            ) {
+                is AppResult.Success -> {
+                    val bilibiliItems = result.data.items
+                        .filter { item -> item.source == "bilibili" }
+                        .map { item -> item.toBilibiliSavedNote() }
+                    val xhsItems = result.data.items
+                        .filter { item -> item.source == "xiaohongshu" }
+                        .map { item -> item.toXiaohongshuSavedNote() }
+                    _notesState.update {
+                        it.copy(
+                            isLoading = false,
+                            bilibiliNotes = bilibiliItems,
+                            xiaohongshuNotes = xhsItems,
+                            actionStatus = if (_notesState.value.keywordInput.trim().isBlank()) {
+                                ""
+                            } else {
+                                "远端检索命中 ${result.data.total} 条笔记。"
+                            },
+                        )
+                    }
+                }
+
+                is AppResult.Error -> {
+                    _notesState.update {
+                        it.copy(
+                            isLoading = false,
+                            errorMessage = ErrorMessageMapper.format(
+                                code = result.code,
+                                message = result.message,
+                                context = ErrorContext.BILIBILI,
+                            ),
+                        )
+                    }
+                }
             }
         }
     }
@@ -2106,6 +2682,9 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     override fun onCleared() {
         autoSaveConfigJob?.cancel()
+        notesSearchJob?.cancel()
+        bilibiliSummaryJob?.cancel()
+        xiaohongshuSummaryJob?.cancel()
         super.onCleared()
     }
 

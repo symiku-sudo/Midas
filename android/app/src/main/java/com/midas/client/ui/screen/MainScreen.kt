@@ -62,8 +62,10 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import com.midas.client.data.model.AsyncJobListItemData
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSummaryData
+import com.midas.client.data.model.FinanceFocusCard
 import com.midas.client.data.model.FinanceNewsItem
 import com.midas.client.data.model.FinanceWatchlistItem
 import com.midas.client.data.model.NotesMergeCandidateItem
@@ -288,6 +290,7 @@ fun MainScreen(viewModel: MainViewModel) {
         finance = finance,
         onAppForeground = viewModel::onAppForeground,
         onBaseUrlChange = viewModel::onBaseUrlInputChange,
+        onAccessTokenChange = viewModel::onAccessTokenInputChange,
         onSaveBaseUrl = viewModel::saveBaseUrl,
         onTestConnection = viewModel::testConnection,
         onConfigTextChange = viewModel::onEditableConfigFieldTextChange,
@@ -296,14 +299,22 @@ fun MainScreen(viewModel: MainViewModel) {
         onBilibiliVideoUrlChange = viewModel::onBilibiliUrlInputChange,
         onSubmitBilibiliSummary = viewModel::submitBilibiliSummary,
         onSaveBilibiliNote = viewModel::saveCurrentBilibiliResult,
+        onRefreshBilibiliJobs = viewModel::refreshBilibiliJobHistory,
+        onOpenBilibiliJob = viewModel::openBilibiliJob,
+        onRetryBilibiliJob = viewModel::retryBilibiliJob,
         onXiaohongshuUrlChange = viewModel::onXiaohongshuUrlInputChange,
         onSummarizeXiaohongshuUrl = viewModel::summarizeXiaohongshuByUrl,
         onRefreshXiaohongshuAuthConfig = viewModel::refreshXiaohongshuAuthConfig,
         onSaveSingleXiaohongshuNote = viewModel::saveSingleXiaohongshuSummary,
+        onRefreshXiaohongshuJobs = viewModel::refreshXiaohongshuJobHistory,
+        onOpenXiaohongshuJob = viewModel::openXiaohongshuJob,
+        onRetryXiaohongshuJob = viewModel::retryXiaohongshuJob,
         onNotesKeywordChange = viewModel::onNotesKeywordInputChange,
         onRefreshNotes = viewModel::loadSavedNotes,
         onDeleteBilibiliNote = viewModel::deleteBilibiliSavedNote,
+        onClearBilibiliNotes = viewModel::clearBilibiliSavedNotes,
         onDeleteXiaohongshuNote = viewModel::deleteXiaohongshuSavedNote,
+        onClearXiaohongshuNotes = viewModel::clearXiaohongshuSavedNotes,
         onSuggestMergeCandidates = viewModel::suggestMergeCandidates,
         onPreviewMergeCandidate = viewModel::previewMergeCandidate,
         onCommitCurrentMerge = viewModel::commitCurrentMerge,
@@ -330,6 +341,7 @@ fun MainScreenContent(
     finance: FinanceSignalsUiState = FinanceSignalsUiState(),
     onAppForeground: () -> Unit,
     onBaseUrlChange: (String) -> Unit,
+    onAccessTokenChange: (String) -> Unit = {},
     onSaveBaseUrl: () -> Unit,
     onTestConnection: () -> Unit,
     onConfigTextChange: (String, String) -> Unit,
@@ -338,14 +350,22 @@ fun MainScreenContent(
     onBilibiliVideoUrlChange: (String) -> Unit,
     onSubmitBilibiliSummary: () -> Unit,
     onSaveBilibiliNote: () -> Unit,
+    onRefreshBilibiliJobs: () -> Unit = {},
+    onOpenBilibiliJob: (String) -> Unit = {},
+    onRetryBilibiliJob: (String) -> Unit = {},
     onXiaohongshuUrlChange: (String) -> Unit,
     onSummarizeXiaohongshuUrl: () -> Unit,
     onRefreshXiaohongshuAuthConfig: () -> Unit,
     onSaveSingleXiaohongshuNote: (XiaohongshuSummaryItem) -> Unit,
+    onRefreshXiaohongshuJobs: () -> Unit = {},
+    onOpenXiaohongshuJob: (String) -> Unit = {},
+    onRetryXiaohongshuJob: (String) -> Unit = {},
     onNotesKeywordChange: (String) -> Unit,
     onRefreshNotes: () -> Unit,
     onDeleteBilibiliNote: (String) -> Unit,
+    onClearBilibiliNotes: () -> Unit = {},
     onDeleteXiaohongshuNote: (String) -> Unit,
+    onClearXiaohongshuNotes: () -> Unit = {},
     onSuggestMergeCandidates: () -> Unit,
     onPreviewMergeCandidate: (NotesMergeCandidateItem) -> Unit,
     onCommitCurrentMerge: () -> Unit,
@@ -506,6 +526,7 @@ fun MainScreenContent(
                     selectedMainTab == MainTab.SETTINGS -> SettingsPanel(
                         state = settings,
                         onBaseUrlChange = onBaseUrlChange,
+                        onAccessTokenChange = onAccessTokenChange,
                         onSave = onSaveBaseUrl,
                         onTestConnection = onTestConnection,
                         onConfigTextChange = onConfigTextChange,
@@ -519,7 +540,9 @@ fun MainScreenContent(
                         onKeywordChange = onNotesKeywordChange,
                         onRefresh = onRefreshNotes,
                         onDeleteBilibili = onDeleteBilibiliNote,
+                        onClearBilibili = onClearBilibiliNotes,
                         onDeleteXiaohongshu = onDeleteXiaohongshuNote,
+                        onClearXiaohongshu = onClearXiaohongshuNotes,
                         onSuggestMergeCandidates = onSuggestMergeCandidates,
                         onPreviewMergeCandidate = onPreviewMergeCandidate,
                         onCommitCurrentMerge = onCommitCurrentMerge,
@@ -534,6 +557,9 @@ fun MainScreenContent(
                             onVideoUrlChange = onBilibiliVideoUrlChange,
                             onSubmit = onSubmitBilibiliSummary,
                             onSaveNote = onSaveBilibiliNote,
+                            onRefreshJobs = onRefreshBilibiliJobs,
+                            onOpenJob = onOpenBilibiliJob,
+                            onRetryJob = onRetryBilibiliJob,
                             modifier = contentModifier,
                         )
                     }
@@ -545,6 +571,9 @@ fun MainScreenContent(
                             onSummarizeUrl = onSummarizeXiaohongshuUrl,
                             onRefreshAuthConfig = onRefreshXiaohongshuAuthConfig,
                             onSaveSingleNote = onSaveSingleXiaohongshuNote,
+                            onRefreshJobs = onRefreshXiaohongshuJobs,
+                            onOpenJob = onOpenXiaohongshuJob,
+                            onRetryJob = onRetryXiaohongshuJob,
                             modifier = contentModifier,
                         )
                     }
@@ -676,6 +705,7 @@ private fun SingleLineActionText(text: String) {
 private fun SettingsPanel(
     state: SettingsUiState,
     onBaseUrlChange: (String) -> Unit,
+    onAccessTokenChange: (String) -> Unit,
     onSave: () -> Unit,
     onTestConnection: () -> Unit,
     onConfigTextChange: (String, String) -> Unit,
@@ -692,6 +722,13 @@ private fun SettingsPanel(
             value = state.baseUrlInput,
             onValueChange = onBaseUrlChange,
             label = { Text("服务端地址（如 http://100.98.44.5:8000/）") },
+            modifier = Modifier.fillMaxWidth(),
+            singleLine = true,
+        )
+        OutlinedTextField(
+            value = state.accessTokenInput,
+            onValueChange = onAccessTokenChange,
+            label = { Text("访问令牌（可选）") },
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
@@ -1013,6 +1050,9 @@ private fun BilibiliPanel(
     onVideoUrlChange: (String) -> Unit,
     onSubmit: () -> Unit,
     onSaveNote: () -> Unit,
+    onRefreshJobs: () -> Unit,
+    onOpenJob: (String) -> Unit,
+    onRetryJob: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1061,9 +1101,22 @@ private fun BilibiliPanel(
         if (state.errorMessage.isNotBlank()) {
             Text(text = state.errorMessage, color = ErrorStatusColor)
         }
+        if (state.submitStatus.isNotBlank()) {
+            Text(text = state.submitStatus, color = LinkStatusColor)
+        }
         if (state.saveStatus.isNotBlank()) {
             Text(text = state.saveStatus, color = SuccessStatusColor)
         }
+        AsyncJobHistoryCard(
+            title = "最近任务",
+            jobs = state.recentJobs,
+            isLoading = state.isRecentJobsLoading,
+            statusText = state.recentJobsStatus,
+            onRefresh = onRefreshJobs,
+            onOpenJob = onOpenJob,
+            onRetryJob = onRetryJob,
+            listTestTag = "bilibili_recent_jobs",
+        )
         state.result?.let { result ->
             BilibiliResult(result)
         }
@@ -1093,6 +1146,9 @@ private fun XiaohongshuPanel(
     onSummarizeUrl: () -> Unit,
     onRefreshAuthConfig: () -> Unit,
     onSaveSingleNote: (XiaohongshuSummaryItem) -> Unit,
+    onRefreshJobs: () -> Unit,
+    onOpenJob: (String) -> Unit,
+    onRetryJob: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
     Column(
@@ -1153,6 +1209,13 @@ private fun XiaohongshuPanel(
         if (state.errorMessage.isNotBlank()) {
             Text(text = state.errorMessage, color = ErrorStatusColor)
         }
+        if (state.currentJobId.isNotBlank()) {
+            Text(
+                text = "任务ID：${state.currentJobId}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
         if (state.saveStatus.isNotBlank()) {
             Text(text = state.saveStatus, color = SuccessStatusColor)
         }
@@ -1162,6 +1225,16 @@ private fun XiaohongshuPanel(
         if (state.summarizeUrlStatus.isNotBlank()) {
             Text(text = state.summarizeUrlStatus, color = SuccessStatusColor)
         }
+        AsyncJobHistoryCard(
+            title = "最近任务",
+            jobs = state.recentJobs,
+            isLoading = state.isRecentJobsLoading,
+            statusText = state.recentJobsStatus,
+            onRefresh = onRefreshJobs,
+            onOpenJob = onOpenJob,
+            onRetryJob = onRetryJob,
+            listTestTag = "xhs_recent_jobs",
+        )
 
         state.summaries.forEach { summary ->
             XiaohongshuSummaryCard(
@@ -1212,6 +1285,173 @@ private fun XiaohongshuSummaryCard(
             HorizontalDivider()
             MarkdownText(markdown = item.summaryMarkdown, modifier = Modifier.fillMaxWidth())
         }
+    }
+}
+
+@Composable
+private fun AsyncJobHistoryCard(
+    title: String,
+    jobs: List<AsyncJobListItemData>,
+    isLoading: Boolean,
+    statusText: String,
+    onRefresh: () -> Unit,
+    onOpenJob: (String) -> Unit,
+    onRetryJob: (String) -> Unit,
+    listTestTag: String,
+) {
+    GlassCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(title, style = MaterialTheme.typography.titleSmall)
+                MidasButton(
+                    onClick = onRefresh,
+                    enabled = !isLoading,
+                    tone = ButtonTone.NEUTRAL,
+                ) {
+                    SingleLineActionText(if (isLoading) "刷新中..." else "刷新任务")
+                }
+            }
+            if (statusText.isNotBlank()) {
+                Text(
+                    text = statusText,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (jobs.isEmpty() && !isLoading && statusText.isBlank()) {
+                Text("暂无最近任务。", style = MaterialTheme.typography.bodySmall)
+            }
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(Modifier.testTag(listTestTag)),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                jobs.forEach { item ->
+                    AsyncJobHistoryItem(
+                        item = item,
+                        onOpenJob = onOpenJob,
+                        onRetryJob = onRetryJob,
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun AsyncJobHistoryItem(
+    item: AsyncJobListItemData,
+    onOpenJob: (String) -> Unit,
+    onRetryJob: (String) -> Unit,
+) {
+    val statusColor = asyncJobStatusColor(item.status)
+    val statusLabel = asyncJobStatusLabel(item.status)
+    val primaryActionLabel = when (item.status) {
+        "SUCCEEDED" -> "查看结果"
+        "PENDING", "RUNNING" -> "继续等待"
+        else -> ""
+    }
+    GlassCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = "${asyncJobTypeLabel(item.jobType)} · $statusLabel",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = statusColor,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = item.jobId.take(8),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Text(
+                text = "提交：${item.submittedAt}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (item.finishedAt.isNotBlank()) {
+                Text(
+                    text = "结束：${item.finishedAt}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (item.retryOfJobId.isNotBlank()) {
+                Text(
+                    text = "重试自：${item.retryOfJobId.take(8)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = LinkStatusColor,
+                )
+            }
+            Text(
+                text = item.message,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (primaryActionLabel.isNotBlank()) {
+                    MidasButton(
+                        onClick = { onOpenJob(item.jobId) },
+                        tone = ButtonTone.NEUTRAL,
+                        modifier = Modifier.testTag("job_open_${item.jobId}"),
+                    ) {
+                        SingleLineActionText(primaryActionLabel)
+                    }
+                }
+                if (item.status == "FAILED" || item.status == "INTERRUPTED") {
+                    MidasButton(
+                        onClick = { onRetryJob(item.jobId) },
+                        tone = ButtonTone.NEUTRAL,
+                        modifier = Modifier.testTag("job_retry_${item.jobId}"),
+                    ) {
+                        SingleLineActionText("重试")
+                    }
+                }
+            }
+        }
+    }
+}
+
+private fun asyncJobTypeLabel(jobType: String): String {
+    return when (jobType.trim().lowercase(Locale.ROOT)) {
+        "bilibili_summarize" -> "B站总结"
+        "xiaohongshu_summarize_url" -> "小红书单篇"
+        else -> "后台任务"
+    }
+}
+
+private fun asyncJobStatusLabel(status: String): String {
+    return when (status.trim().uppercase(Locale.ROOT)) {
+        "PENDING" -> "排队中"
+        "RUNNING" -> "执行中"
+        "SUCCEEDED" -> "已完成"
+        "FAILED" -> "失败"
+        "INTERRUPTED" -> "中断"
+        else -> status.ifBlank { "未知" }
+    }
+}
+
+private fun asyncJobStatusColor(status: String): Color {
+    return when (status.trim().uppercase(Locale.ROOT)) {
+        "SUCCEEDED" -> SuccessStatusColor
+        "FAILED", "INTERRUPTED" -> ErrorStatusColor
+        "PENDING" -> WarningStatusColor
+        else -> LinkStatusColor
     }
 }
 
@@ -1283,6 +1523,18 @@ private fun FinanceSignalsPanel(
         )
 
         if (selectedAssetTab == AssetPanelTab.MARKET) {
+            if (state.focusCards.isNotEmpty()) {
+                GlassCard(modifier = Modifier.fillMaxWidth()) {
+                    Column(
+                        modifier = Modifier.padding(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Text("今日关注建议", style = MaterialTheme.typography.titleSmall)
+                        FinanceFocusCardList(items = state.focusCards)
+                    }
+                }
+            }
+
             GlassCard(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(12.dp),
@@ -1410,6 +1662,114 @@ private fun FinanceSignalsPanel(
 
 private fun formatAmountWanRmb(amount: Double): String {
     return "${"%.2f".format(Locale.US, amount)} 万元人民币"
+}
+
+@Composable
+private fun FinanceFocusCardList(items: List<FinanceFocusCard>) {
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        items.forEachIndexed { index, item ->
+            FinanceFocusCardItem(item = item)
+            if (index < items.lastIndex) {
+                HorizontalDivider()
+            }
+        }
+    }
+}
+
+@Composable
+private fun FinanceFocusCardItem(item: FinanceFocusCard) {
+    val priorityColor = when (item.priority.uppercase(Locale.ROOT)) {
+        "HIGH" -> ErrorStatusColor
+        "LOW" -> LinkStatusColor
+        else -> WarningStatusColor
+    }
+    val kindLabel = when (item.kind.uppercase(Locale.ROOT)) {
+        "ALERT" -> "阈值提醒"
+        "NEWS" -> "新闻关注"
+        else -> item.kind
+    }
+    val actionTypeLabel = when (item.actionType.uppercase(Locale.ROOT)) {
+        "REVIEW_NOW" -> "立即处理"
+        "FOLLOW_UP" -> "继续跟进"
+        "WAIT_CONFIRM" -> "等待确认"
+        else -> "持续观察"
+    }
+    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(
+                text = kindLabel,
+                style = MaterialTheme.typography.bodySmall,
+                color = priorityColor,
+                modifier = Modifier
+                    .background(
+                        color = priorityColor.copy(alpha = 0.14f),
+                        shape = RoundedCornerShape(999.dp),
+                    )
+                    .padding(horizontal = 8.dp, vertical = 2.dp),
+            )
+            if (item.actionLabel.isNotBlank()) {
+                Text(
+                    text = "${item.actionLabel} · $actionTypeLabel",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    modifier = Modifier
+                        .background(
+                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+                            shape = RoundedCornerShape(999.dp),
+                        )
+                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                )
+            }
+            if (item.relatedWatchlistNames.isNotEmpty()) {
+                Text(
+                    text = item.relatedWatchlistNames.joinToString(" / "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            }
+        }
+        Text(
+            text = item.title,
+            style = MaterialTheme.typography.bodySmall,
+            fontWeight = FontWeight.SemiBold,
+        )
+        if (item.summary.isNotBlank()) {
+            Text(
+                text = item.summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (item.actionHint.isNotBlank()) {
+            Text(
+                text = "建议动作：${item.actionHint}",
+                style = MaterialTheme.typography.bodySmall,
+                color = LinkStatusColor,
+            )
+        }
+        if (item.reasons.isNotEmpty()) {
+            Text(
+                text = "触发原因：${item.reasons.joinToString(" / ") { financeReasonLabel(it) }}",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+private fun financeReasonLabel(code: String): String {
+    return when (code.trim().lowercase(Locale.ROOT)) {
+        "threshold_triggered" -> "阈值触发"
+        "related_news_present" -> "已有关联新闻"
+        "keyword_overlap" -> "关键词重合"
+        "recent_alert_sent" -> "近期已告警"
+        "news_impacts_watchlist" -> "新闻影响关注项"
+        "linked_alert_active" -> "关联标的已触发阈值"
+        "multi_asset_impact" -> "影响多个标的"
+        else -> code
+    }
 }
 
 @Composable
@@ -1685,6 +2045,30 @@ private fun FinanceWatchlistRow(item: FinanceWatchlistItem) {
                     )
                 }
             }
+            if (item.relatedNewsCount > 0) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        text = "关联新闻 ${item.relatedNewsCount}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = LinkStatusColor,
+                        modifier = Modifier
+                            .background(
+                                color = LinkStatusColor.copy(alpha = 0.12f),
+                                shape = RoundedCornerShape(999.dp),
+                            )
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                    if (item.relatedKeywords.isNotEmpty()) {
+                        Text(
+                            text = item.relatedKeywords.joinToString(" / "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+            }
         }
         Row(
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -1741,6 +2125,19 @@ private fun FinanceTopNewsList(
                                         .padding(horizontal = 8.dp, vertical = 2.dp),
                                 )
                             }
+                            if (item.relatedWatchlistNames.isNotEmpty()) {
+                                Text(
+                                    text = "影响 ${item.relatedWatchlistNames.joinToString(" / ")}",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = WarningStatusColor,
+                                    modifier = Modifier
+                                        .background(
+                                            color = WarningStatusColor.copy(alpha = 0.12f),
+                                            shape = RoundedCornerShape(999.dp),
+                                        )
+                                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                                )
+                            }
                             val metaText = listOf(item.publisher, item.published)
                                 .filter { it.isNotBlank() }
                                 .joinToString(" · ")
@@ -1769,7 +2166,9 @@ private fun NotesPanel(
     onKeywordChange: (String) -> Unit,
     onRefresh: () -> Unit,
     onDeleteBilibili: (String) -> Unit,
+    onClearBilibili: () -> Unit,
     onDeleteXiaohongshu: (String) -> Unit,
+    onClearXiaohongshu: () -> Unit,
     onSuggestMergeCandidates: () -> Unit,
     onPreviewMergeCandidate: (NotesMergeCandidateItem) -> Unit,
     onCommitCurrentMerge: () -> Unit,
@@ -1779,6 +2178,7 @@ private fun NotesPanel(
 ) {
     var selectedDetail by remember { mutableStateOf<NoteDetailViewState?>(null) }
     var selectedMergeCandidate by remember { mutableStateOf<NotesMergeCandidateItem?>(null) }
+    val scrollState = rememberScrollState()
     val context = LocalContext.current
     val keyword = state.keywordInput.trim()
     val filteredBilibili = state.bilibiliNotes.filter { item ->
@@ -1792,8 +2192,14 @@ private fun NotesPanel(
             item.summaryMarkdown.contains(keyword, ignoreCase = true)
     }
 
+    LaunchedEffect(selectedDetail, selectedMergeCandidate) {
+        if (selectedDetail != null || selectedMergeCandidate != null) {
+            scrollState.scrollTo(0)
+        }
+    }
+
     Column(
-        modifier = modifier.verticalScroll(rememberScrollState()),
+        modifier = modifier.verticalScroll(scrollState),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
         BackHandler(enabled = selectedDetail != null) {
@@ -1908,6 +2314,15 @@ private fun NotesPanel(
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
         )
+        if (state.bilibiliNotes.isNotEmpty()) {
+            MidasButton(
+                onClick = onClearBilibili,
+                enabled = !state.isLoading,
+                tone = ButtonTone.NEUTRAL,
+            ) {
+                SingleLineActionText("清空 B站")
+            }
+        }
         if (filteredBilibili.isEmpty()) {
             Text("暂无 B 站已保存笔记。", style = MaterialTheme.typography.bodySmall)
         }
@@ -1915,6 +2330,7 @@ private fun NotesPanel(
             SavedNoteListItem(
                 title = item.title,
                 savedAt = item.savedAt,
+                openTag = "saved_note_open_${item.noteId}",
                 onOpen = { selectedDetail = NoteDetailViewState.Bilibili(item) },
                 onDelete = { onDeleteBilibili(item.noteId) },
             )
@@ -1925,6 +2341,15 @@ private fun NotesPanel(
             style = MaterialTheme.typography.titleSmall,
             fontWeight = FontWeight.SemiBold,
         )
+        if (state.xiaohongshuNotes.isNotEmpty()) {
+            MidasButton(
+                onClick = onClearXiaohongshu,
+                enabled = !state.isLoading,
+                tone = ButtonTone.NEUTRAL,
+            ) {
+                SingleLineActionText("清空 小红书")
+            }
+        }
         if (filteredXhs.isEmpty()) {
             Text("暂无小红书已保存笔记。", style = MaterialTheme.typography.bodySmall)
         }
@@ -1932,6 +2357,7 @@ private fun NotesPanel(
             SavedNoteListItem(
                 title = item.title,
                 savedAt = item.savedAt,
+                openTag = "saved_note_open_${item.noteId}",
                 onOpen = { selectedDetail = NoteDetailViewState.Xiaohongshu(item) },
                 onDelete = { onDeleteXiaohongshu(item.noteId) },
             )
@@ -2013,12 +2439,18 @@ private fun MergePreviewPanel(
 private fun SavedNoteListItem(
     title: String,
     savedAt: String,
+    openTag: String = "",
     onOpen: () -> Unit,
     onDelete: () -> Unit,
 ) {
     var menuExpanded by remember(title, savedAt) { mutableStateOf(false) }
 
-    GlassCard(modifier = Modifier.fillMaxWidth()) {
+    GlassCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .then(if (openTag.isBlank()) Modifier else Modifier.testTag(openTag))
+            .clickable(onClick = onOpen),
+    ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -2033,7 +2465,6 @@ private fun SavedNoteListItem(
                     text = title,
                     style = MaterialTheme.typography.titleSmall,
                     color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.clickable(onClick = onOpen),
                 )
                 Text("保存时间：$savedAt", style = MaterialTheme.typography.bodySmall)
             }

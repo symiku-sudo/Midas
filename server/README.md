@@ -10,9 +10,15 @@
 - `GET /api/assets/snapshots`
 - `POST /api/assets/snapshots`
 - `DELETE /api/assets/snapshots/{record_id}`
+- `POST /api/jobs/bilibili-summarize`
+- `POST /api/jobs/xiaohongshu/summarize-url`
+- `GET /api/jobs`
+- `GET /api/jobs/{job_id}`
+- `POST /api/jobs/{job_id}/retry`
 - `POST /api/bilibili/summarize`
 - `POST /api/notes/bilibili/save`
 - `GET /api/notes/bilibili`
+- `GET /api/notes/search`
 - `DELETE /api/notes/bilibili/{note_id}` / `DELETE /api/notes/bilibili`
 - `POST /api/xiaohongshu/summarize-url`
 - `POST /api/notes/xiaohongshu/save-batch`
@@ -45,6 +51,19 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000
+```
+
+如需启用轻量访问保护，可在 `config.yaml` 中设置：
+
+```yaml
+auth:
+  access_token: "your-token"
+```
+
+启用后，除 `/health` 外的接口都需要带：
+
+```bash
+Authorization: Bearer your-token
 ```
 
 ## WSL one-script workflow
@@ -88,6 +107,24 @@ curl -X POST http://127.0.0.1:8000/api/notes/xiaohongshu/synced/prune
 server/.venv/bin/python server/tools/prune_unsaved_synced_notes.py --dry-run --show-ids
 ```
 
+## Async Jobs
+
+服务端现在提供第一版单进程异步任务中心，用于把长耗时总结任务放到后台执行，并把历史持久化到 `server/.tmp/async_jobs.json`。
+
+当前支持：
+- `POST /api/jobs/bilibili-summarize`
+- `POST /api/jobs/xiaohongshu/summarize-url`
+- `GET /api/jobs`
+- `GET /api/jobs/{job_id}`
+- `POST /api/jobs/{job_id}/retry`
+
+行为说明：
+- 旧同步接口 `POST /api/bilibili/summarize` 和 `POST /api/xiaohongshu/summarize-url` 仍保留，现有客户端不受影响。
+- 新异步任务接口会立即返回 `job_id`，由后台 worker 顺序执行。
+- 服务重启后，已完成/失败历史会保留；启动时仍处于 `RUNNING` 的任务会被标记为 `INTERRUPTED`，避免假状态残留。
+- 重试任务会在响应和历史列表里携带 `retry_of_job_id`，便于客户端回溯来源。
+- 当前仅允许重试 `FAILED` / `INTERRUPTED` 状态的任务，重试时会复用原请求体创建新任务。
+
 ## Finance Signals Worker
 
 用于持续生成前端 `Finance Signals` 面板需要的本地状态文件（默认 `server/finance_signals/finance_status.json`），并由 `GET /api/finance/signals` 提供给客户端：
@@ -107,6 +144,10 @@ tools/finance_signals.sh stop
 - 新闻面板现已输出“今日金融与时政新闻 Top5”，默认过滤 24 小时外旧新闻。
 - “过去 24 小时新闻摘要”改为客户端按钮触发；Worker 只维护新闻候选与 Top5，不再自动占用 LLM。
 - 排序采用新闻客户端常见因子：发布时间衰减、来源权重、主题关键词、跨源覆盖加权，再做同主题去重。
+- API 服务端会在读取状态文件时，把 Top5 新闻与 watchlist 标的做一层关联归并；默认别名配置写在 `finance_signals/financial_config.yaml` 的 `market_data.instruments[].aliases`。
+- 客户端可直接显示“某条新闻可能影响哪些关注标的”以及“某个标的最近关联了几条新闻”。
+- API 服务端还会返回第一版 `focus_cards`，把“阈值触发”和“影响到 watchlist 的新闻”整理成今日关注建议，并附上 `action_label/action_hint` 说明下一步建议动作。
+- `focus_cards` 现在还带结构化 `action_type/reasons`，便于后续按“立即处理 / 继续跟进 / 持续观察”做筛选或排序。
 - 可通过 `news.filters.source_allowlist/source_blocklist/domain_allowlist/domain_blocklist` 做来源白名单/黑名单控制。
 - 可通过 `news.digest.max_items/max_summary_chars_per_item/prompt_char_limit/reuse_within_seconds` 控制摘要样本数、单条摘要截断长度、单次 prompt 文本长度上限，以及“3 小时内复用上次摘要”的窗口。
 - 可通过 `market_data.alerting.*` 配置 Watchlist 行情阈值告警；其状态会写入 `market_alert_debug`。
@@ -278,6 +319,22 @@ curl -X POST http://127.0.0.1:8000/api/bilibili/summarize \
 - `video_url` 支持完整链接，也支持直接传 `BV` 号（服务端会自动补全前缀）。
 
 ```bash
+# 以异步任务方式提交 B 站总结，立即返回 job_id
+curl -X POST http://127.0.0.1:8000/api/jobs/bilibili-summarize \
+  -H 'Content-Type: application/json' \
+  -d '{"video_url":"BV1xx411c7mD"}'
+
+# 查看最近任务历史
+curl 'http://127.0.0.1:8000/api/jobs?limit=20'
+
+# 查看单个任务状态和结果
+curl http://127.0.0.1:8000/api/jobs/<job_id>
+
+# 重试失败或中断的任务
+curl -X POST http://127.0.0.1:8000/api/jobs/<job_id>/retry
+```
+
+```bash
 # 手动保存一次 B 站总结
 curl -X POST http://127.0.0.1:8000/api/notes/bilibili/save \
   -H 'Content-Type: application/json' \
@@ -285,11 +342,21 @@ curl -X POST http://127.0.0.1:8000/api/notes/bilibili/save \
 
 # 查看 B 站已保存笔记
 curl http://127.0.0.1:8000/api/notes/bilibili
+
+# 统一检索全部已保存笔记
+curl 'http://127.0.0.1:8000/api/notes/search?keyword=%E7%BE%8E%E8%81%94%E5%82%A8&limit=20'
 ```
 
 ```bash
 # 按 URL 总结单篇小红书笔记
 curl -X POST http://127.0.0.1:8000/api/xiaohongshu/summarize-url \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://www.xiaohongshu.com/explore/xxxxxx"}'
+```
+
+```bash
+# 以异步任务方式提交小红书单篇总结
+curl -X POST http://127.0.0.1:8000/api/jobs/xiaohongshu/summarize-url \
   -H 'Content-Type: application/json' \
   -d '{"url":"https://www.xiaohongshu.com/explore/xxxxxx"}'
 ```
@@ -355,6 +422,7 @@ curl -X POST http://127.0.0.1:8000/api/config/editable/reset
 - Default LLM mode is enabled (`llm.enabled=true`); set `llm.api_key` before real run.
 - Default Xiaohongshu integration mode is `web_readonly`.
 - Synced note IDs persist in `xiaohongshu.db_path` (default `.tmp/midas.db`).
+- Async job history persists in `.tmp/async_jobs.json`.
 - 单篇 URL 总结成功后会自动把 `note_id` 写入去重表。
 - 删除“已保存小红书笔记”不会删除去重表中的 `note_id`，后续按 URL 总结仍会复用已处理状态。
 - 每次新增 B 站或小红书已保存笔记后，服务会自动备份一次数据库到 `.tmp/backups/`。
