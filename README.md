@@ -7,9 +7,10 @@
 - 服务端（FastAPI）：已完成
   - `GET /health`
   - `GET /api/finance/signals`
-  - `POST /api/jobs/bilibili-summarize|xiaohongshu/summarize-url`
+  - `POST /api/jobs/bilibili-summarize|xiaohongshu/summarize-url|xiaohongshu/sync`
   - `GET /api/jobs|/api/jobs/{job_id}`
   - `POST /api/jobs/{job_id}/retry`
+  - `GET /api/xiaohongshu/sync/cooldown|pending-count`
   - `GET /api/notes/search`
   - `POST /api/bilibili/summarize`（`video_url` 支持完整链接或直接传 `BV` 号）
   - `POST /api/xiaohongshu/summarize-url`
@@ -18,9 +19,10 @@
 - Android 客户端（Compose）：已完成最小可用版本
   - 服务端地址配置与持久化
   - 连接测试
-  - B 站总结请求与 Markdown 展示
-  - 小红书按 URL 单篇总结与结果展示
-  - 资产系统面板（资产统计 + Watchlist + 今日新闻 Top5）
+  - 单层导航（`B站 / 小红书 / 笔记 / 资产 / 设置`）
+  - B 站总结请求、任务历史与 Markdown 展示
+  - 小红书单篇总结、批量同步、任务历史与结果保存
+  - 资产系统面板（市场信号 + 资产总览 + 今日关注建议）
   - 资产截图识别回填（最多 5 张，端侧压缩后上传，识别后手动保存）
   - 笔记库智能合并（候选、预览、回退、确认破坏性收尾）
 
@@ -151,6 +153,8 @@ tools/ntfy_notify.sh --config .tmp/ntfy/notify.env
 - 服务端异步任务中心支持任务历史、结果回看和失败/中断任务重试；历史保存在 `server/.tmp/async_jobs.json`。
 - 服务端支持可选访问令牌保护：当 `server/config.yaml` 里配置 `auth.access_token` 后，客户端需带 `Authorization: Bearer <token>`。
 - Android 端的 B 站/小红书面板现在都内置“最近任务”卡片，可刷新任务列表、查看成功结果，并对失败/中断任务直接重试。
+- 小红书面板已补齐批量同步：可查看待同步数量、冷却状态、提交后台同步任务，并把当前结果一键批量保存到笔记库。
+- Android 财经面板现在会按动作类型分组显示 `focus_cards`，并支持端侧“已处理/恢复全部”闭环；Top5 新闻默认先展示 3 条，减少首屏信息量。
 - Finance Signals 现在会把 Top5 新闻和 watchlist 标的做一层关联：新闻卡会显示“影响哪些关注项”，Watchlist 行会显示“最近关联新闻数”和命中关键词。
 - Finance Signals 还会返回第一版“今日关注建议”，把阈值触发和影响到 watchlist 的新闻整理成优先级更高的关注卡片，并附上建议动作。
 - 这些关注建议现在也带结构化 `action_type/reasons`，后面继续做筛选、排序和自动化动作时不用再从自然语言里反推。

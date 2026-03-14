@@ -141,12 +141,19 @@ data class AsyncJobCreateData(
     val message: String,
     @Json(name = "submitted_at") val submittedAt: String,
     @Json(name = "retry_of_job_id") val retryOfJobId: String = "",
+    @Json(name = "progress_current") val progressCurrent: Int = 0,
+    @Json(name = "progress_total") val progressTotal: Int = 0,
 )
 
 data class AsyncJobErrorData(
     val code: String,
     val message: String,
     val details: Map<String, Any?>? = null,
+)
+
+data class AsyncJobProgressData(
+    val current: Int = 0,
+    val total: Int = 0,
 )
 
 data class AsyncJobListItemData(
@@ -158,6 +165,7 @@ data class AsyncJobListItemData(
     @Json(name = "started_at") val startedAt: String = "",
     @Json(name = "finished_at") val finishedAt: String = "",
     @Json(name = "retry_of_job_id") val retryOfJobId: String = "",
+    val progress: AsyncJobProgressData? = null,
 )
 
 data class AsyncJobListData(
@@ -177,6 +185,7 @@ data class AsyncJobStatusData(
     @Json(name = "request_payload") val requestPayload: Map<String, Any?> = emptyMap(),
     val result: Map<String, Any?>? = null,
     val error: AsyncJobErrorData? = null,
+    val progress: AsyncJobProgressData? = null,
 )
 
 data class BilibiliSummaryRequest(
@@ -233,11 +242,26 @@ data class XiaohongshuSummarizeUrlRequest(
     val url: String
 )
 
+data class XiaohongshuSyncRequest(
+    val limit: Int? = null,
+    @Json(name = "confirm_live") val confirmLive: Boolean = true,
+)
+
 data class XiaohongshuSummaryItem(
     @Json(name = "note_id") val noteId: String,
     val title: String,
     @Json(name = "source_url") val sourceUrl: String,
     @Json(name = "summary_markdown") val summaryMarkdown: String
+)
+
+data class XiaohongshuSyncData(
+    @Json(name = "requested_limit") val requestedLimit: Int,
+    @Json(name = "fetched_count") val fetchedCount: Int,
+    @Json(name = "new_count") val newCount: Int,
+    @Json(name = "skipped_count") val skippedCount: Int,
+    @Json(name = "failed_count") val failedCount: Int,
+    @Json(name = "circuit_opened") val circuitOpened: Boolean,
+    val summaries: List<XiaohongshuSummaryItem> = emptyList(),
 )
 
 data class XiaohongshuNotesSaveRequest(
@@ -366,6 +390,21 @@ data class XiaohongshuAuthUpdateData(
     @Json(name = "updated_keys") val updatedKeys: List<String>,
     @Json(name = "non_empty_keys") val nonEmptyKeys: Int,
     @Json(name = "cookie_pairs") val cookiePairs: Int
+)
+
+data class XiaohongshuSyncCooldownData(
+    val mode: String = "",
+    val allowed: Boolean = false,
+    @Json(name = "remaining_seconds") val remainingSeconds: Int = 0,
+    @Json(name = "next_allowed_at_epoch") val nextAllowedAtEpoch: Long = 0,
+    @Json(name = "last_sync_at_epoch") val lastSyncAtEpoch: Long = 0,
+    @Json(name = "min_interval_seconds") val minIntervalSeconds: Int = 0,
+)
+
+data class XiaohongshuPendingCountData(
+    val mode: String = "",
+    @Json(name = "pending_count") val pendingCount: Int = 0,
+    @Json(name = "scanned_count") val scannedCount: Int = 0,
 )
 
 data class EditableConfigData(

@@ -17,6 +17,7 @@ from app.models.schemas import (
     AsyncJobErrorData,
     AsyncJobListData,
     AsyncJobListItem,
+    AsyncJobProgressData,
     AsyncJobStatusData,
 )
 
@@ -34,9 +35,11 @@ _RETRYABLE_STATUSES = {
 
 _JOB_TYPE_BILIBILI_SUMMARIZE = "bilibili_summarize"
 _JOB_TYPE_XIAOHONGSHU_SUMMARIZE_URL = "xiaohongshu_summarize_url"
+_JOB_TYPE_XIAOHONGSHU_SYNC = "xiaohongshu_sync"
 _SUPPORTED_JOB_TYPES = {
     _JOB_TYPE_BILIBILI_SUMMARIZE,
     _JOB_TYPE_XIAOHONGSHU_SUMMARIZE_URL,
+    _JOB_TYPE_XIAOHONGSHU_SYNC,
 }
 
 
@@ -51,10 +54,15 @@ class AsyncJobService:
         *,
         bilibili_runner: Callable[[str], Awaitable[Any]],
         xiaohongshu_runner: Callable[[str], Awaitable[Any]],
+        xiaohongshu_sync_runner: Callable[
+            [int | None, bool, Callable[[dict[str, Any]], Awaitable[None]] | None],
+            Awaitable[Any],
+        ],
     ) -> None:
         self._settings = settings
         self._bilibili_runner = bilibili_runner
         self._xiaohongshu_runner = xiaohongshu_runner
+        self._xiaohongshu_sync_runner = xiaohongshu_sync_runner
         self._store_path = Path(settings.runtime.temp_dir) / "async_jobs.json"
         self._queue: asyncio.Queue[str | None] = asyncio.Queue()
         self._jobs_by_id: dict[str, dict[str, Any]] = {}
@@ -92,15 +100,42 @@ class AsyncJobService:
             request_id=request_id,
         )
 
+    async def create_xiaohongshu_sync_job(
+        self,
+        *,
+        limit: int | None,
+        confirm_live: bool,
+        request_id: str,
+    ) -> AsyncJobCreateData:
+        requested_limit = int(limit) if limit is not None else 0
+        progress_total = max(requested_limit, 0)
+        return await self._create_job(
+            job_type=_JOB_TYPE_XIAOHONGSHU_SYNC,
+            request_payload={
+                "limit": limit,
+                "confirm_live": bool(confirm_live),
+            },
+            request_id=request_id,
+            progress_current=0,
+            progress_total=progress_total,
+        )
+
     async def list_jobs(
         self, *, limit: int = 20, status: str = "", job_type: str = ""
     ) -> AsyncJobListData:
         normalized_status = status.strip().upper()
-        normalized_job_type = job_type.strip().lower()
-        if normalized_job_type and normalized_job_type not in _SUPPORTED_JOB_TYPES:
+        normalized_job_types = [
+            item.strip().lower()
+            for item in job_type.split(",")
+            if item.strip()
+        ]
+        unsupported_job_types = [
+            item for item in normalized_job_types if item not in _SUPPORTED_JOB_TYPES
+        ]
+        if unsupported_job_types:
             raise AppError(
                 code=ErrorCode.INVALID_INPUT,
-                message=f"不支持的 job_type: {job_type}",
+                message=f"不支持的 job_type: {', '.join(unsupported_job_types)}",
                 status_code=400,
             )
 
@@ -117,7 +152,7 @@ class AsyncJobService:
         for item in items:
             if normalized_status and item.get("status") != normalized_status:
                 continue
-            if normalized_job_type and item.get("job_type") != normalized_job_type:
+            if normalized_job_types and item.get("job_type") not in normalized_job_types:
                 continue
             total += 1
             if len(filtered) < limit:
@@ -158,11 +193,17 @@ class AsyncJobService:
                 status_code=400,
                 details={"job_id": job_id},
             )
+        job_type = str(record.get("job_type", "")).strip().lower()
+        progress_total = 0
+        if job_type == _JOB_TYPE_XIAOHONGSHU_SYNC:
+            progress_total = self._coerce_progress_number(request_payload.get("limit"))
         return await self._create_job(
-            job_type=str(record.get("job_type", "")).strip().lower(),
+            job_type=job_type,
             request_payload=dict(request_payload),
             request_id=request_id,
             retry_of_job_id=job_id,
+            progress_current=0,
+            progress_total=progress_total,
         )
 
     async def _create_job(
@@ -172,6 +213,8 @@ class AsyncJobService:
         request_payload: dict[str, Any],
         request_id: str,
         retry_of_job_id: str = "",
+        progress_current: int = 0,
+        progress_total: int = 0,
     ) -> AsyncJobCreateData:
         if job_type not in _SUPPORTED_JOB_TYPES:
             raise AppError(
@@ -192,6 +235,10 @@ class AsyncJobService:
             "request_payload": dict(request_payload),
             "request_id": request_id,
             "retry_of_job_id": retry_of_job_id.strip(),
+            "progress": self._build_progress_record(
+                current=progress_current,
+                total=progress_total,
+            ),
             "result": None,
             "error": None,
         }
@@ -205,6 +252,8 @@ class AsyncJobService:
             message=record["message"],
             submitted_at=submitted_at,
             retry_of_job_id=record["retry_of_job_id"],
+            progress_current=progress_current,
+            progress_total=progress_total,
         )
 
     async def _worker_loop(self) -> None:
@@ -236,6 +285,7 @@ class AsyncJobService:
             record["status"] = _STATUS_FAILED
             record["finished_at"] = _now_text()
             record["message"] = exc.message
+            self._sync_progress_from_result(record)
             record["error"] = {
                 "code": exc.code.value,
                 "message": exc.message,
@@ -248,6 +298,7 @@ class AsyncJobService:
             record["status"] = _STATUS_FAILED
             record["finished_at"] = _now_text()
             record["message"] = "任务执行失败。"
+            self._sync_progress_from_result(record)
             record["error"] = {
                 "code": ErrorCode.INTERNAL_ERROR.value,
                 "message": "服务端发生未预期错误。",
@@ -260,6 +311,7 @@ class AsyncJobService:
         record["finished_at"] = _now_text()
         record["message"] = "任务执行完成。"
         record["result"] = result
+        self._sync_progress_from_result(record)
         record["error"] = None
         await self._persist_store()
 
@@ -271,6 +323,17 @@ class AsyncJobService:
             return result.model_dump()
         if job_type == _JOB_TYPE_XIAOHONGSHU_SUMMARIZE_URL:
             result = await self._xiaohongshu_runner(str(payload.get("url", "")))
+            return result.model_dump()
+        if job_type == _JOB_TYPE_XIAOHONGSHU_SYNC:
+            async def _on_progress(progress_payload: dict[str, Any]) -> None:
+                self._apply_progress_update(record, progress_payload)
+                await self._persist_store()
+
+            result = await self._xiaohongshu_sync_runner(
+                self._optional_int(payload.get("limit")),
+                bool(payload.get("confirm_live", False)),
+                _on_progress,
+            )
             return result.model_dump()
         raise AppError(
             code=ErrorCode.INVALID_INPUT,
@@ -315,6 +378,7 @@ class AsyncJobService:
                 else {},
                 "request_id": str(item.get("request_id", "")).strip(),
                 "retry_of_job_id": str(item.get("retry_of_job_id", "")).strip(),
+                "progress": item.get("progress") if isinstance(item.get("progress"), dict) else None,
                 "result": item.get("result") if isinstance(item.get("result"), dict) else None,
                 "error": item.get("error") if isinstance(item.get("error"), dict) else None,
             }
@@ -329,6 +393,7 @@ class AsyncJobService:
                 record["status"] = _STATUS_INTERRUPTED
                 record["finished_at"] = _now_text()
                 record["message"] = "服务重启前任务中断，请重新提交。"
+                self._sync_progress_from_result(record)
                 record["error"] = {
                     "code": ErrorCode.INTERNAL_ERROR.value,
                     "message": "服务重启导致任务中断。",
@@ -374,6 +439,7 @@ class AsyncJobService:
             started_at=str(record.get("started_at", "")).strip(),
             finished_at=str(record.get("finished_at", "")).strip(),
             retry_of_job_id=str(record.get("retry_of_job_id", "")).strip(),
+            progress=self._to_progress_data(record.get("progress")),
         )
 
     def _to_status_data(self, record: dict[str, Any]) -> AsyncJobStatusData:
@@ -401,4 +467,74 @@ class AsyncJobService:
             else {},
             result=record.get("result") if isinstance(record.get("result"), dict) else None,
             error=error,
+            progress=self._to_progress_data(record.get("progress")),
         )
+
+    def _to_progress_data(self, raw: Any) -> AsyncJobProgressData | None:
+        if not isinstance(raw, dict):
+            return None
+        current = self._coerce_progress_number(raw.get("current"))
+        total = self._coerce_progress_number(raw.get("total"))
+        if current <= 0 and total <= 0:
+            return None
+        return AsyncJobProgressData(current=current, total=total)
+
+    def _apply_progress_update(self, record: dict[str, Any], progress_payload: dict[str, Any]) -> None:
+        if not isinstance(progress_payload, dict):
+            return
+        message = str(progress_payload.get("message", "")).strip()
+        if message:
+            record["message"] = message
+        current = self._coerce_progress_number(progress_payload.get("current"))
+        total = self._coerce_progress_number(progress_payload.get("total"))
+        record["progress"] = self._build_progress_record(current=current, total=total)
+        preview = {
+            "current": current,
+            "total": total,
+            "message": message,
+            "summaries": progress_payload.get("summaries")
+            if isinstance(progress_payload.get("summaries"), list)
+            else [],
+        }
+        record["result"] = preview
+
+    def _sync_progress_from_result(self, record: dict[str, Any]) -> None:
+        result = record.get("result")
+        if not isinstance(result, dict):
+            return
+        current = self._coerce_progress_number(
+            result.get("new_count", result.get("current")),
+        )
+        total = self._coerce_progress_number(
+            result.get("requested_limit", result.get("total")),
+        )
+        if current <= 0 and total <= 0:
+            return
+        record["progress"] = self._build_progress_record(current=current, total=total)
+
+    def _build_progress_record(self, *, current: int, total: int) -> dict[str, int] | None:
+        normalized_current = max(int(current), 0)
+        normalized_total = max(int(total), 0)
+        if normalized_current <= 0 and normalized_total <= 0:
+            return None
+        return {
+            "current": normalized_current,
+            "total": normalized_total,
+        }
+
+    def _coerce_progress_number(self, raw: Any) -> int:
+        if isinstance(raw, bool) or raw is None:
+            return 0
+        if isinstance(raw, int):
+            return max(raw, 0)
+        if isinstance(raw, float):
+            return max(int(raw), 0)
+        if isinstance(raw, str):
+            return max(int(raw.strip() or "0"), 0) if raw.strip().lstrip("-").isdigit() else 0
+        return 0
+
+    def _optional_int(self, raw: Any) -> int | None:
+        if raw is None:
+            return None
+        value = self._coerce_progress_number(raw)
+        return value if value > 0 else None

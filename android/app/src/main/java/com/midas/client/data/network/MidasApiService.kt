@@ -37,8 +37,12 @@ import com.midas.client.data.model.UnifiedNotesData
 import com.midas.client.data.model.XiaohongshuAuthUpdateData
 import com.midas.client.data.model.XiaohongshuAuthUpdateRequest
 import com.midas.client.data.model.XiaohongshuCaptureRefreshData
+import com.midas.client.data.model.XiaohongshuPendingCountData
 import com.midas.client.data.model.XiaohongshuNotesSaveRequest
 import com.midas.client.data.model.XiaohongshuSavedNotesData
+import com.midas.client.data.model.XiaohongshuSyncCooldownData
+import com.midas.client.data.model.XiaohongshuSyncRequest
+import com.midas.client.data.model.XiaohongshuSyncData
 import com.midas.client.data.model.XiaohongshuSummarizeUrlRequest
 import com.midas.client.data.model.XiaohongshuSummaryItem
 import retrofit2.Response
@@ -105,6 +109,11 @@ interface MidasApiService {
         @Body request: XiaohongshuSummarizeUrlRequest
     ): Response<ApiEnvelope<AsyncJobCreateData>>
 
+    @POST("api/jobs/xiaohongshu/sync")
+    suspend fun createXiaohongshuSyncJob(
+        @Body request: XiaohongshuSyncRequest
+    ): Response<ApiEnvelope<AsyncJobCreateData>>
+
     @GET("api/jobs")
     suspend fun listAsyncJobs(
         @Query("limit") limit: Int = 20,
@@ -155,6 +164,14 @@ interface MidasApiService {
     suspend fun summarizeXiaohongshuUrl(
         @Body request: XiaohongshuSummarizeUrlRequest
     ): Response<ApiEnvelope<XiaohongshuSummaryItem>>
+
+    @GET("api/xiaohongshu/sync/cooldown")
+    suspend fun getXiaohongshuSyncCooldown():
+        Response<ApiEnvelope<XiaohongshuSyncCooldownData>>
+
+    @GET("api/xiaohongshu/sync/pending-count")
+    suspend fun getXiaohongshuPendingCount():
+        Response<ApiEnvelope<XiaohongshuPendingCountData>>
 
     @POST("api/notes/xiaohongshu/save-batch")
     suspend fun saveXiaohongshuNotes(

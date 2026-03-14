@@ -141,12 +141,19 @@ class AsyncJobCreateData(BaseModel):
     message: str
     submitted_at: str
     retry_of_job_id: str = ""
+    progress_current: int = 0
+    progress_total: int = 0
 
 
 class AsyncJobErrorData(BaseModel):
     code: str
     message: str
     details: dict[str, Any] | None = None
+
+
+class AsyncJobProgressData(BaseModel):
+    current: int = 0
+    total: int = 0
 
 
 class AsyncJobListItem(BaseModel):
@@ -158,6 +165,7 @@ class AsyncJobListItem(BaseModel):
     started_at: str = ""
     finished_at: str = ""
     retry_of_job_id: str = ""
+    progress: AsyncJobProgressData | None = None
 
 
 class AsyncJobListData(BaseModel):
@@ -177,6 +185,7 @@ class AsyncJobStatusData(BaseModel):
     request_payload: dict[str, Any] = Field(default_factory=dict)
     result: dict[str, Any] | None = None
     error: AsyncJobErrorData | None = None
+    progress: AsyncJobProgressData | None = None
 
 
 class BilibiliNoteSaveRequest(BaseModel):

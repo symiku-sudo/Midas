@@ -8,7 +8,12 @@ from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.api.routes import router, run_bilibili_summary_job, run_xiaohongshu_summary_job
+from app.api.routes import (
+    router,
+    run_bilibili_summary_job,
+    run_xiaohongshu_summary_job,
+    run_xiaohongshu_sync_job,
+)
 from app.core.config import get_settings
 from app.core.errors import AppError, ErrorCode
 from app.core.logging import setup_logging
@@ -30,6 +35,7 @@ async def lifespan(app: FastAPI):
         settings,
         bilibili_runner=run_bilibili_summary_job,
         xiaohongshu_runner=run_xiaohongshu_summary_job,
+        xiaohongshu_sync_runner=run_xiaohongshu_sync_job,
     )
     stop_event = asyncio.Event()
     backup_task = asyncio.create_task(backup_service.run(stop_event))

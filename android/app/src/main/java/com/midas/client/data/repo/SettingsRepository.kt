@@ -133,6 +133,23 @@ class SettingsRepository(context: Context) {
         }
     }
 
+    fun getDismissedFinanceFocusCardKeys(): Set<String> {
+        return prefs.getStringSet(KEY_DISMISSED_FINANCE_FOCUS_CARDS, emptySet())
+            ?.map { it.trim() }
+            ?.filter { it.isNotEmpty() }
+            ?.toSet()
+            .orEmpty()
+    }
+
+    fun saveDismissedFinanceFocusCardKeys(keys: Set<String>) {
+        prefs.edit {
+            putStringSet(
+                KEY_DISMISSED_FINANCE_FOCUS_CARDS,
+                keys.map { it.trim() }.filter { it.isNotEmpty() }.toSet(),
+            )
+        }
+    }
+
     private fun parseAmountMap(json: JSONObject): Map<String, Double> {
         val result = linkedMapOf<String, Double>()
         val keys = json.keys()
@@ -152,6 +169,7 @@ class SettingsRepository(context: Context) {
         private const val KEY_SERVER_ACCESS_TOKEN = "server_access_token"
         private const val KEY_ASSET_CATEGORY_AMOUNTS = "asset_category_amounts"
         private const val KEY_ASSET_SNAPSHOT_HISTORY = "asset_snapshot_history"
+        private const val KEY_DISMISSED_FINANCE_FOCUS_CARDS = "dismissed_finance_focus_cards"
         private const val DEFAULT_SERVER_BASE_URL = "http://100.98.44.5:8000/"
     }
 }

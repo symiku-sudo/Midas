@@ -549,6 +549,7 @@ class XiaohongshuWebReadonlySource:
         start_cursor: str | None = None,
         force_head: bool = False,
         max_pages: int | None = None,
+        lightweight: bool = False,
     ) -> AsyncIterator[XiaohongshuPageBatch]:
         cfg = self._settings.xiaohongshu.web_readonly
         driver = cfg.page_fetch_driver.strip().lower() or "auto"
@@ -563,19 +564,26 @@ class XiaohongshuWebReadonlySource:
             )
 
         if driver == "http":
-            async for batch in self._iter_pages_http(
-                start_cursor=start_cursor,
-                force_head=force_head,
-                max_pages=max_pages,
-            ):
-                yield batch
-            return
+            try:
+                async for batch in self._iter_pages_http(
+                    start_cursor=start_cursor,
+                    force_head=force_head,
+                    max_pages=max_pages,
+                    lightweight=lightweight,
+                ):
+                    yield batch
+                return
+            except AppError as exc:
+                if lightweight and self._is_http_406_error(exc):
+                    return
+                raise
 
         if driver == "playwright":
             async for batch in self._iter_pages_playwright(
                 start_cursor=start_cursor,
                 force_head=force_head,
                 max_pages=max_pages,
+                lightweight=lightweight,
             ):
                 yield batch
             return
@@ -585,10 +593,13 @@ class XiaohongshuWebReadonlySource:
                 start_cursor=start_cursor,
                 force_head=force_head,
                 max_pages=max_pages,
+                lightweight=lightweight,
             ):
                 yield batch
             return
         except AppError as exc:
+            if lightweight and self._is_http_406_error(exc):
+                return
             if not self._is_http_406_error(exc):
                 raise
 
@@ -596,6 +607,7 @@ class XiaohongshuWebReadonlySource:
             start_cursor=start_cursor,
             force_head=force_head,
             max_pages=max_pages,
+            lightweight=lightweight,
         ):
             yield batch
 
@@ -605,6 +617,7 @@ class XiaohongshuWebReadonlySource:
         start_cursor: str | None = None,
         force_head: bool = False,
         max_pages: int | None = None,
+        lightweight: bool = False,
     ) -> AsyncIterator[XiaohongshuPageBatch]:
         cfg = self._settings.xiaohongshu.web_readonly
         request_url = cfg.request_url.strip()
@@ -699,18 +712,25 @@ class XiaohongshuWebReadonlySource:
 
                 notes: list[XiaohongshuNote] = []
                 for record in records:
-                    note = await self._extract_note_from_record(
-                        client=client,
-                        record=record,
-                        cfg=cfg,
-                        headers=headers,
-                        detail_fetch_mode=detail_fetch_mode,
-                        detail_url_template=detail_url_template,
-                        detail_method=detail_method,
-                        detail_headers=detail_headers,
-                        detail_body=detail_body,
-                        max_images=max_images,
-                    )
+                    if lightweight:
+                        note = self._build_lightweight_note_from_record(
+                            record=record,
+                            cfg=cfg,
+                            max_images=max_images,
+                        )
+                    else:
+                        note = await self._extract_note_from_record(
+                            client=client,
+                            record=record,
+                            cfg=cfg,
+                            headers=headers,
+                            detail_fetch_mode=detail_fetch_mode,
+                            detail_url_template=detail_url_template,
+                            detail_method=detail_method,
+                            detail_headers=detail_headers,
+                            detail_body=detail_body,
+                            max_images=max_images,
+                        )
                     if note is None:
                         continue
                     emitted_any = True
@@ -793,6 +813,7 @@ class XiaohongshuWebReadonlySource:
         start_cursor: str | None = None,
         force_head: bool = False,
         max_pages: int | None = None,
+        lightweight: bool = False,
     ) -> AsyncIterator[XiaohongshuPageBatch]:
         cfg = self._settings.xiaohongshu.web_readonly
         request_url = cfg.request_url.strip()
@@ -1176,18 +1197,25 @@ class XiaohongshuWebReadonlySource:
 
                         notes: list[XiaohongshuNote] = []
                         for record in records:
-                            note = await self._extract_note_from_record(
-                                client=client,
-                                record=record,
-                                cfg=cfg,
-                                headers=headers,
-                                detail_fetch_mode=detail_fetch_mode,
-                                detail_url_template=detail_url_template,
-                                detail_method=detail_method,
-                                detail_headers=detail_headers,
-                                detail_body=detail_body,
-                                max_images=max_images,
-                            )
+                            if lightweight:
+                                note = self._build_lightweight_note_from_record(
+                                    record=record,
+                                    cfg=cfg,
+                                    max_images=max_images,
+                                )
+                            else:
+                                note = await self._extract_note_from_record(
+                                    client=client,
+                                    record=record,
+                                    cfg=cfg,
+                                    headers=headers,
+                                    detail_fetch_mode=detail_fetch_mode,
+                                    detail_url_template=detail_url_template,
+                                    detail_method=detail_method,
+                                    detail_headers=detail_headers,
+                                    detail_body=detail_body,
+                                    max_images=max_images,
+                                )
                             if note is None:
                                 continue
                             emitted_any = True
@@ -1588,55 +1616,20 @@ class XiaohongshuWebReadonlySource:
         detail_body: str | None,
         max_images: int,
     ) -> XiaohongshuNote | None:
-        note_id = self._read_str(record, cfg.note_id_field)
-        if not note_id:
-            note_id = self._read_str(record, "note_id")
-        if not note_id:
-            note_id = self._read_str(record, "noteId")
-        if not note_id:
-            note_id = self._read_str(record, "id")
-        if not note_id:
-            note_id = self._read_str(record, "note_card.note_id")
-        if not note_id:
-            note_id = self._read_str(record, "note_card.noteId")
-        if not note_id:
-            note_id = self._read_str(record, "note.note_id")
-        if not note_id:
-            note_id = self._read_str(record, "note.noteId")
-        if not note_id:
+        seed = self._extract_note_seed_from_record(
+            record=record,
+            cfg=cfg,
+            max_images=max_images,
+        )
+        if seed is None:
             return None
 
-        title = self._read_str(record, cfg.title_field) or f"未命名笔记 {note_id}"
-        if title == f"未命名笔记 {note_id}":
-            title = (
-                self._read_str(record, "display_title")
-                or self._read_str(record, "note_card.title")
-                or self._read_str(record, "note_card.display_title")
-                or title
-            )
-        source_url = self._read_str(record, cfg.source_url_field)
-        if not source_url:
-            source_url = f"https://www.xiaohongshu.com/explore/{note_id}"
-        is_video = self._is_video_note(record)
-
-        content_candidates = list(cfg.content_field_candidates)
-        for field_name in ("note_card.desc", "note.desc", "note_card.content"):
-            if field_name not in content_candidates:
-                content_candidates.append(field_name)
-        content = self._pick_valid_content(
-            payload=record,
-            candidates=content_candidates,
-            title=title,
-        )
-        image_candidates = list(cfg.image_field_candidates)
-        for field_name in ("note_card.image_list", "note.image_list"):
-            if field_name not in image_candidates:
-                image_candidates.append(field_name)
-        image_urls = self._extract_image_urls(
-            payload=record,
-            candidates=image_candidates,
-            max_count=max_images,
-        )
+        note_id = seed.note_id
+        title = seed.title
+        content = seed.content
+        source_url = seed.source_url
+        image_urls = list(seed.image_urls)
+        is_video = seed.is_video
 
         page_note = await self._fetch_note_from_page(
             client=client,
@@ -1719,6 +1712,94 @@ class XiaohongshuWebReadonlySource:
         if not content and not image_urls and not is_video:
             return None
 
+        return XiaohongshuNote(
+            note_id=note_id,
+            title=title,
+            content=content,
+            source_url=source_url,
+            image_urls=image_urls,
+            is_video=is_video,
+        )
+
+    def _build_lightweight_note_from_record(
+        self,
+        *,
+        record: dict,
+        cfg,
+        max_images: int,
+    ) -> XiaohongshuNote | None:
+        seed = self._extract_note_seed_from_record(
+            record=record,
+            cfg=cfg,
+            max_images=max_images,
+        )
+        if seed is None:
+            return None
+        return XiaohongshuNote(
+            note_id=seed.note_id,
+            title=seed.title,
+            content=seed.content,
+            source_url=seed.source_url,
+            image_urls=list(seed.image_urls),
+            is_video=seed.is_video,
+        )
+
+    def _extract_note_seed_from_record(
+        self,
+        *,
+        record: dict,
+        cfg,
+        max_images: int,
+    ) -> XiaohongshuNote | None:
+        note_id = self._read_str(record, cfg.note_id_field)
+        if not note_id:
+            note_id = self._read_str(record, "note_id")
+        if not note_id:
+            note_id = self._read_str(record, "noteId")
+        if not note_id:
+            note_id = self._read_str(record, "id")
+        if not note_id:
+            note_id = self._read_str(record, "note_card.note_id")
+        if not note_id:
+            note_id = self._read_str(record, "note_card.noteId")
+        if not note_id:
+            note_id = self._read_str(record, "note.note_id")
+        if not note_id:
+            note_id = self._read_str(record, "note.noteId")
+        if not note_id:
+            return None
+
+        title = self._read_str(record, cfg.title_field) or f"未命名笔记 {note_id}"
+        if title == f"未命名笔记 {note_id}":
+            title = (
+                self._read_str(record, "display_title")
+                or self._read_str(record, "note_card.title")
+                or self._read_str(record, "note_card.display_title")
+                or title
+            )
+        source_url = self._read_str(record, cfg.source_url_field)
+        if not source_url:
+            source_url = f"https://www.xiaohongshu.com/explore/{note_id}"
+        is_video = self._is_video_note(record)
+
+        content_candidates = list(cfg.content_field_candidates)
+        for field_name in ("note_card.desc", "note.desc", "note_card.content"):
+            if field_name not in content_candidates:
+                content_candidates.append(field_name)
+        content = self._pick_valid_content(
+            payload=record,
+            candidates=content_candidates,
+            title=title,
+        )
+        image_candidates = list(cfg.image_field_candidates)
+        for field_name in ("note_card.image_list", "note.image_list"):
+            if field_name not in image_candidates:
+                image_candidates.append(field_name)
+        image_urls = self._extract_image_urls(
+            payload=record,
+            candidates=image_candidates,
+            max_count=max_images,
+        )
         return XiaohongshuNote(
             note_id=note_id,
             title=title,
@@ -3196,7 +3277,11 @@ class XiaohongshuSyncService:
 
         iter_pages = getattr(self._web_source, "iter_pages", None)
         if callable(iter_pages):
-            async for batch in iter_pages(force_head=True):
+            async for batch in iter_pages(
+                force_head=True,
+                max_pages=max(self._HEAD_SHORT_SCAN_PAGES, 1),
+                lightweight=True,
+            ):
                 for note in batch.notes:
                     yield note
             return

@@ -108,12 +108,14 @@ class PendingCountWebSource:
         start_cursor: str | None = None,
         force_head: bool = False,
         max_pages: int | None = None,
+        lightweight: bool = False,
     ):
         self.calls.append(
             {
                 "start_cursor": start_cursor,
                 "force_head": force_head,
                 "max_pages": max_pages,
+                "lightweight": lightweight,
             }
         )
         for batch in self._batches:
@@ -127,6 +129,7 @@ class BrokenIterPagesWebSource:
         start_cursor: str | None = None,
         force_head: bool = False,
         max_pages: int | None = None,
+        lightweight: bool = False,
     ):
         raise RuntimeError("playwright launch exploded")
         yield XiaohongshuPageBatch(notes=[])
@@ -706,6 +709,8 @@ async def test_web_readonly_pending_count_only_counts_unsynced_note_ids(tmp_path
     assert result["pending_count"] == 2
     assert len(source.calls) == 1
     assert source.calls[0]["force_head"] is True
+    assert source.calls[0]["max_pages"] == 2
+    assert source.calls[0]["lightweight"] is True
 
 
 @pytest.mark.asyncio
@@ -1333,6 +1338,78 @@ async def test_web_readonly_auto_fallback_to_playwright_on_http_406(monkeypatch)
     assert notes[0].note_id == "p1"
     assert calls["http"] == 1
     assert calls["playwright"] == 1
+
+
+@pytest.mark.asyncio
+async def test_web_readonly_lightweight_scan_keeps_partial_http_results_on_406(
+    monkeypatch,
+) -> None:
+    settings = Settings(
+        xiaohongshu=XiaohongshuConfig(
+            mode="web_readonly",
+            db_path=".tmp/test-midas.db",
+            web_readonly=XiaohongshuWebReadonlyConfig(
+                page_fetch_driver="auto",
+                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
+                request_method="GET",
+                request_headers={"Cookie": "a=b"},
+                items_path="data.notes",
+                note_id_field="note_id",
+                title_field="title",
+                content_field_candidates=["desc"],
+                detail_fetch_mode="never",
+            ),
+        )
+    )
+    source = XiaohongshuWebReadonlySource(settings)
+    calls: dict[str, int] = {"http": 0, "playwright": 0}
+
+    async def _fake_iter_pages_http(self, **_kwargs):
+        calls["http"] += 1
+        yield XiaohongshuPageBatch(
+            notes=[
+                XiaohongshuNote(
+                    note_id="h1",
+                    title="head-note",
+                    content="",
+                    source_url="https://www.xiaohongshu.com/explore/h1",
+                )
+            ],
+            request_cursor="",
+            next_cursor="cursor-2",
+            exhausted=False,
+        )
+        raise AppError(
+            code=ErrorCode.UPSTREAM_ERROR,
+            message="小红书请求失败（HTTP 406）。",
+            status_code=502,
+            details={"status_code": 406},
+        )
+        yield XiaohongshuPageBatch(notes=[])
+
+    async def _fake_iter_pages_playwright(self, **_kwargs):
+        calls["playwright"] += 1
+        yield XiaohongshuPageBatch(notes=[], exhausted=True)
+
+    monkeypatch.setattr(
+        XiaohongshuWebReadonlySource,
+        "_iter_pages_http",
+        _fake_iter_pages_http,
+    )
+    monkeypatch.setattr(
+        XiaohongshuWebReadonlySource,
+        "_iter_pages_playwright",
+        _fake_iter_pages_playwright,
+    )
+
+    batches = []
+    async for batch in source.iter_pages(lightweight=True, force_head=True, max_pages=2):
+        batches.append(batch)
+
+    assert len(batches) == 1
+    assert batches[0].notes[0].note_id == "h1"
+    assert calls["http"] == 1
+    assert calls["playwright"] == 0
 
 
 @pytest.mark.asyncio

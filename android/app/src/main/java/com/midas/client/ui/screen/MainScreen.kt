@@ -78,25 +78,17 @@ import com.midas.client.util.EditableConfigField
 import kotlinx.coroutines.delay
 import java.util.Locale
 
-private enum class MainTab(val title: String) {
-    NOTES("Notes"),
-    SIGNALS("Signals"),
-    SETTINGS("Settings"),
-}
-
-private enum class WorkspaceSection(val title: String) {
-    NOTES("笔记系统"),
-    FINANCE("资产系统"),
+enum class TopSection(val title: String) {
+    BILIBILI("B站"),
+    XHS("小红书"),
+    NOTES("笔记"),
+    FINANCE("资产"),
+    SETTINGS("设置"),
 }
 
 private enum class AssetPanelTab(val title: String) {
-    MARKET("Watchlist+新闻"),
-    ASSET_STATS("资产统计"),
-}
-
-private enum class CaptureSourceTab(val title: String) {
-    BILIBILI("Bilibili"),
-    XHS("Xiaohongshu"),
+    MARKET("市场信号"),
+    ASSET_STATS("资产总览"),
 }
 
 private enum class ConfigControlKind {
@@ -110,6 +102,9 @@ private enum class ButtonTone {
     SUCCESS,
     NEUTRAL,
 }
+
+private const val XIAOHONGSHU_SUMMARY_JOB_TYPE = "xiaohongshu_summarize_url"
+private const val XIAOHONGSHU_SYNC_JOB_TYPE = "xiaohongshu_sync"
 
 private val SuccessStatusColor = Color(0xFF7BE5A6)
 private val ErrorStatusColor = Color(0xFFFF9A9A)
@@ -303,10 +298,14 @@ fun MainScreen(viewModel: MainViewModel) {
         onOpenBilibiliJob = viewModel::openBilibiliJob,
         onRetryBilibiliJob = viewModel::retryBilibiliJob,
         onXiaohongshuUrlChange = viewModel::onXiaohongshuUrlInputChange,
+        onXiaohongshuBatchLimitChange = viewModel::onXiaohongshuBatchLimitInputChange,
         onSummarizeXiaohongshuUrl = viewModel::summarizeXiaohongshuByUrl,
+        onStartXiaohongshuBatchSync = viewModel::startXiaohongshuBatchSync,
         onRefreshXiaohongshuAuthConfig = viewModel::refreshXiaohongshuAuthConfig,
         onSaveSingleXiaohongshuNote = viewModel::saveSingleXiaohongshuSummary,
+        onSaveAllXiaohongshuNotes = viewModel::saveAllXiaohongshuSummaries,
         onRefreshXiaohongshuJobs = viewModel::refreshXiaohongshuJobHistory,
+        onRefreshXiaohongshuSyncMeta = viewModel::refreshXiaohongshuSyncMeta,
         onOpenXiaohongshuJob = viewModel::openXiaohongshuJob,
         onRetryXiaohongshuJob = viewModel::retryXiaohongshuJob,
         onNotesKeywordChange = viewModel::onNotesKeywordInputChange,
@@ -327,6 +326,8 @@ fun MainScreen(viewModel: MainViewModel) {
         onAssetSummaryCopied = viewModel::markAssetSummaryCopied,
         onGenerateFinanceNewsDigest = viewModel::generateFinanceNewsDigest,
         onToggleWatchlistNtfy = viewModel::setWatchlistNtfyEnabled,
+        onDismissFinanceFocusCard = viewModel::dismissFinanceFocusCard,
+        onRestoreFinanceFocusCards = viewModel::restoreDismissedFinanceFocusCards,
         onFillAssetStatsFromImages = { assetImagePickerLauncher.launch("image/*") },
     )
 }
@@ -354,10 +355,14 @@ fun MainScreenContent(
     onOpenBilibiliJob: (String) -> Unit = {},
     onRetryBilibiliJob: (String) -> Unit = {},
     onXiaohongshuUrlChange: (String) -> Unit,
+    onXiaohongshuBatchLimitChange: (String) -> Unit = {},
     onSummarizeXiaohongshuUrl: () -> Unit,
+    onStartXiaohongshuBatchSync: () -> Unit = {},
     onRefreshXiaohongshuAuthConfig: () -> Unit,
     onSaveSingleXiaohongshuNote: (XiaohongshuSummaryItem) -> Unit,
+    onSaveAllXiaohongshuNotes: () -> Unit = {},
     onRefreshXiaohongshuJobs: () -> Unit = {},
+    onRefreshXiaohongshuSyncMeta: () -> Unit = {},
     onOpenXiaohongshuJob: (String) -> Unit = {},
     onRetryXiaohongshuJob: (String) -> Unit = {},
     onNotesKeywordChange: (String) -> Unit,
@@ -378,7 +383,10 @@ fun MainScreenContent(
     onAssetSummaryCopied: () -> Unit = {},
     onGenerateFinanceNewsDigest: () -> Unit = {},
     onToggleWatchlistNtfy: (Boolean) -> Unit = {},
+    onDismissFinanceFocusCard: (FinanceFocusCard) -> Unit = {},
+    onRestoreFinanceFocusCards: () -> Unit = {},
     onFillAssetStatsFromImages: () -> Unit = {},
+    initialSection: TopSection = TopSection.BILIBILI,
     enableLifecycleAutoRefresh: Boolean = true,
     enableFinanceAutoRefresh: Boolean = true,
     financeAutoRefreshIntervalMs: Long = 90_000L,
@@ -386,10 +394,7 @@ fun MainScreenContent(
     animateTabSwitch: Boolean = true,
 ) {
     val lifecycleOwner = LocalLifecycleOwner.current
-    var selectedWorkspace by remember { mutableStateOf(WorkspaceSection.NOTES) }
-    var workspaceMenuExpanded by remember { mutableStateOf(false) }
-    var selectedMainTab by remember { mutableStateOf(MainTab.NOTES) }
-    var selectedCaptureSourceTab by remember { mutableStateOf(CaptureSourceTab.BILIBILI) }
+    var selectedSection by remember { mutableStateOf(initialSection) }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -403,8 +408,8 @@ fun MainScreenContent(
         }
     }
 
-    LaunchedEffect(selectedWorkspace, enableFinanceAutoRefresh, financeAutoRefreshIntervalMs) {
-        if (!enableFinanceAutoRefresh || selectedWorkspace != WorkspaceSection.FINANCE) {
+    LaunchedEffect(selectedSection, enableFinanceAutoRefresh, financeAutoRefreshIntervalMs) {
+        if (!enableFinanceAutoRefresh || selectedSection != TopSection.FINANCE) {
             return@LaunchedEffect
         }
         while (true) {
@@ -459,47 +464,34 @@ fun MainScreenContent(
                         .padding(horizontal = 12.dp, vertical = 8.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Box {
-                        MidasButton(
-                            onClick = { workspaceMenuExpanded = true },
-                            tone = ButtonTone.NEUTRAL,
-                        ) {
-                            SingleLineActionText(selectedWorkspace.title)
-                        }
-                        DropdownMenu(
-                            expanded = workspaceMenuExpanded,
-                            onDismissRequest = { workspaceMenuExpanded = false },
-                        ) {
-                            WorkspaceSection.entries.forEach { section ->
-                                DropdownMenuItem(
-                                    text = { Text(section.title) },
-                                    onClick = {
-                                        workspaceMenuExpanded = false
-                                        selectedWorkspace = section
-                                        if (section == WorkspaceSection.FINANCE) {
-                                            onRefreshFinanceSignals()
-                                        }
-                                    },
-                                )
+                    Text(
+                        text = "Midas",
+                        style = MaterialTheme.typography.titleLarge,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = when (selectedSection) {
+                            TopSection.BILIBILI -> "B 站视频总结与任务回看"
+                            TopSection.XHS -> "小红书单篇 / 批量同步 / 结果保存"
+                            TopSection.NOTES -> "统一笔记库、搜索与合并"
+                            TopSection.FINANCE -> "先看建议，再决定要不要展开细节"
+                            TopSection.SETTINGS -> "服务端连接、令牌与运行配置"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    GlassTabBar(
+                        selectedTabIndex = selectedSection.ordinal,
+                        labels = TopSection.entries.map { it.title },
+                        onSelect = { index ->
+                            selectedSection = TopSection.entries[index]
+                            when (selectedSection) {
+                                TopSection.FINANCE -> onRefreshFinanceSignals()
+                                TopSection.XHS -> onRefreshXiaohongshuSyncMeta()
+                                else -> Unit
                             }
-                        }
-                    }
-                    if (selectedWorkspace == WorkspaceSection.NOTES) {
-                        GlassTabBar(
-                            selectedTabIndex = selectedMainTab.ordinal,
-                            labels = MainTab.entries.map { it.title },
-                            onSelect = { index -> selectedMainTab = MainTab.entries[index] },
-                        )
-                        if (selectedMainTab == MainTab.SIGNALS) {
-                            GlassTabBar(
-                                selectedTabIndex = selectedCaptureSourceTab.ordinal,
-                                labels = CaptureSourceTab.entries.map { it.title },
-                                onSelect = { index ->
-                                    selectedCaptureSourceTab = CaptureSourceTab.entries[index]
-                                },
-                            )
-                        }
-                    }
+                        },
+                    )
                 }
             },
         ) { innerPadding ->
@@ -508,76 +500,76 @@ fun MainScreenContent(
                 .padding(innerPadding)
                 .padding(16.dp)
 
-            if (selectedWorkspace == WorkspaceSection.FINANCE) {
-                FinanceSignalsPanel(
+            when (selectedSection) {
+                TopSection.FINANCE -> FinanceSignalsPanel(
                     state = finance,
                     onRefresh = onRefreshFinanceSignals,
                     onAssetAmountChange = onAssetAmountChange,
                     onSaveAssetStats = onSaveAssetStats,
-                        onDeleteAssetHistoryRecord = onDeleteAssetHistoryRecord,
-                        onAssetSummaryCopied = onAssetSummaryCopied,
-                        onGenerateFinanceNewsDigest = onGenerateFinanceNewsDigest,
-                        onToggleWatchlistNtfy = onToggleWatchlistNtfy,
-                        onFillAssetStatsFromImages = onFillAssetStatsFromImages,
-                        modifier = contentModifier,
-                    )
-            } else {
-                when {
-                    selectedMainTab == MainTab.SETTINGS -> SettingsPanel(
-                        state = settings,
-                        onBaseUrlChange = onBaseUrlChange,
-                        onAccessTokenChange = onAccessTokenChange,
-                        onSave = onSaveBaseUrl,
-                        onTestConnection = onTestConnection,
-                        onConfigTextChange = onConfigTextChange,
-                        onConfigBooleanChange = onConfigBooleanChange,
-                        onResetConfig = onResetConfig,
-                        modifier = contentModifier,
-                    )
+                    onDeleteAssetHistoryRecord = onDeleteAssetHistoryRecord,
+                    onAssetSummaryCopied = onAssetSummaryCopied,
+                    onGenerateFinanceNewsDigest = onGenerateFinanceNewsDigest,
+                    onToggleWatchlistNtfy = onToggleWatchlistNtfy,
+                    onDismissFocusCard = onDismissFinanceFocusCard,
+                    onRestoreFocusCards = onRestoreFinanceFocusCards,
+                    onFillAssetStatsFromImages = onFillAssetStatsFromImages,
+                    modifier = contentModifier,
+                )
 
-                    selectedMainTab == MainTab.NOTES -> NotesPanel(
-                        state = notes,
-                        onKeywordChange = onNotesKeywordChange,
-                        onRefresh = onRefreshNotes,
-                        onDeleteBilibili = onDeleteBilibiliNote,
-                        onClearBilibili = onClearBilibiliNotes,
-                        onDeleteXiaohongshu = onDeleteXiaohongshuNote,
-                        onClearXiaohongshu = onClearXiaohongshuNotes,
-                        onSuggestMergeCandidates = onSuggestMergeCandidates,
-                        onPreviewMergeCandidate = onPreviewMergeCandidate,
-                        onCommitCurrentMerge = onCommitCurrentMerge,
-                        onRollbackLastMerge = onRollbackLastMerge,
-                        onFinalizeLastMerge = onFinalizeLastMerge,
-                        modifier = contentModifier,
-                    )
+                TopSection.SETTINGS -> SettingsPanel(
+                    state = settings,
+                    onBaseUrlChange = onBaseUrlChange,
+                    onAccessTokenChange = onAccessTokenChange,
+                    onSave = onSaveBaseUrl,
+                    onTestConnection = onTestConnection,
+                    onConfigTextChange = onConfigTextChange,
+                    onConfigBooleanChange = onConfigBooleanChange,
+                    onResetConfig = onResetConfig,
+                    modifier = contentModifier,
+                )
 
-                    selectedCaptureSourceTab == CaptureSourceTab.BILIBILI -> {
-                        BilibiliPanel(
-                            state = bilibili,
-                            onVideoUrlChange = onBilibiliVideoUrlChange,
-                            onSubmit = onSubmitBilibiliSummary,
-                            onSaveNote = onSaveBilibiliNote,
-                            onRefreshJobs = onRefreshBilibiliJobs,
-                            onOpenJob = onOpenBilibiliJob,
-                            onRetryJob = onRetryBilibiliJob,
-                            modifier = contentModifier,
-                        )
-                    }
+                TopSection.NOTES -> NotesPanel(
+                    state = notes,
+                    onKeywordChange = onNotesKeywordChange,
+                    onRefresh = onRefreshNotes,
+                    onDeleteBilibili = onDeleteBilibiliNote,
+                    onClearBilibili = onClearBilibiliNotes,
+                    onDeleteXiaohongshu = onDeleteXiaohongshuNote,
+                    onClearXiaohongshu = onClearXiaohongshuNotes,
+                    onSuggestMergeCandidates = onSuggestMergeCandidates,
+                    onPreviewMergeCandidate = onPreviewMergeCandidate,
+                    onCommitCurrentMerge = onCommitCurrentMerge,
+                    onRollbackLastMerge = onRollbackLastMerge,
+                    onFinalizeLastMerge = onFinalizeLastMerge,
+                    modifier = contentModifier,
+                )
 
-                    else -> {
-                        XiaohongshuPanel(
-                            state = xiaohongshu,
-                            onUrlChange = onXiaohongshuUrlChange,
-                            onSummarizeUrl = onSummarizeXiaohongshuUrl,
-                            onRefreshAuthConfig = onRefreshXiaohongshuAuthConfig,
-                            onSaveSingleNote = onSaveSingleXiaohongshuNote,
-                            onRefreshJobs = onRefreshXiaohongshuJobs,
-                            onOpenJob = onOpenXiaohongshuJob,
-                            onRetryJob = onRetryXiaohongshuJob,
-                            modifier = contentModifier,
-                        )
-                    }
-                }
+                TopSection.BILIBILI -> BilibiliPanel(
+                    state = bilibili,
+                    onVideoUrlChange = onBilibiliVideoUrlChange,
+                    onSubmit = onSubmitBilibiliSummary,
+                    onSaveNote = onSaveBilibiliNote,
+                    onRefreshJobs = onRefreshBilibiliJobs,
+                    onOpenJob = onOpenBilibiliJob,
+                    onRetryJob = onRetryBilibiliJob,
+                    modifier = contentModifier,
+                )
+
+                TopSection.XHS -> XiaohongshuPanel(
+                    state = xiaohongshu,
+                    onUrlChange = onXiaohongshuUrlChange,
+                    onBatchLimitChange = onXiaohongshuBatchLimitChange,
+                    onSummarizeUrl = onSummarizeXiaohongshuUrl,
+                    onStartBatchSync = onStartXiaohongshuBatchSync,
+                    onRefreshAuthConfig = onRefreshXiaohongshuAuthConfig,
+                    onSaveSingleNote = onSaveSingleXiaohongshuNote,
+                    onSaveAllNotes = onSaveAllXiaohongshuNotes,
+                    onRefreshJobs = onRefreshXiaohongshuJobs,
+                    onRefreshSyncMeta = onRefreshXiaohongshuSyncMeta,
+                    onOpenJob = onOpenXiaohongshuJob,
+                    onRetryJob = onRetryXiaohongshuJob,
+                    modifier = contentModifier,
+                )
             }
         }
     }
@@ -1143,75 +1135,180 @@ private fun BilibiliResult(result: BilibiliSummaryData) {
 private fun XiaohongshuPanel(
     state: XiaohongshuUiState,
     onUrlChange: (String) -> Unit,
+    onBatchLimitChange: (String) -> Unit,
     onSummarizeUrl: () -> Unit,
+    onStartBatchSync: () -> Unit,
     onRefreshAuthConfig: () -> Unit,
     onSaveSingleNote: (XiaohongshuSummaryItem) -> Unit,
+    onSaveAllNotes: () -> Unit,
     onRefreshJobs: () -> Unit,
+    onRefreshSyncMeta: () -> Unit,
     onOpenJob: (String) -> Unit,
     onRetryJob: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val pendingSaveCount = state.summaries.count { summary -> summary.noteId !in state.savedNoteIds }
+
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("小红书单篇总结", style = MaterialTheme.typography.titleMedium)
-        OutlinedTextField(
-            value = state.urlInput,
-            onValueChange = onUrlChange,
-            label = { Text("单篇笔记 URL") },
-            trailingIcon = {
-                if (state.urlInput.isNotBlank()) {
-                    IconButton(
-                        onClick = { onUrlChange("") },
-                        modifier = Modifier.testTag("xhs_url_clear_button"),
+        Text("小红书采集与同步", style = MaterialTheme.typography.titleMedium)
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("批量同步最新笔记", style = MaterialTheme.typography.titleSmall)
+                Text(
+                    text = "先看待同步数量和冷却状态，再决定要不要跑批量任务。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                OutlinedTextField(
+                    value = state.batchLimitInput,
+                    onValueChange = onBatchLimitChange,
+                    label = { Text("本次最多同步多少条") },
+                    placeholder = { Text("默认 10，最大 100") },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("xhs_batch_limit_input"),
+                    singleLine = true,
+                )
+                Text(
+                    text = "待同步 ${state.batchPendingCount} 条 · 扫描范围 ${state.batchScannedCount} 条",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = if (state.batchCooldownAllowed) {
+                        "冷却状态：当前可直接执行"
+                    } else {
+                        "冷却状态：剩余 ${state.batchCooldownRemainingSeconds} 秒"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = if (state.batchCooldownAllowed) {
+                        SuccessStatusColor
+                    } else {
+                        WarningStatusColor
+                    },
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    MidasButton(
+                        onClick = onRefreshSyncMeta,
+                        enabled = !state.isRefreshingSyncMeta,
+                        tone = ButtonTone.NEUTRAL,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("xhs_refresh_sync_meta_button"),
                     ) {
-                        Text("X")
+                        SingleLineActionText(if (state.isRefreshingSyncMeta) "刷新中..." else "刷新队列")
+                    }
+                    MidasButton(
+                        onClick = onStartBatchSync,
+                        enabled = !state.isSummarizingUrl,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("xhs_start_batch_sync_button"),
+                    ) {
+                        SingleLineActionText(if (state.currentJobType == XIAOHONGSHU_SYNC_JOB_TYPE && state.isSummarizingUrl) "同步中..." else "开始批量同步")
                     }
                 }
-            },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-        )
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            MidasButton(
-                onClick = onSummarizeUrl,
-                enabled = !state.isSummarizingUrl,
-                modifier = Modifier.weight(1f),
-            ) {
-                SingleLineActionText(if (state.isSummarizingUrl) "总结中..." else "总结单篇")
-            }
-            MidasButton(
-                onClick = onRefreshAuthConfig,
-                enabled = !state.isRefreshingCaptureConfig,
-                tone = ButtonTone.NEUTRAL,
-                modifier = Modifier
-                    .weight(1f)
-                    .testTag("xhs_refresh_auth_button"),
-            ) {
-                SingleLineActionText(if (state.isRefreshingCaptureConfig) "更新中..." else "更新Auth")
+                MidasButton(
+                    onClick = onSaveAllNotes,
+                    enabled = pendingSaveCount > 0 && !state.isSavingAllNotes,
+                    tone = ButtonTone.SUCCESS,
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("xhs_save_all_button"),
+                ) {
+                    SingleLineActionText(
+                        if (state.isSavingAllNotes) {
+                            "批量保存中..."
+                        } else {
+                            "保存当前全部结果（$pendingSaveCount）"
+                        },
+                    )
+                }
+                if (state.batchSyncStatus.isNotBlank()) {
+                    Text(text = state.batchSyncStatus, color = SuccessStatusColor)
+                }
             }
         }
-        Text(
-            text = "读取默认 HAR 或 cURL，自动更新小红书请求头。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        Text(
-            text = "若单篇总结失败，请先点击“更新Auth”刷新登录态后重试。",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text("单篇链接总结", style = MaterialTheme.typography.titleSmall)
+                OutlinedTextField(
+                    value = state.urlInput,
+                    onValueChange = onUrlChange,
+                    label = { Text("单篇笔记 URL") },
+                    trailingIcon = {
+                        if (state.urlInput.isNotBlank()) {
+                            IconButton(
+                                onClick = { onUrlChange("") },
+                                modifier = Modifier.testTag("xhs_url_clear_button"),
+                            ) {
+                                Text("X")
+                            }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("xhs_url_input"),
+                    singleLine = true,
+                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    MidasButton(
+                        onClick = onSummarizeUrl,
+                        enabled = !state.isSummarizingUrl,
+                        modifier = Modifier.weight(1f),
+                    ) {
+                        SingleLineActionText(
+                            if (state.currentJobType == XIAOHONGSHU_SUMMARY_JOB_TYPE && state.isSummarizingUrl) {
+                                "总结中..."
+                            } else {
+                                "总结单篇"
+                            },
+                        )
+                    }
+                    MidasButton(
+                        onClick = onRefreshAuthConfig,
+                        enabled = !state.isRefreshingCaptureConfig,
+                        tone = ButtonTone.NEUTRAL,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("xhs_refresh_auth_button"),
+                    ) {
+                        SingleLineActionText(if (state.isRefreshingCaptureConfig) "更新中..." else "更新Auth")
+                    }
+                }
+                Text(
+                    text = "读取默认 HAR 或 cURL，自动更新小红书请求头；单篇失败时先刷新登录态。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (state.summarizeUrlStatus.isNotBlank()) {
+                    Text(text = state.summarizeUrlStatus, color = SuccessStatusColor)
+                }
+            }
+        }
 
         if (state.errorMessage.isNotBlank()) {
             Text(text = state.errorMessage, color = ErrorStatusColor)
         }
         if (state.currentJobId.isNotBlank()) {
             Text(
-                text = "任务ID：${state.currentJobId}",
+                text = "当前任务：${asyncJobTypeLabel(state.currentJobType)} · ${state.currentJobId}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
@@ -1221,9 +1318,6 @@ private fun XiaohongshuPanel(
         }
         if (state.captureRefreshStatus.isNotBlank()) {
             Text(text = state.captureRefreshStatus, color = SuccessStatusColor)
-        }
-        if (state.summarizeUrlStatus.isNotBlank()) {
-            Text(text = state.summarizeUrlStatus, color = SuccessStatusColor)
         }
         AsyncJobHistoryCard(
             title = "最近任务",
@@ -1236,6 +1330,12 @@ private fun XiaohongshuPanel(
             listTestTag = "xhs_recent_jobs",
         )
 
+        if (state.summaries.isNotEmpty()) {
+            Text(
+                text = "当前结果（未保存 ${pendingSaveCount.coerceAtLeast(0)} 条）",
+                style = MaterialTheme.typography.titleSmall,
+            )
+        }
         state.summaries.forEach { summary ->
             XiaohongshuSummaryCard(
                 item = summary,
@@ -1398,6 +1498,15 @@ private fun AsyncJobHistoryItem(
                     color = LinkStatusColor,
                 )
             }
+            item.progress?.let { progress ->
+                if (progress.total > 0) {
+                    Text(
+                        text = "进度：${progress.current}/${progress.total}",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
             Text(
                 text = item.message,
                 style = MaterialTheme.typography.bodySmall,
@@ -1431,6 +1540,7 @@ private fun asyncJobTypeLabel(jobType: String): String {
     return when (jobType.trim().lowercase(Locale.ROOT)) {
         "bilibili_summarize" -> "B站总结"
         "xiaohongshu_summarize_url" -> "小红书单篇"
+        "xiaohongshu_sync" -> "小红书批量同步"
         else -> "后台任务"
     }
 }
@@ -1465,10 +1575,13 @@ private fun FinanceSignalsPanel(
     onAssetSummaryCopied: () -> Unit,
     onGenerateFinanceNewsDigest: () -> Unit,
     onToggleWatchlistNtfy: (Boolean) -> Unit,
+    onDismissFocusCard: (FinanceFocusCard) -> Unit,
+    onRestoreFocusCards: () -> Unit,
     onFillAssetStatsFromImages: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var selectedAssetTab by remember { mutableStateOf(AssetPanelTab.MARKET) }
+    var showAllNews by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
@@ -1529,8 +1642,51 @@ private fun FinanceSignalsPanel(
                         modifier = Modifier.padding(12.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text("今日关注建议", style = MaterialTheme.typography.titleSmall)
-                        FinanceFocusCardList(items = state.focusCards)
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Text("今日关注建议", style = MaterialTheme.typography.titleSmall)
+                                Text(
+                                    text = "先处理优先级高的，再决定要不要展开行情和新闻明细。",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                )
+                            }
+                            if (state.dismissedFocusCardCount > 0) {
+                                MidasButton(
+                                    onClick = onRestoreFocusCards,
+                                    tone = ButtonTone.NEUTRAL,
+                                ) {
+                                    SingleLineActionText("恢复 ${state.dismissedFocusCardCount}")
+                                }
+                            }
+                        }
+                        FinanceFocusCardList(
+                            items = state.focusCards,
+                            onDismiss = onDismissFocusCard,
+                        )
+                    }
+                }
+            } else if (state.dismissedFocusCardCount > 0) {
+                GlassCard(modifier = Modifier.fillMaxWidth()) {
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(12.dp),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text(
+                            text = "今日建议已全部处理",
+                            style = MaterialTheme.typography.titleSmall,
+                        )
+                        MidasButton(
+                            onClick = onRestoreFocusCards,
+                            tone = ButtonTone.NEUTRAL,
+                        ) {
+                            SingleLineActionText("恢复 ${state.dismissedFocusCardCount}")
+                        }
                     }
                 }
             }
@@ -1633,9 +1789,22 @@ private fun FinanceSignalsPanel(
                     modifier = Modifier.padding(12.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text("今日金融与时政新闻 Top5", style = MaterialTheme.typography.titleSmall)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        Text("今日金融与时政新闻 Top5", style = MaterialTheme.typography.titleSmall)
+                        if (state.topNews.size > 3) {
+                            MidasButton(
+                                onClick = { showAllNews = !showAllNews },
+                                tone = ButtonTone.NEUTRAL,
+                            ) {
+                                SingleLineActionText(if (showAllNews) "收起新闻" else "展开全部")
+                            }
+                        }
+                    }
                     FinanceTopNewsList(
-                        items = state.topNews,
+                        items = if (showAllNews) state.topNews else state.topNews.take(3),
                         isLoading = state.isLoading,
                     )
                 }
@@ -1665,11 +1834,36 @@ private fun formatAmountWanRmb(amount: Double): String {
 }
 
 @Composable
-private fun FinanceFocusCardList(items: List<FinanceFocusCard>) {
-    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-        items.forEachIndexed { index, item ->
-            FinanceFocusCardItem(item = item)
-            if (index < items.lastIndex) {
+private fun FinanceFocusCardList(
+    items: List<FinanceFocusCard>,
+    onDismiss: (FinanceFocusCard) -> Unit,
+) {
+    val groupedItems = items.groupBy { item -> item.actionType.uppercase(Locale.ROOT) }
+    val orderedTypes = listOf("REVIEW_NOW", "FOLLOW_UP", "WAIT_CONFIRM", "MONITOR")
+    val orderedGroups = orderedTypes.mapNotNull { type ->
+        groupedItems[type]?.takeIf { group -> group.isNotEmpty() }?.let { group -> type to group }
+    } + groupedItems.entries
+        .filter { entry -> entry.key !in orderedTypes }
+        .map { entry -> entry.key to entry.value }
+
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        orderedGroups.forEachIndexed { groupIndex, (actionType, groupItems) ->
+            Text(
+                text = financeActionTypeGroupLabel(actionType),
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            groupItems.forEachIndexed { itemIndex, item ->
+                FinanceFocusCardItem(
+                    item = item,
+                    onDismiss = { onDismiss(item) },
+                )
+                if (itemIndex < groupItems.lastIndex) {
+                    HorizontalDivider()
+                }
+            }
+            if (groupIndex < orderedGroups.lastIndex) {
                 HorizontalDivider()
             }
         }
@@ -1677,7 +1871,10 @@ private fun FinanceFocusCardList(items: List<FinanceFocusCard>) {
 }
 
 @Composable
-private fun FinanceFocusCardItem(item: FinanceFocusCard) {
+private fun FinanceFocusCardItem(
+    item: FinanceFocusCard,
+    onDismiss: () -> Unit,
+) {
     val priorityColor = when (item.priority.uppercase(Locale.ROOT)) {
         "HIGH" -> ErrorStatusColor
         "LOW" -> LinkStatusColor
@@ -1695,40 +1892,51 @@ private fun FinanceFocusCardItem(item: FinanceFocusCard) {
         else -> "持续观察"
     }
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(
-                text = kindLabel,
-                style = MaterialTheme.typography.bodySmall,
-                color = priorityColor,
-                modifier = Modifier
-                    .background(
-                        color = priorityColor.copy(alpha = 0.14f),
-                        shape = RoundedCornerShape(999.dp),
-                    )
-                    .padding(horizontal = 8.dp, vertical = 2.dp),
-            )
-            if (item.actionLabel.isNotBlank()) {
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Text(
-                    text = "${item.actionLabel} · $actionTypeLabel",
+                    text = kindLabel,
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurface,
+                    color = priorityColor,
                     modifier = Modifier
                         .background(
-                            color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+                            color = priorityColor.copy(alpha = 0.14f),
                             shape = RoundedCornerShape(999.dp),
                         )
                         .padding(horizontal = 8.dp, vertical = 2.dp),
                 )
+                if (item.actionLabel.isNotBlank()) {
+                    Text(
+                        text = "${item.actionLabel} · $actionTypeLabel",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        modifier = Modifier
+                            .background(
+                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
+                                shape = RoundedCornerShape(999.dp),
+                            )
+                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                    )
+                }
             }
-            if (item.relatedWatchlistNames.isNotEmpty()) {
-                Text(
-                    text = item.relatedWatchlistNames.joinToString(" / "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
+            MidasButton(
+                onClick = onDismiss,
+                tone = ButtonTone.NEUTRAL,
+            ) {
+                SingleLineActionText("已处理")
             }
+        }
+        if (item.relatedWatchlistNames.isNotEmpty()) {
+            Text(
+                text = item.relatedWatchlistNames.joinToString(" / "),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
         }
         Text(
             text = item.title,
@@ -1756,6 +1964,15 @@ private fun FinanceFocusCardItem(item: FinanceFocusCard) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
+    }
+}
+
+private fun financeActionTypeGroupLabel(actionType: String): String {
+    return when (actionType.uppercase(Locale.ROOT)) {
+        "REVIEW_NOW" -> "优先处理"
+        "FOLLOW_UP" -> "继续跟进"
+        "WAIT_CONFIRM" -> "等待确认"
+        else -> "持续观察"
     }
 }
 

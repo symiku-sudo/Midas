@@ -22,6 +22,7 @@ from app.models.schemas import (
     AsyncJobCreateData,
     AsyncJobListData,
     AsyncJobListItem,
+    AsyncJobProgressData,
     AsyncJobStatusData,
     FinanceFocusCard,
     FinanceMarketAlertDebugData,
@@ -257,6 +258,22 @@ def test_async_job_endpoints(monkeypatch) -> None:
                 submitted_at="2026-03-12 12:31:00",
             )
 
+        async def create_xiaohongshu_sync_job(
+            self, *, limit: int | None, confirm_live: bool, request_id: str
+        ) -> AsyncJobCreateData:
+            assert limit == 5
+            assert confirm_live is True
+            assert request_id
+            return AsyncJobCreateData(
+                job_id="job-xhs-sync-1",
+                job_type="xiaohongshu_sync",
+                status="PENDING",
+                message="开始同步，目标有效笔记 5 条。",
+                submitted_at="2026-03-12 12:31:30",
+                progress_current=0,
+                progress_total=5,
+            )
+
         async def list_jobs(
             self, *, limit: int = 20, status: str = "", job_type: str = ""
         ) -> AsyncJobListData:
@@ -274,6 +291,7 @@ def test_async_job_endpoints(monkeypatch) -> None:
                         submitted_at="2026-03-12 12:30:00",
                         started_at="2026-03-12 12:30:01",
                         finished_at="2026-03-12 12:31:00",
+                        progress=AsyncJobProgressData(current=1, total=1),
                     )
                 ],
             )
@@ -298,6 +316,7 @@ def test_async_job_endpoints(monkeypatch) -> None:
                     "transcript_chars": 3456,
                 },
                 error=None,
+                progress=AsyncJobProgressData(current=1, total=1),
             )
 
         async def retry_job(self, job_id: str, *, request_id: str) -> AsyncJobCreateData:
@@ -328,22 +347,68 @@ def test_async_job_endpoints(monkeypatch) -> None:
     assert create_xhs.status_code == 200
     assert create_xhs.json()["data"]["job_type"] == "xiaohongshu_summarize_url"
 
+    create_xhs_sync = client.post(
+        "/api/jobs/xiaohongshu/sync",
+        json={"limit": 5, "confirm_live": True},
+    )
+    assert create_xhs_sync.status_code == 200
+    assert create_xhs_sync.json()["data"]["job_type"] == "xiaohongshu_sync"
+    assert create_xhs_sync.json()["data"]["progress_total"] == 5
+
     listing = client.get(
         "/api/jobs",
         params={"limit": 10, "status": "SUCCEEDED", "job_type": "bilibili_summarize"},
     )
     assert listing.status_code == 200
     assert listing.json()["data"]["total"] == 1
+    assert listing.json()["data"]["items"][0]["progress"]["current"] == 1
 
     detail = client.get("/api/jobs/job-bili-1")
     assert detail.status_code == 200
     body = detail.json()
     assert body["data"]["status"] == "SUCCEEDED"
     assert body["data"]["result"]["transcript_chars"] == 3456
+    assert body["data"]["progress"]["total"] == 1
 
     retried = client.post("/api/jobs/job-bili-1/retry")
     assert retried.status_code == 200
     assert retried.json()["data"]["retry_of_job_id"] == "job-bili-1"
+
+
+def test_xiaohongshu_sync_meta_endpoints(monkeypatch) -> None:
+    class _FakeXiaohongshuSyncService:
+        def get_live_sync_cooldown(self) -> dict[str, int | bool | str]:
+            return {
+                "mode": "web_readonly",
+                "allowed": False,
+                "remaining_seconds": 96,
+                "next_allowed_at_epoch": 1_762_851_200,
+                "last_sync_at_epoch": 1_762_851_104,
+                "min_interval_seconds": 120,
+            }
+
+        async def get_pending_unsynced_count(self) -> dict[str, int | str]:
+            return {
+                "mode": "web_readonly",
+                "pending_count": 4,
+                "scanned_count": 9,
+            }
+
+    monkeypatch.setattr(
+        routes_module,
+        "_get_xiaohongshu_sync_service",
+        lambda: _FakeXiaohongshuSyncService(),
+    )
+
+    cooldown_resp = client.get("/api/xiaohongshu/sync/cooldown")
+    assert cooldown_resp.status_code == 200
+    assert cooldown_resp.json()["data"]["allowed"] is False
+    assert cooldown_resp.json()["data"]["remaining_seconds"] == 96
+
+    pending_resp = client.get("/api/xiaohongshu/sync/pending-count")
+    assert pending_resp.status_code == 200
+    assert pending_resp.json()["data"]["pending_count"] == 4
+    assert pending_resp.json()["data"]["scanned_count"] == 9
 
 
 def test_search_notes_endpoint(monkeypatch) -> None:

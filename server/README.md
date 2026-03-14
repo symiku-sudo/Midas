@@ -12,6 +12,7 @@
 - `DELETE /api/assets/snapshots/{record_id}`
 - `POST /api/jobs/bilibili-summarize`
 - `POST /api/jobs/xiaohongshu/summarize-url`
+- `POST /api/jobs/xiaohongshu/sync`
 - `GET /api/jobs`
 - `GET /api/jobs/{job_id}`
 - `POST /api/jobs/{job_id}/retry`
@@ -21,6 +22,8 @@
 - `GET /api/notes/search`
 - `DELETE /api/notes/bilibili/{note_id}` / `DELETE /api/notes/bilibili`
 - `POST /api/xiaohongshu/summarize-url`
+- `GET /api/xiaohongshu/sync/cooldown`
+- `GET /api/xiaohongshu/sync/pending-count`
 - `POST /api/notes/xiaohongshu/save-batch`
 - `GET /api/notes/xiaohongshu`
 - `DELETE /api/notes/xiaohongshu/{note_id}` / `DELETE /api/notes/xiaohongshu`
@@ -114,6 +117,7 @@ server/.venv/bin/python server/tools/prune_unsaved_synced_notes.py --dry-run --s
 当前支持：
 - `POST /api/jobs/bilibili-summarize`
 - `POST /api/jobs/xiaohongshu/summarize-url`
+- `POST /api/jobs/xiaohongshu/sync`
 - `GET /api/jobs`
 - `GET /api/jobs/{job_id}`
 - `POST /api/jobs/{job_id}/retry`
@@ -124,6 +128,7 @@ server/.venv/bin/python server/tools/prune_unsaved_synced_notes.py --dry-run --s
 - 服务重启后，已完成/失败历史会保留；启动时仍处于 `RUNNING` 的任务会被标记为 `INTERRUPTED`，避免假状态残留。
 - 重试任务会在响应和历史列表里携带 `retry_of_job_id`，便于客户端回溯来源。
 - 当前仅允许重试 `FAILED` / `INTERRUPTED` 状态的任务，重试时会复用原请求体创建新任务。
+- `xiaohongshu_sync` 任务会额外暴露 `progress.current/total` 与运行中 `summaries` 预览，客户端可边同步边展示进度。
 
 ## Finance Signals Worker
 
@@ -148,6 +153,7 @@ tools/finance_signals.sh stop
 - 客户端可直接显示“某条新闻可能影响哪些关注标的”以及“某个标的最近关联了几条新闻”。
 - API 服务端还会返回第一版 `focus_cards`，把“阈值触发”和“影响到 watchlist 的新闻”整理成今日关注建议，并附上 `action_label/action_hint` 说明下一步建议动作。
 - `focus_cards` 现在还带结构化 `action_type/reasons`，便于后续按“立即处理 / 继续跟进 / 持续观察”做筛选或排序。
+- Android 客户端当前会按 `action_type` 分组展示这些建议，并支持在端侧做“已处理/恢复全部”闭环，不影响服务端原始信号。
 - 可通过 `news.filters.source_allowlist/source_blocklist/domain_allowlist/domain_blocklist` 做来源白名单/黑名单控制。
 - 可通过 `news.digest.max_items/max_summary_chars_per_item/prompt_char_limit/reuse_within_seconds` 控制摘要样本数、单条摘要截断长度、单次 prompt 文本长度上限，以及“3 小时内复用上次摘要”的窗口。
 - 可通过 `market_data.alerting.*` 配置 Watchlist 行情阈值告警；其状态会写入 `market_alert_debug`。
@@ -359,7 +365,18 @@ curl -X POST http://127.0.0.1:8000/api/xiaohongshu/summarize-url \
 curl -X POST http://127.0.0.1:8000/api/jobs/xiaohongshu/summarize-url \
   -H 'Content-Type: application/json' \
   -d '{"url":"https://www.xiaohongshu.com/explore/xxxxxx"}'
+
+# 读取批量同步冷却状态和待同步数量
+curl http://127.0.0.1:8000/api/xiaohongshu/sync/cooldown
+curl http://127.0.0.1:8000/api/xiaohongshu/sync/pending-count
+
+# 以异步任务方式批量同步最新小红书笔记
+curl -X POST http://127.0.0.1:8000/api/jobs/xiaohongshu/sync \
+  -H 'Content-Type: application/json' \
+  -d '{"limit":10,"confirm_live":true}'
 ```
+
+`/api/xiaohongshu/sync/pending-count` 当前只扫描最近一小段收藏窗口，用来给客户端展示“近期待同步队列”估计值，避免为了统计总量而把收藏历史从头扫到底。
 
 ```bash
 # 批量保存小红书总结结果（notes 数组元素结构与 /api/xiaohongshu/summarize-url 返回一致）
