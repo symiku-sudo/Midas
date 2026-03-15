@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime
 from functools import lru_cache
 from urllib.parse import urlparse
 
@@ -25,9 +26,13 @@ from app.models.schemas import (
     BilibiliSummaryRequest,
     EditableConfigData,
     EditableConfigUpdateRequest,
+    FinanceFocusCardActionData,
+    FinanceFocusCardActionRequest,
+    FinanceFocusCardHistoryData,
     FinanceWatchlistNtfyData,
     FinanceWatchlistNtfyUpdateRequest,
     HealthData,
+    HomeOverviewData,
     NotesMergeCommitData,
     NotesMergeCommitRequest,
     NotesMergeFinalizeData,
@@ -39,7 +44,10 @@ from app.models.schemas import (
     NotesMergeSuggestData,
     NotesMergeSuggestRequest,
     NotesDeleteData,
+    NotesReviewTopicsData,
+    NotesTimelineReviewData,
     NotesSaveBatchData,
+    RelatedNotesData,
     UnifiedNotesData,
     XiaohongshuAuthUpdateData,
     XiaohongshuAuthUpdateRequest,
@@ -86,7 +94,7 @@ def _get_editable_config_service() -> EditableConfigService:
 
 @lru_cache(maxsize=1)
 def _get_finance_signals_service() -> FinanceSignalsService:
-    return FinanceSignalsService()
+    return FinanceSignalsService(get_settings())
 
 
 @lru_cache(maxsize=1)
@@ -217,6 +225,38 @@ async def health(request: Request) -> dict:
     return success_response(data=data, request_id=request.state.request_id)
 
 
+@router.get("/api/home/overview")
+async def get_home_overview(request: Request) -> dict:
+    async_job_service = _get_async_job_service(request)
+    notes_service = _get_note_library_service()
+    finance_service = _get_finance_signals_service()
+    asset_service = _get_asset_snapshot_service()
+
+    recent_jobs = await async_job_service.list_jobs(limit=5)
+    recent_notes = notes_service.search_notes(
+        limit=5,
+        offset=0,
+        sort_by="saved_at",
+        sort_order="desc",
+    )
+    finance_data = finance_service.get_dashboard_state()
+    asset_current = asset_service.get_current()
+
+    data = HomeOverviewData(
+        generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        recent_tasks=recent_jobs.items,
+        recent_notes=recent_notes.items,
+        finance_focus_cards=finance_data.focus_cards[:3],
+        quick_links=[
+            {"target": "bilibili", "title": "B站总结", "subtitle": "贴链接，走后台任务"},
+            {"target": "xiaohongshu", "title": "小红书单链", "subtitle": "总结后直接保存"},
+            {"target": "notes", "title": "笔记回看", "subtitle": "按筛选和时间回顾"},
+        ],
+        asset_total_amount_wan=asset_current.total_amount_wan,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
 @router.get("/api/finance/signals")
 async def get_finance_signals(request: Request) -> dict:
     service = _get_finance_signals_service()
@@ -239,6 +279,30 @@ async def update_finance_watchlist_ntfy(
 async def trigger_finance_news_digest(request: Request) -> dict:
     service = _get_finance_signals_service()
     data = await service.trigger_news_digest()
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/finance/signals/cards/{card_id}/status")
+async def update_finance_focus_card_status(
+    card_id: str,
+    payload: FinanceFocusCardActionRequest,
+    request: Request,
+) -> dict:
+    service = _get_finance_signals_service()
+    data: FinanceFocusCardActionData = service.update_focus_card_status(
+        card_id=card_id,
+        status=payload.status,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/finance/signals/history")
+async def get_finance_focus_card_history(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    service = _get_finance_signals_service()
+    data: FinanceFocusCardHistoryData = service.get_focus_card_history(limit=limit)
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 
@@ -386,15 +450,83 @@ async def search_notes(
     request: Request,
     keyword: str = Query(default=""),
     source: str = Query(default=""),
+    saved_from: str = Query(default=""),
+    saved_to: str = Query(default=""),
+    merged: bool | None = Query(default=None),
+    sort_by: str = Query(default="saved_at"),
+    sort_order: str = Query(default="desc"),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
 ) -> dict:
     service = _get_note_library_service()
-    result: UnifiedNotesData = service.search_notes(
+    search_kwargs = dict(
         keyword=keyword,
         source=source,
         limit=limit,
         offset=offset,
+    )
+    if saved_from:
+        search_kwargs["saved_from"] = saved_from
+    if saved_to:
+        search_kwargs["saved_to"] = saved_to
+    if merged is not None:
+        search_kwargs["merged"] = merged
+    if sort_by and sort_by != "saved_at":
+        search_kwargs["sort_by"] = sort_by
+    if sort_order and sort_order != "desc":
+        search_kwargs["sort_order"] = sort_order
+    result: UnifiedNotesData = service.search_notes(**search_kwargs)
+    return success_response(data=result.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/notes/review/topics")
+async def review_notes_topics(
+    request: Request,
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=8, ge=1, le=50),
+    per_topic_limit: int = Query(default=5, ge=1, le=20),
+) -> dict:
+    service = _get_note_library_service()
+    result: NotesReviewTopicsData = service.review_notes_by_topics(
+        days=days,
+        limit=limit,
+        per_topic_limit=per_topic_limit,
+    )
+    return success_response(data=result.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/notes/review/timeline")
+async def review_notes_timeline(
+    request: Request,
+    days: int = Query(default=30, ge=1, le=365),
+    bucket: str = Query(default="day"),
+    limit: int = Query(default=10, ge=1, le=50),
+    per_bucket_limit: int = Query(default=5, ge=1, le=20),
+) -> dict:
+    service = _get_note_library_service()
+    result: NotesTimelineReviewData = service.review_notes_by_timeline(
+        days=days,
+        bucket=bucket,
+        limit=limit,
+        per_bucket_limit=per_bucket_limit,
+    )
+    return success_response(data=result.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/notes/{source}/{note_id}/related")
+async def get_related_notes(
+    source: str,
+    note_id: str,
+    request: Request,
+    limit: int = Query(default=8, ge=1, le=50),
+    min_score: float = Query(default=0.2, ge=0.0, le=1.0),
+) -> dict:
+    service = _get_note_library_service()
+    result: RelatedNotesData = service.find_related_notes(
+        source=source,
+        note_id=note_id,
+        limit=limit,
+        min_score=min_score,
     )
     return success_response(data=result.model_dump(), request_id=request.state.request_id)
 

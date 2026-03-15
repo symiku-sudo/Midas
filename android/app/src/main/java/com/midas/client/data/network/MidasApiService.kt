@@ -17,10 +17,14 @@ import com.midas.client.data.model.BilibiliSummaryData
 import com.midas.client.data.model.BilibiliSummaryRequest
 import com.midas.client.data.model.EditableConfigData
 import com.midas.client.data.model.EditableConfigUpdateRequest
+import com.midas.client.data.model.FinanceFocusCardActionData
+import com.midas.client.data.model.FinanceFocusCardActionRequest
+import com.midas.client.data.model.FinanceFocusCardHistoryData
 import com.midas.client.data.model.FinanceSignalsData
 import com.midas.client.data.model.FinanceWatchlistNtfyData
 import com.midas.client.data.model.FinanceWatchlistNtfyUpdateRequest
 import com.midas.client.data.model.HealthData
+import com.midas.client.data.model.HomeOverviewData
 import com.midas.client.data.model.NotesMergeCommitData
 import com.midas.client.data.model.NotesMergeCommitRequest
 import com.midas.client.data.model.NotesMergeFinalizeData
@@ -32,7 +36,10 @@ import com.midas.client.data.model.NotesMergeRollbackRequest
 import com.midas.client.data.model.NotesMergeSuggestData
 import com.midas.client.data.model.NotesMergeSuggestRequest
 import com.midas.client.data.model.NotesDeleteData
+import com.midas.client.data.model.NotesReviewTopicsData
+import com.midas.client.data.model.NotesTimelineReviewData
 import com.midas.client.data.model.NotesSaveBatchData
+import com.midas.client.data.model.RelatedNotesData
 import com.midas.client.data.model.UnifiedNotesData
 import com.midas.client.data.model.XiaohongshuAuthUpdateData
 import com.midas.client.data.model.XiaohongshuAuthUpdateRequest
@@ -57,6 +64,9 @@ interface MidasApiService {
     @GET("health")
     suspend fun health(): Response<ApiEnvelope<HealthData>>
 
+    @GET("api/home/overview")
+    suspend fun getHomeOverview(): Response<ApiEnvelope<HomeOverviewData>>
+
     @GET("api/finance/signals")
     suspend fun getFinanceSignals(): Response<ApiEnvelope<FinanceSignalsData>>
 
@@ -67,6 +77,17 @@ interface MidasApiService {
 
     @POST("api/finance/signals/digest")
     suspend fun triggerFinanceNewsDigest(): Response<ApiEnvelope<FinanceSignalsData>>
+
+    @POST("api/finance/signals/cards/{cardId}/status")
+    suspend fun updateFinanceFocusCardStatus(
+        @Path("cardId") cardId: String,
+        @Body request: FinanceFocusCardActionRequest,
+    ): Response<ApiEnvelope<FinanceFocusCardActionData>>
+
+    @GET("api/finance/signals/history")
+    suspend fun getFinanceFocusCardHistory(
+        @Query("limit") limit: Int = 50,
+    ): Response<ApiEnvelope<FinanceFocusCardHistoryData>>
 
     @Multipart
     @POST("api/assets/fill-from-images")
@@ -139,9 +160,37 @@ interface MidasApiService {
     suspend fun searchNotes(
         @Query("keyword") keyword: String = "",
         @Query("source") source: String = "",
+        @Query("saved_from") savedFrom: String = "",
+        @Query("saved_to") savedTo: String = "",
+        @Query("merged") merged: Boolean? = null,
+        @Query("sort_by") sortBy: String = "saved_at",
+        @Query("sort_order") sortOrder: String = "desc",
         @Query("limit") limit: Int = 50,
         @Query("offset") offset: Int = 0,
     ): Response<ApiEnvelope<UnifiedNotesData>>
+
+    @GET("api/notes/review/topics")
+    suspend fun reviewNotesTopics(
+        @Query("days") days: Int = 30,
+        @Query("limit") limit: Int = 8,
+        @Query("per_topic_limit") perTopicLimit: Int = 5,
+    ): Response<ApiEnvelope<NotesReviewTopicsData>>
+
+    @GET("api/notes/review/timeline")
+    suspend fun reviewNotesTimeline(
+        @Query("days") days: Int = 30,
+        @Query("bucket") bucket: String = "day",
+        @Query("limit") limit: Int = 10,
+        @Query("per_bucket_limit") perBucketLimit: Int = 5,
+    ): Response<ApiEnvelope<NotesTimelineReviewData>>
+
+    @GET("api/notes/{source}/{noteId}/related")
+    suspend fun getRelatedNotes(
+        @Path("source") source: String,
+        @Path("noteId") noteId: String,
+        @Query("limit") limit: Int = 8,
+        @Query("min_score") minScore: Double = 0.2,
+    ): Response<ApiEnvelope<RelatedNotesData>>
 
     @DELETE("api/notes/bilibili/{noteId}")
     suspend fun deleteBilibiliNote(

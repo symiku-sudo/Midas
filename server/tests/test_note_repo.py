@@ -225,3 +225,135 @@ def test_search_notes_supports_keyword_source_limit_and_offset(tmp_path: Path) -
     total_page, page_items = repo.search_notes(limit=1, offset=1)
     assert total_page == 3
     assert len(page_items) == 1
+
+
+def test_search_notes_supports_time_merged_and_sort_filters(tmp_path: Path) -> None:
+    db_path = tmp_path / "notes.db"
+    repo = NoteLibraryRepository(str(db_path))
+    repo.save_bilibili_note(
+        note_id="merged_note_1",
+        title="合并后的宏观复盘",
+        video_url="https://www.bilibili.com/video/BV1merged",
+        summary_markdown="# 合并总结",
+        elapsed_ms=1,
+        transcript_chars=2,
+    )
+    repo.save_bilibili_note(
+        note_id="b2",
+        title="普通笔记",
+        video_url="https://www.bilibili.com/video/BV1plain",
+        summary_markdown="# 普通",
+        elapsed_ms=1,
+        transcript_chars=2,
+    )
+    repo.upsert_source_index_links(
+        platform="bilibili",
+        mappings={
+            "merged_note_1": {
+                "canonical_note_id": "merged_note_1",
+                "merge_id": "merge-1",
+                "state": "MERGED_PENDING_CONFIRM",
+            },
+            "b2": {
+                "canonical_note_id": "b2",
+                "merge_id": "",
+                "state": "ACTIVE",
+            },
+        },
+    )
+    _update_saved_at(
+        db_path=db_path,
+        table="saved_bilibili_notes",
+        note_id="merged_note_1",
+        saved_at="2026-03-10 00:00:00",
+    )
+    _update_saved_at(
+        db_path=db_path,
+        table="saved_bilibili_notes",
+        note_id="b2",
+        saved_at="2026-03-11 00:00:00",
+    )
+
+    total_merged, merged_items = repo.search_notes(
+        source="bilibili",
+        merged=True,
+        saved_from="2026-03-10 00:00:00",
+        saved_to="2026-03-10 23:59:59",
+        sort_by="title",
+        sort_order="asc",
+        limit=10,
+        offset=0,
+    )
+    assert total_merged == 1
+    assert merged_items[0]["note_id"] == "merged_note_1"
+    assert merged_items[0]["merge_state"] == "MERGED_PENDING_CONFIRM"
+    assert merged_items[0]["is_merged"] == 1
+
+    total_unmerged, unmerged_items = repo.search_notes(
+        source="bilibili",
+        merged=False,
+        sort_by="saved_at",
+        sort_order="desc",
+        limit=10,
+        offset=0,
+    )
+    assert total_unmerged == 1
+    assert unmerged_items[0]["note_id"] == "b2"
+
+
+def test_search_notes_supports_saved_from_and_merged_filter(tmp_path: Path) -> None:
+    db_path = tmp_path / "notes.db"
+    repo = NoteLibraryRepository(str(db_path))
+    repo.save_bilibili_note(
+        note_id="merged_note_1",
+        title="合并后的宏观复盘",
+        video_url="https://www.bilibili.com/video/BV1xx411c7mF",
+        summary_markdown="# 合并总结",
+        elapsed_ms=1,
+        transcript_chars=2,
+    )
+    repo.save_bilibili_note(
+        note_id="b1",
+        title="普通笔记",
+        video_url="https://www.bilibili.com/video/BV1xx411c7mD",
+        summary_markdown="# 普通总结",
+        elapsed_ms=1,
+        transcript_chars=2,
+    )
+    repo.upsert_source_index_links(
+        platform="bilibili",
+        mappings={
+            "merged_note_1": {
+                "canonical_note_id": "merged_note_1",
+                "merge_id": "merge-1",
+                "state": "ACTIVE",
+            },
+            "b1": {
+                "canonical_note_id": "b1",
+                "merge_id": "",
+                "state": "ACTIVE",
+            },
+        },
+    )
+    _update_saved_at(
+        db_path=db_path,
+        table="saved_bilibili_notes",
+        note_id="merged_note_1",
+        saved_at="2026-03-10 00:00:00",
+    )
+    _update_saved_at(
+        db_path=db_path,
+        table="saved_bilibili_notes",
+        note_id="b1",
+        saved_at="2026-03-01 00:00:00",
+    )
+
+    total_merged, merged_items = repo.search_notes(
+        saved_from="2026-03-05 00:00:00",
+        merged=True,
+        limit=10,
+        offset=0,
+    )
+    assert total_merged == 1
+    assert merged_items[0]["note_id"] == "merged_note_1"
+    assert merged_items[0]["is_merged"] == 1

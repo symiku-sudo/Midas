@@ -17,10 +17,14 @@ import com.midas.client.data.model.BilibiliSummaryData
 import com.midas.client.data.model.BilibiliSummaryRequest
 import com.midas.client.data.model.EditableConfigData
 import com.midas.client.data.model.EditableConfigUpdateRequest
+import com.midas.client.data.model.FinanceFocusCardActionData
+import com.midas.client.data.model.FinanceFocusCardActionRequest
+import com.midas.client.data.model.FinanceFocusCardHistoryData
 import com.midas.client.data.model.FinanceSignalsData
 import com.midas.client.data.model.FinanceWatchlistNtfyData
 import com.midas.client.data.model.FinanceWatchlistNtfyUpdateRequest
 import com.midas.client.data.model.HealthData
+import com.midas.client.data.model.HomeOverviewData
 import com.midas.client.data.model.NotesMergeCommitData
 import com.midas.client.data.model.NotesMergeCommitRequest
 import com.midas.client.data.model.NotesMergeFinalizeData
@@ -32,7 +36,10 @@ import com.midas.client.data.model.NotesMergeRollbackRequest
 import com.midas.client.data.model.NotesMergeSuggestData
 import com.midas.client.data.model.NotesMergeSuggestRequest
 import com.midas.client.data.model.NotesDeleteData
+import com.midas.client.data.model.NotesReviewTopicsData
+import com.midas.client.data.model.NotesTimelineReviewData
 import com.midas.client.data.model.NotesSaveBatchData
+import com.midas.client.data.model.RelatedNotesData
 import com.midas.client.data.model.UnifiedNotesData
 import com.midas.client.data.model.XiaohongshuAuthUpdateData
 import com.midas.client.data.model.XiaohongshuAuthUpdateRequest
@@ -73,12 +80,36 @@ class MidasRepository {
         return request(baseUrl) { health() }
     }
 
+    suspend fun getHomeOverview(baseUrl: String): AppResult<HomeOverviewData> {
+        return request(baseUrl) { getHomeOverview() }
+    }
+
     suspend fun getFinanceSignals(baseUrl: String): AppResult<FinanceSignalsData> {
         return request(baseUrl) { getFinanceSignals() }
     }
 
     suspend fun triggerFinanceNewsDigest(baseUrl: String): AppResult<FinanceSignalsData> {
         return request(baseUrl) { triggerFinanceNewsDigest() }
+    }
+
+    suspend fun updateFinanceFocusCardStatus(
+        baseUrl: String,
+        cardId: String,
+        status: String,
+    ): AppResult<FinanceFocusCardActionData> {
+        return request(baseUrl) {
+            updateFinanceFocusCardStatus(
+                cardId = cardId,
+                request = FinanceFocusCardActionRequest(status = status),
+            )
+        }
+    }
+
+    suspend fun getFinanceFocusCardHistory(
+        baseUrl: String,
+        limit: Int = 50,
+    ): AppResult<FinanceFocusCardHistoryData> {
+        return request(baseUrl) { getFinanceFocusCardHistory(limit) }
     }
 
     suspend fun fillAssetStatsFromImages(
@@ -227,10 +258,46 @@ class MidasRepository {
         baseUrl: String,
         keyword: String = "",
         source: String = "",
+        savedFrom: String = "",
+        savedTo: String = "",
+        merged: Boolean? = null,
+        sortBy: String = "saved_at",
+        sortOrder: String = "desc",
         limit: Int = 50,
         offset: Int = 0,
     ): AppResult<UnifiedNotesData> {
-        return request(baseUrl) { searchNotes(keyword, source, limit, offset) }
+        return request(baseUrl) {
+            searchNotes(keyword, source, savedFrom, savedTo, merged, sortBy, sortOrder, limit, offset)
+        }
+    }
+
+    suspend fun reviewNotesTopics(
+        baseUrl: String,
+        days: Int = 30,
+        limit: Int = 8,
+        perTopicLimit: Int = 5,
+    ): AppResult<NotesReviewTopicsData> {
+        return request(baseUrl) { reviewNotesTopics(days, limit, perTopicLimit) }
+    }
+
+    suspend fun reviewNotesTimeline(
+        baseUrl: String,
+        days: Int = 30,
+        bucket: String = "day",
+        limit: Int = 10,
+        perBucketLimit: Int = 5,
+    ): AppResult<NotesTimelineReviewData> {
+        return request(baseUrl) { reviewNotesTimeline(days, bucket, limit, perBucketLimit) }
+    }
+
+    suspend fun getRelatedNotes(
+        baseUrl: String,
+        source: String,
+        noteId: String,
+        limit: Int = 8,
+        minScore: Double = 0.2,
+    ): AppResult<RelatedNotesData> {
+        return request(baseUrl) { getRelatedNotes(source, noteId, limit, minScore) }
     }
 
     suspend fun deleteBilibiliNote(baseUrl: String, noteId: String): AppResult<NotesDeleteData> {

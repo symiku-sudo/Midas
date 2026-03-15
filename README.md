@@ -7,10 +7,15 @@
 - 服务端（FastAPI）：已完成
   - `GET /health`
   - `GET /api/finance/signals`
+  - `GET /api/home/overview`
+  - `GET /api/finance/signals/history`
+  - `POST /api/finance/signals/cards/{card_id}/status`
   - `POST /api/jobs/bilibili-summarize|xiaohongshu/summarize-url`
   - `GET /api/jobs|/api/jobs/{job_id}`
   - `POST /api/jobs/{job_id}/retry`
   - `GET /api/notes/search`
+  - `GET /api/notes/review/topics|timeline`
+  - `GET /api/notes/{source}/{note_id}/related`
   - `POST /api/bilibili/summarize`（`video_url` 支持完整链接或直接传 `BV` 号）
   - `POST /api/xiaohongshu/summarize-url`
   - `POST /api/xiaohongshu/auth/update`
@@ -18,11 +23,12 @@
 - Android 客户端（Compose）：已完成最小可用版本
   - 服务端地址配置与持久化
   - 连接测试
-  - 单层导航（`B站 / 小红书 / 笔记 / 资产 / 设置`）
+  - 首页总览 + 单层导航（`首页 / B站 / 小红书 / 笔记 / 资产 / 设置`）
   - B 站总结请求、任务历史与 Markdown 展示
   - 小红书单链接总结、任务历史与结果保存
-  - 资产系统面板（市场信号 + 资产总览 + 今日关注建议）
+  - 资产系统面板（今日建议 + 关键变化 + 资产总览 + 建议历史）
   - 资产截图识别回填（最多 5 张，端侧压缩后上传，识别后手动保存）
+  - 笔记库筛选 / 主题回顾 / 时间回顾 / 相似笔记回查
   - 笔记库智能合并（候选、预览、回退、确认破坏性收尾）
 
 ## 目录
@@ -110,6 +116,14 @@ server/.venv/bin/python server/tools/prune_unsaved_synced_notes.py --show-ids
 tools/release.sh
 ```
 
+Release 流程现在会额外执行：
+- `server/tools/selfcheck.py`
+- `server/tools/smoke_test.py --profile web_guard`
+- APK 候选产物列表、绝对路径、修改时间、SHA256 输出
+
+固定 smoke checklist 见：
+- `tools/SMOKE_CHECKLIST.md`
+
 可选参数：
 - `--release`：导出 release APK（默认 debug）
 - `--output <dir>`：指定导出目录
@@ -151,10 +165,14 @@ tools/ntfy_notify.sh --config .tmp/ntfy/notify.env
 - 当前小红书能力为“按 URL 总结单篇”。
 - 服务端异步任务中心支持任务历史、结果回看和失败/中断任务重试；历史保存在 `server/.tmp/async_jobs.json`。
 - 服务端支持可选访问令牌保护：当 `server/config.yaml` 里配置 `auth.access_token` 后，客户端需带 `Authorization: Bearer <token>`。
-- Android 端的 B 站/小红书面板现在都内置“最近任务”卡片，可刷新任务列表、查看成功结果，并对失败/中断任务直接重试。
+- Android 端启动后现在先进入“首页总览”，把最近任务、最近新增笔记、今日财经建议和高频入口收在一个入口页，不用先切 tab 才知道当前该看什么。
+- Android 端的 B 站/小红书面板现在都统一为“输入链接 -> 提交后台任务 -> 查看结果 -> 保存笔记 -> 回看最近任务”的交互骨架，可刷新任务列表、查看成功结果，并对失败/中断任务直接重试。
+- 笔记页现在支持来源 / 时间 / 已合并状态 / 排序筛选，并补了“主题回顾”“时间回顾”“相似笔记回查”三类回看入口。
 - Android 财经面板现在会按动作类型分组显示 `focus_cards`，并支持端侧“已处理/恢复全部”闭环；Top5 新闻默认先展示 3 条，减少首屏信息量。
+- 财经建议状态已改成服务端闭环：支持 `已看过 / 今日忽略 / 保持关注 / 取消忽略`，同时保留建议历史，回看时能看到触发原因和最近处理时间。
 - Finance Signals 现在会把 Top5 新闻和 watchlist 标的做一层关联：新闻卡会显示“影响哪些关注项”，Watchlist 行会显示“最近关联新闻数”和命中关键词。
 - Finance Signals 还会返回第一版“今日关注建议”，把阈值触发和影响到 watchlist 的新闻整理成优先级更高的关注卡片，并附上建议动作。
+- Finance Signals 现在还会把 watchlist / 新闻和当前资产暴露关联起来，返回 `related_asset_categories/exposure_amount_wan/exposure_relevance/portfolio_impact_summary`，让建议更像“影响我什么”而不是只影响哪些标的。
 - 这些关注建议现在也带结构化 `action_type/reasons`，后面继续做筛选、排序和自动化动作时不用再从自然语言里反推。
 - Android 端左上角可切换“笔记系统 / 资产系统”；资产系统分为两屏：`Watchlist+新闻` 与 `资产统计`。
 - `Watchlist+新闻` 面板会在资产系统打开时自动轮询刷新；若新闻拉取超过阈值未更新，会显示“数据可能陈旧”提示。

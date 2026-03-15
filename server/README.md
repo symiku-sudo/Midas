@@ -3,7 +3,10 @@
 ## What is implemented
 
 - `GET /health`
+- `GET /api/home/overview`
 - `GET /api/finance/signals`
+- `GET /api/finance/signals/history`
+- `POST /api/finance/signals/cards/{card_id}/status`
 - `POST /api/assets/fill-from-images`
 - `GET /api/assets/current`
 - `PUT /api/assets/current`
@@ -19,6 +22,9 @@
 - `POST /api/notes/bilibili/save`
 - `GET /api/notes/bilibili`
 - `GET /api/notes/search`
+- `GET /api/notes/review/topics`
+- `GET /api/notes/review/timeline`
+- `GET /api/notes/{source}/{note_id}/related`
 - `DELETE /api/notes/bilibili/{note_id}` / `DELETE /api/notes/bilibili`
 - `POST /api/xiaohongshu/summarize-url`
 - `POST /api/notes/xiaohongshu/save-batch`
@@ -147,8 +153,9 @@ tools/finance_signals.sh stop
 - API 服务端会在读取状态文件时，把 Top5 新闻与 watchlist 标的做一层关联归并；默认别名配置写在 `finance_signals/financial_config.yaml` 的 `market_data.instruments[].aliases`。
 - 客户端可直接显示“某条新闻可能影响哪些关注标的”以及“某个标的最近关联了几条新闻”。
 - API 服务端还会返回第一版 `focus_cards`，把“阈值触发”和“影响到 watchlist 的新闻”整理成今日关注建议，并附上 `action_label/action_hint` 说明下一步建议动作。
-- `focus_cards` 现在还带结构化 `action_type/reasons`，便于后续按“立即处理 / 继续跟进 / 持续观察”做筛选或排序。
-- Android 客户端当前会按 `action_type` 分组展示这些建议，并支持在端侧做“已处理/恢复全部”闭环，不影响服务端原始信号。
+- `focus_cards` 现在还带结构化 `action_type/reasons`，并新增 `card_id/status/status_updated_at/handled_at`，用于服务端持久化“已看过 / 今日忽略 / 保持关注 / 取消忽略”。
+- Finance Signals 历史可通过 `GET /api/finance/signals/history` 回看；客户端可通过 `POST /api/finance/signals/cards/{card_id}/status` 直接更新状态。
+- watchlist / top_news / focus_cards 现在都会补充 `related_asset_categories/exposure_amount_wan/exposure_relevance/portfolio_impact_summary`，把新闻和 watchlist 信号与当前资产暴露关联起来。
 - 可通过 `news.filters.source_allowlist/source_blocklist/domain_allowlist/domain_blocklist` 做来源白名单/黑名单控制。
 - 可通过 `news.digest.max_items/max_summary_chars_per_item/prompt_char_limit/reuse_within_seconds` 控制摘要样本数、单条摘要截断长度、单次 prompt 文本长度上限，以及“3 小时内复用上次摘要”的窗口。
 - 可通过 `market_data.alerting.*` 配置 Watchlist 行情阈值告警；其状态会写入 `market_alert_debug`。
@@ -156,6 +163,13 @@ tools/finance_signals.sh stop
 - Watchlist ntfy 开关可通过 `PUT /api/finance/signals/watchlist-ntfy` 动态切换，worker 会在下一个轮询周期自动生效。
 - 新闻摘要可通过 `POST /api/finance/signals/digest` 触发；Worker 会持续保留最近一次摘要结果，不会在后续轮询中覆盖为空。
 - Worker 会额外写出 `news_last_fetch_time`、`news_stale`（由 API 服务端计算）、`news_debug.entries_scanned/matched_entries_count/top_news_count/top_unmatched_titles/digest_item_count/digest_prompt_chars/digest_status/digest_last_generated_at`，便于定位召回漏检并观察摘要 prompt 长度。
+
+## Notes Review
+
+- `GET /api/notes/search` 现在支持 `saved_from/saved_to/merged/sort_by/sort_order`，返回项会额外包含 `merge_state/merge_id/canonical_note_id/is_merged/topics`。
+- `GET /api/notes/review/topics` 用于“最近一周 / 最近一月”主题回顾。
+- `GET /api/notes/review/timeline` 用于按时间桶回看新增笔记。
+- `GET /api/notes/{source}/{note_id}/related` 用于独立回查相似/相关笔记，不强制进入 merge。
 
 ## Periodic DB backup
 

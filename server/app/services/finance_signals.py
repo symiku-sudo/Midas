@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import re
 import tempfile
@@ -11,24 +12,48 @@ from typing import Any
 
 import yaml
 
+from app.core.config import Settings
 from app.core.errors import AppError, ErrorCode
 from app.models.schemas import (
+    FinanceFocusCardActionData,
     FinanceFocusCard,
+    FinanceFocusCardHistoryData,
+    FinanceFocusCardHistoryItem,
     FinanceMarketAlertDebugData,
     FinanceNewsItem,
     FinanceNewsDebugData,
     FinanceSignalsData,
     FinanceWatchlistItem,
 )
+from app.repositories.note_repo import NoteLibraryRepository
+from app.services.asset_categories import ASSET_CATEGORY_LABEL_MAP
 from finance_signals import main as worker_main
 
 _CONFIG_WRITE_LOCK = threading.RLock()
+_DEFAULT_CARD_STATUS = "ACTIVE"
+_ALLOWED_CARD_STATUSES = {
+    "ACTIVE",
+    "SEEN",
+    "IGNORED_TODAY",
+    "WATCHING",
+}
 
 
 class FinanceSignalsService:
-    def __init__(self) -> None:
+    def __init__(self, settings: Settings | None = None) -> None:
+        self._settings = settings
         self._server_root = Path(__file__).resolve().parents[2]
         self._config_path = self._server_root / "finance_signals" / "financial_config.yaml"
+        runtime_temp_dir = ".tmp"
+        db_path = ""
+        if settings is not None:
+            runtime_temp_dir = settings.runtime.temp_dir
+            db_path = settings.xiaohongshu.db_path
+        self._state_path = self._resolve_runtime_path(
+            runtime_temp_dir,
+            default_name="finance_focus_cards_state.json",
+        )
+        self._notes_repository = NoteLibraryRepository(db_path) if db_path else None
 
     def get_dashboard_state(self) -> FinanceSignalsData:
         status_path = self._resolve_status_path()
@@ -44,6 +69,7 @@ class FinanceSignalsService:
                 ai_insight_text="财经信号尚未初始化，请先启动 finance_signals 任务。",
                 news_debug=FinanceNewsDebugData(),
                 market_alert_debug=FinanceMarketAlertDebugData(),
+                history_count=self.get_focus_card_history(limit=200).total,
             )
 
         try:
@@ -63,6 +89,8 @@ class FinanceSignalsService:
                 details={"path": str(status_path), "type": type(payload).__name__},
             )
 
+        current_asset_amounts = self._load_asset_current_amounts()
+        instrument_asset_categories = self._load_instrument_asset_categories()
         watchlist_raw = payload.get("watchlist_preview") or []
         watchlist_seed: list[dict[str, Any]] = []
         instrument_aliases = self._load_instrument_aliases()
@@ -93,6 +121,7 @@ class FinanceSignalsService:
                         "alert_hint": alert_hints.get(symbol, ""),
                         "alert_active": bool(item.get("alert_active", False)),
                         "aliases": instrument_aliases.get(symbol, []),
+                        "asset_categories": instrument_asset_categories.get(symbol, []),
                     }
                 )
 
@@ -119,6 +148,7 @@ class FinanceSignalsService:
         watchlist, top_news = self._build_watchlist_news_links(
             watchlist_seed=watchlist_seed,
             top_news_seed=top_news_seed,
+            current_asset_amounts=current_asset_amounts,
         )
 
         ai_insight_text = str(payload.get("ai_insight_text", "")).strip()
@@ -168,23 +198,35 @@ class FinanceSignalsService:
                 ).strip(),
             )
 
+        update_time = str(payload.get("update_time", "")).strip()
+        focus_cards = self._build_focus_cards(
+            watchlist=watchlist,
+            top_news=top_news,
+            market_alert_debug=market_alert_debug,
+            current_asset_amounts=current_asset_amounts,
+        )
+        state = self._load_card_state()
+        history_count = self._sync_card_state(
+            cards=focus_cards,
+            state=state,
+            seen_at=update_time or datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        focus_cards = self._apply_card_state(cards=focus_cards, state=state)
+
         return FinanceSignalsData(
-            update_time=str(payload.get("update_time", "")).strip(),
+            update_time=update_time,
             news_last_fetch_time=news_last_fetch_time,
             news_stale=self._compute_news_stale(news_last_fetch_time),
             watchlist_preview=watchlist,
             top_news=top_news,
-            focus_cards=self._build_focus_cards(
-                watchlist=watchlist,
-                top_news=top_news,
-                market_alert_debug=market_alert_debug,
-            ),
+            focus_cards=focus_cards,
             watchlist_ntfy_enabled=bool(
                 payload.get("watchlist_ntfy_enabled", self.get_watchlist_ntfy_enabled())
             ),
             ai_insight_text=ai_insight_text,
             news_debug=news_debug,
             market_alert_debug=market_alert_debug,
+            history_count=history_count,
         )
 
     async def trigger_news_digest(self) -> FinanceSignalsData:
@@ -253,6 +295,104 @@ class FinanceSignalsService:
             ensure_ascii=ensure_ascii,
         )
         return self.get_dashboard_state()
+
+    def update_focus_card_status(
+        self,
+        *,
+        card_id: str,
+        status: str,
+    ) -> FinanceFocusCardActionData:
+        normalized_card_id = card_id.strip()
+        normalized_status = status.strip().upper()
+        if not normalized_card_id:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message="card_id 不能为空。",
+                status_code=400,
+            )
+        if normalized_status not in _ALLOWED_CARD_STATUSES:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message=f"不支持的 focus card status: {status}",
+                status_code=400,
+            )
+        state = self._load_card_state()
+        cards = state.get("cards")
+        entry = cards.get(normalized_card_id) if isinstance(cards, dict) else None
+        if not isinstance(entry, dict):
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message=f"未找到 card_id={normalized_card_id} 对应的建议卡。",
+                status_code=404,
+            )
+        now_text = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        handled_at = now_text if normalized_status != _DEFAULT_CARD_STATUS else ""
+        entry["status"] = normalized_status
+        entry["status_updated_at"] = now_text
+        entry["handled_at"] = handled_at
+        cards[normalized_card_id] = entry
+        self._write_json(self._state_path, state)
+        return FinanceFocusCardActionData(
+            card_id=normalized_card_id,
+            status=normalized_status,
+            status_updated_at=now_text,
+            handled_at=handled_at,
+        )
+
+    def get_focus_card_history(self, *, limit: int = 50) -> FinanceFocusCardHistoryData:
+        state = self._load_card_state()
+        cards = state.get("cards")
+        if not isinstance(cards, dict):
+            return FinanceFocusCardHistoryData(total=0, items=[])
+        items: list[FinanceFocusCardHistoryItem] = []
+        for card_id, raw in cards.items():
+            if not isinstance(raw, dict):
+                continue
+            snapshot = raw.get("snapshot")
+            if not isinstance(snapshot, dict):
+                continue
+            items.append(
+                FinanceFocusCardHistoryItem(
+                    card_id=str(card_id),
+                    title=str(snapshot.get("title", "")).strip(),
+                    summary=str(snapshot.get("summary", "")).strip(),
+                    priority=str(snapshot.get("priority", "MEDIUM")).strip() or "MEDIUM",
+                    kind=str(snapshot.get("kind", "NEWS")).strip() or "NEWS",
+                    action_type=str(snapshot.get("action_type", "MONITOR")).strip() or "MONITOR",
+                    action_label=str(snapshot.get("action_label", "")).strip(),
+                    reasons=self._safe_str_list(snapshot.get("reasons")),
+                    related_symbols=self._safe_str_list(snapshot.get("related_symbols")),
+                    related_watchlist_names=self._safe_str_list(
+                        snapshot.get("related_watchlist_names")
+                    ),
+                    related_asset_categories=self._safe_str_list(
+                        snapshot.get("related_asset_categories")
+                    ),
+                    exposure_amount_wan=self._safe_float(snapshot.get("exposure_amount_wan")),
+                    exposure_relevance=str(
+                        snapshot.get("exposure_relevance", "LOW")
+                    ).strip()
+                    or "LOW",
+                    portfolio_impact_summary=str(
+                        snapshot.get("portfolio_impact_summary", "")
+                    ).strip(),
+                    status=str(raw.get("status", _DEFAULT_CARD_STATUS)).strip()
+                    or _DEFAULT_CARD_STATUS,
+                    first_seen_at=str(raw.get("first_seen_at", "")).strip(),
+                    last_seen_at=str(raw.get("last_seen_at", "")).strip(),
+                    status_updated_at=str(raw.get("status_updated_at", "")).strip(),
+                    handled_at=str(raw.get("handled_at", "")).strip(),
+                )
+            )
+        items.sort(
+            key=lambda item: (
+                item.last_seen_at,
+                item.status_updated_at,
+                item.card_id,
+            ),
+            reverse=True,
+        )
+        return FinanceFocusCardHistoryData(total=len(items), items=items[:limit])
 
     def get_watchlist_ntfy_enabled(self) -> bool:
         cfg = self._load_config()
@@ -414,11 +554,213 @@ class FinanceSignalsService:
                 items.append(text)
         return items
 
+    def _safe_float(self, value: Any) -> float:
+        try:
+            return round(float(value), 4)
+        except (TypeError, ValueError):
+            return 0.0
+
+    def _resolve_runtime_path(self, raw_path: str, *, default_name: str) -> Path:
+        candidate = str(raw_path).strip() or default_name
+        path = Path(candidate)
+        if path.suffix.lower() != ".json":
+            path = path / default_name
+        if path.is_absolute():
+            return path
+        return (self._server_root / path).resolve()
+
+    def _load_asset_current_amounts(self) -> dict[str, float]:
+        if self._notes_repository is None:
+            return {}
+        current = self._notes_repository.get_asset_current()
+        if not isinstance(current, dict):
+            return {}
+        raw_amounts = current.get("amounts")
+        if not isinstance(raw_amounts, dict):
+            return {}
+        normalized: dict[str, float] = {}
+        for key, value in raw_amounts.items():
+            category = str(key).strip()
+            if category not in ASSET_CATEGORY_LABEL_MAP:
+                continue
+            normalized[category] = self._safe_float(value)
+        return normalized
+
+    def _load_instrument_asset_categories(self) -> dict[str, list[str]]:
+        cfg = self._load_config()
+        market_data = cfg.get("market_data")
+        if not isinstance(market_data, dict):
+            return {}
+        instruments = market_data.get("instruments")
+        if not isinstance(instruments, list):
+            return {}
+        categories_by_symbol: dict[str, list[str]] = {}
+        for item in instruments:
+            if not isinstance(item, dict):
+                continue
+            symbol = str(item.get("symbol", "")).strip()
+            if not symbol:
+                continue
+            categories = [
+                category
+                for category in self._safe_str_list(item.get("asset_categories"))
+                if category in ASSET_CATEGORY_LABEL_MAP
+            ]
+            categories_by_symbol[symbol] = categories
+        return categories_by_symbol
+
+    def _exposure_for_categories(
+        self,
+        *,
+        categories: list[str],
+        current_asset_amounts: dict[str, float],
+    ) -> tuple[list[str], float, str, str]:
+        unique_categories = []
+        seen: set[str] = set()
+        for category in categories:
+            normalized = str(category).strip()
+            if normalized not in ASSET_CATEGORY_LABEL_MAP or normalized in seen:
+                continue
+            seen.add(normalized)
+            unique_categories.append(normalized)
+        exposure_amount = round(
+            sum(current_asset_amounts.get(category, 0.0) for category in unique_categories),
+            4,
+        )
+        total_amount = round(sum(current_asset_amounts.values()), 4)
+        ratio = (exposure_amount / total_amount) if total_amount > 0 else 0.0
+        if exposure_amount <= 0:
+            relevance = "LOW"
+        elif ratio >= 0.35 or exposure_amount >= 10:
+            relevance = "HIGH"
+        elif ratio >= 0.12 or exposure_amount >= 3:
+            relevance = "MEDIUM"
+        else:
+            relevance = "LOW"
+        if unique_categories and exposure_amount > 0:
+            labels = [
+                f"{ASSET_CATEGORY_LABEL_MAP[category]} {current_asset_amounts.get(category, 0.0):.1f}万"
+                for category in unique_categories
+                if current_asset_amounts.get(category, 0.0) > 0
+            ]
+            summary = f"关联资产暴露：{' / '.join(labels[:3])}" if labels else ""
+        else:
+            summary = ""
+        return unique_categories, exposure_amount, relevance, summary
+
+    def _load_card_state(self) -> dict[str, Any]:
+        if not self._state_path.exists():
+            return {"cards": {}}
+        try:
+            payload = json.loads(self._state_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {"cards": {}}
+        if not isinstance(payload, dict):
+            return {"cards": {}}
+        cards = payload.get("cards")
+        if not isinstance(cards, dict):
+            payload["cards"] = {}
+        return payload
+
+    def _apply_card_state(
+        self,
+        *,
+        cards: list[FinanceFocusCard],
+        state: dict[str, Any],
+    ) -> list[FinanceFocusCard]:
+        cards_state = state.get("cards")
+        if not isinstance(cards_state, dict):
+            return cards
+        today = datetime.now().strftime("%Y-%m-%d")
+        output: list[FinanceFocusCard] = []
+        changed = False
+        for card in cards:
+            entry = cards_state.get(card.card_id)
+            status = _DEFAULT_CARD_STATUS
+            status_updated_at = ""
+            handled_at = ""
+            if isinstance(entry, dict):
+                status = str(entry.get("status", _DEFAULT_CARD_STATUS)).strip() or _DEFAULT_CARD_STATUS
+                status_updated_at = str(entry.get("status_updated_at", "")).strip()
+                handled_at = str(entry.get("handled_at", "")).strip()
+                if status == "IGNORED_TODAY" and status_updated_at[:10] != today:
+                    status = _DEFAULT_CARD_STATUS
+                    handled_at = ""
+                    entry["status"] = status
+                    entry["handled_at"] = handled_at
+                    entry["status_updated_at"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                    changed = True
+            output.append(
+                card.model_copy(
+                    update={
+                        "status": status,
+                        "status_updated_at": status_updated_at,
+                        "handled_at": handled_at,
+                    }
+                )
+            )
+        if changed:
+            self._write_json(self._state_path, state)
+        return output
+
+    def _sync_card_state(
+        self,
+        *,
+        cards: list[FinanceFocusCard],
+        state: dict[str, Any],
+        seen_at: str,
+    ) -> int:
+        cards_state = state.get("cards")
+        if not isinstance(cards_state, dict):
+            cards_state = {}
+            state["cards"] = cards_state
+        for card in cards:
+            existing = cards_state.get(card.card_id)
+            if not isinstance(existing, dict):
+                existing = {
+                    "status": _DEFAULT_CARD_STATUS,
+                    "status_updated_at": "",
+                    "handled_at": "",
+                    "first_seen_at": seen_at,
+                }
+            existing["last_seen_at"] = seen_at
+            existing.setdefault("first_seen_at", seen_at)
+            existing["snapshot"] = {
+                "title": card.title,
+                "summary": card.summary,
+                "priority": card.priority,
+                "kind": card.kind,
+                "action_type": card.action_type,
+                "action_label": card.action_label,
+                "reasons": card.reasons,
+                "related_symbols": card.related_symbols,
+                "related_watchlist_names": card.related_watchlist_names,
+                "related_asset_categories": card.related_asset_categories,
+                "exposure_amount_wan": card.exposure_amount_wan,
+                "exposure_relevance": card.exposure_relevance,
+                "portfolio_impact_summary": card.portfolio_impact_summary,
+            }
+            cards_state[card.card_id] = existing
+        self._write_json(self._state_path, state)
+        return len(cards_state)
+
+    def _card_id_for_card(self, card: FinanceFocusCard) -> str:
+        raw = "|".join(
+            [
+                card.kind,
+                card.title,
+                ",".join(sorted(card.related_symbols)),
+                ",".join(sorted(card.related_watchlist_names)),
+            ]
+        )
+        return hashlib.md5(raw.encode("utf-8")).hexdigest()  # noqa: S324
+
     def _build_watchlist_news_links(
         self,
         *,
         watchlist_seed: list[dict[str, Any]],
         top_news_seed: list[dict[str, Any]],
+        current_asset_amounts: dict[str, float],
     ) -> tuple[list[FinanceWatchlistItem], list[FinanceNewsItem]]:
         watchlist_links: dict[str, dict[str, Any]] = {}
         for item in watchlist_seed:
@@ -432,6 +774,7 @@ class FinanceSignalsService:
                     symbol=symbol,
                     aliases=self._safe_str_list(item.get("aliases")),
                 ),
+                "asset_categories": self._safe_str_list(item.get("asset_categories")),
                 "related_titles": [],
                 "related_keywords": set(),
             }
@@ -457,6 +800,20 @@ class FinanceSignalsService:
                 for keyword in matched_keywords:
                     if self._keyword_matches_aliases(keyword, aliases):
                         link_data["related_keywords"].add(keyword)
+            related_asset_categories: list[str] = []
+            for symbol in related_symbols:
+                link_data = watchlist_links.get(symbol)
+                if link_data is None:
+                    continue
+                related_asset_categories.extend(
+                    self._safe_str_list(link_data.get("asset_categories"))
+                )
+            asset_categories, exposure_amount_wan, exposure_relevance, _ = (
+                self._exposure_for_categories(
+                    categories=related_asset_categories,
+                    current_asset_amounts=current_asset_amounts,
+                )
+            )
             top_news.append(
                 FinanceNewsItem(
                     title=title,
@@ -467,12 +824,21 @@ class FinanceSignalsService:
                     matched_keywords=matched_keywords,
                     related_symbols=related_symbols,
                     related_watchlist_names=related_names,
+                    related_asset_categories=asset_categories,
+                    exposure_amount_wan=exposure_amount_wan,
+                    exposure_relevance=exposure_relevance,
                 )
             )
 
         watchlist: list[FinanceWatchlistItem] = []
         for symbol, link_data in watchlist_links.items():
             item = dict(link_data["item"])
+            asset_categories, exposure_amount_wan, exposure_relevance, _ = (
+                self._exposure_for_categories(
+                    categories=self._safe_str_list(link_data.get("asset_categories")),
+                    current_asset_amounts=current_asset_amounts,
+                )
+            )
             watchlist.append(
                 FinanceWatchlistItem(
                     name=str(item.get("name", "")).strip(),
@@ -483,6 +849,9 @@ class FinanceSignalsService:
                     alert_active=bool(item.get("alert_active", False)),
                     related_news_count=len(link_data["related_titles"]),
                     related_keywords=sorted(link_data["related_keywords"]),
+                    related_asset_categories=asset_categories,
+                    exposure_amount_wan=exposure_amount_wan,
+                    exposure_relevance=exposure_relevance,
                 )
             )
         return watchlist, top_news
@@ -493,6 +862,7 @@ class FinanceSignalsService:
         watchlist: list[FinanceWatchlistItem],
         top_news: list[FinanceNewsItem],
         market_alert_debug: FinanceMarketAlertDebugData,
+        current_asset_amounts: dict[str, float],
     ) -> list[FinanceFocusCard]:
         cards: list[FinanceFocusCard] = []
         seen: set[tuple[str, tuple[str, ...], str]] = set()
@@ -515,24 +885,36 @@ class FinanceSignalsService:
             if market_alert_debug.last_alert_time:
                 summary_parts.append(f"最近告警：{market_alert_debug.last_alert_time}")
                 reasons.append("recent_alert_sent")
+            related_asset_categories, exposure_amount_wan, exposure_relevance, portfolio_summary = (
+                self._exposure_for_categories(
+                    categories=item.related_asset_categories,
+                    current_asset_amounts=current_asset_amounts,
+                )
+            )
+            if portfolio_summary:
+                summary_parts.append(portfolio_summary)
+                reasons.append("portfolio_exposure")
             key = ("ALERT", tuple(related_symbols), title)
             if key in seen:
                 continue
             seen.add(key)
-            cards.append(
-                FinanceFocusCard(
-                    title=title,
-                    summary="；".join(summary_parts),
-                    priority="HIGH",
-                    kind="ALERT",
-                    action_type="REVIEW_NOW",
-                    action_label="立即复核",
-                    action_hint="先看价格异动和关联新闻，再决定是否提升观察频率。",
-                    reasons=reasons,
-                    related_symbols=related_symbols,
-                    related_watchlist_names=related_names,
-                )
+            card = FinanceFocusCard(
+                title=title,
+                summary="；".join(summary_parts),
+                priority="HIGH",
+                kind="ALERT",
+                action_type="REVIEW_NOW",
+                action_label="立即复核",
+                action_hint="先看价格异动和关联新闻，再决定是否提升观察频率。",
+                reasons=reasons,
+                related_symbols=related_symbols,
+                related_watchlist_names=related_names,
+                related_asset_categories=related_asset_categories,
+                exposure_amount_wan=exposure_amount_wan,
+                exposure_relevance=exposure_relevance,
+                portfolio_impact_summary=portfolio_summary,
             )
+            cards.append(card.model_copy(update={"card_id": self._card_id_for_card(card)}))
 
         for item in top_news:
             if not item.related_watchlist_names:
@@ -553,6 +935,15 @@ class FinanceSignalsService:
                 meta = " · ".join(value for value in [item.publisher, item.published] if value)
                 if meta:
                     summary_parts.append(meta)
+            related_asset_categories, exposure_amount_wan, exposure_relevance, portfolio_summary = (
+                self._exposure_for_categories(
+                    categories=item.related_asset_categories,
+                    current_asset_amounts=current_asset_amounts,
+                )
+            )
+            if portfolio_summary:
+                summary_parts.append(portfolio_summary)
+                reasons.append("portfolio_exposure")
             key = ("NEWS", tuple(related_symbols), item.title)
             if key in seen:
                 continue
@@ -567,20 +958,23 @@ class FinanceSignalsService:
                 reasons.append("linked_alert_active")
             if len(related_symbols) >= 2:
                 reasons.append("multi_asset_impact")
-            cards.append(
-                FinanceFocusCard(
-                    title=item.title,
-                    summary="；".join(summary_parts),
-                    priority="HIGH" if has_active_alert else "MEDIUM",
-                    kind="NEWS",
-                    action_type="FOLLOW_UP" if has_active_alert or len(related_symbols) >= 2 else "MONITOR",
-                    action_label=action_label,
-                    action_hint=action_hint,
-                    reasons=reasons,
-                    related_symbols=related_symbols,
-                    related_watchlist_names=related_names,
-                )
+            card = FinanceFocusCard(
+                title=item.title,
+                summary="；".join(summary_parts),
+                priority="HIGH" if has_active_alert else "MEDIUM",
+                kind="NEWS",
+                action_type="FOLLOW_UP" if has_active_alert or len(related_symbols) >= 2 else "MONITOR",
+                action_label=action_label,
+                action_hint=action_hint,
+                reasons=reasons,
+                related_symbols=related_symbols,
+                related_watchlist_names=related_names,
+                related_asset_categories=related_asset_categories,
+                exposure_amount_wan=exposure_amount_wan,
+                exposure_relevance=exposure_relevance,
+                portfolio_impact_summary=portfolio_summary,
             )
+            cards.append(card.model_copy(update={"card_id": self._card_id_for_card(card)}))
 
         cards.sort(
             key=lambda item: (
@@ -689,6 +1083,25 @@ class FinanceSignalsService:
         if not isinstance(cfg, dict):
             return {}
         return cfg
+
+    def _write_json(self, path: Path, payload: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temp_path = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                delete=False,
+            ) as fp:
+                json.dump(payload, fp, ensure_ascii=False, indent=2)
+                temp_path = Path(fp.name)
+            os.replace(str(temp_path), str(path))
+        finally:
+            if temp_path is not None and temp_path.exists():
+                temp_path.unlink(missing_ok=True)
 
     def _write_yaml(self, path: Path, payload: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)

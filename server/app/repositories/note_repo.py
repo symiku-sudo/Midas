@@ -377,11 +377,18 @@ class NoteLibraryRepository:
         *,
         keyword: str = "",
         source: str = "",
+        saved_from: str = "",
+        saved_to: str = "",
+        merged: bool | None = None,
+        sort_by: str = "saved_at",
+        sort_order: str = "desc",
         limit: int = 50,
         offset: int = 0,
     ) -> tuple[int, list[dict[str, Any]]]:
         normalized_keyword = keyword.strip()
         normalized_source = source.strip().lower()
+        normalized_saved_from = saved_from.strip()
+        normalized_saved_to = saved_to.strip()
         pattern = f"%{normalized_keyword.lower()}%"
         conditions_bilibili = []
         params_bilibili: list[Any] = []
@@ -393,19 +400,78 @@ class NoteLibraryRepository:
             conditions_xhs.append(clause)
             params_bilibili.append(pattern)
             params_xhs.append(pattern)
+        if normalized_saved_from:
+            clause = (
+                "strftime('%Y-%m-%d %H:%M:%S', datetime(saved_at, '+8 hours')) >= ?"
+            )
+            conditions_bilibili.append(clause)
+            conditions_xhs.append(clause)
+            params_bilibili.append(normalized_saved_from)
+            params_xhs.append(normalized_saved_from)
+        if normalized_saved_to:
+            clause = (
+                "strftime('%Y-%m-%d %H:%M:%S', datetime(saved_at, '+8 hours')) <= ?"
+            )
+            conditions_bilibili.append(clause)
+            conditions_xhs.append(clause)
+            params_bilibili.append(normalized_saved_to)
+            params_xhs.append(normalized_saved_to)
+        if merged is not None:
+            clause = (
+                "(COALESCE(idx.state, 'ACTIVE') != 'ACTIVE' OR notes.note_id LIKE 'merged_note_%')"
+            )
+            if not merged:
+                clause = f"NOT {clause}"
+            conditions_bilibili.append(clause)
+            conditions_xhs.append(clause)
         where_bilibili = f"WHERE {' AND '.join(conditions_bilibili)}" if conditions_bilibili else ""
         where_xhs = f"WHERE {' AND '.join(conditions_xhs)}" if conditions_xhs else ""
 
+        normalized_sort_by = sort_by.strip().lower()
+        if normalized_sort_by not in {"saved_at", "title", "source"}:
+            normalized_sort_by = "saved_at"
+        normalized_sort_order = sort_order.strip().lower()
+        if normalized_sort_order not in {"asc", "desc"}:
+            normalized_sort_order = "desc"
+        order_expr = {
+            "saved_at": "saved_at",
+            "title": "title COLLATE NOCASE",
+            "source": "source",
+        }[normalized_sort_by]
+        order_direction = "ASC" if normalized_sort_order == "asc" else "DESC"
+
         bilibili_sql = f"""
-            SELECT 'bilibili' AS source, note_id, title, video_url AS source_url, summary_markdown,
-                   strftime('%Y-%m-%d %H:%M:%S', datetime(saved_at, '+8 hours')) AS saved_at
-            FROM saved_bilibili_notes
+            SELECT
+                'bilibili' AS source,
+                notes.note_id,
+                notes.title,
+                notes.video_url AS source_url,
+                notes.summary_markdown,
+                strftime('%Y-%m-%d %H:%M:%S', datetime(notes.saved_at, '+8 hours')) AS saved_at,
+                COALESCE(idx.state, 'ACTIVE') AS merge_state,
+                COALESCE(idx.merge_id, '') AS merge_id,
+                COALESCE(idx.canonical_note_id, notes.note_id) AS canonical_note_id
+            FROM saved_bilibili_notes AS notes
+            LEFT JOIN note_source_index AS idx
+              ON idx.platform = 'bilibili'
+             AND idx.source_note_id = notes.note_id
             {where_bilibili}
         """
         xhs_sql = f"""
-            SELECT 'xiaohongshu' AS source, note_id, title, source_url, summary_markdown,
-                   strftime('%Y-%m-%d %H:%M:%S', datetime(saved_at, '+8 hours')) AS saved_at
-            FROM saved_xiaohongshu_notes
+            SELECT
+                'xiaohongshu' AS source,
+                notes.note_id,
+                notes.title,
+                notes.source_url,
+                notes.summary_markdown,
+                strftime('%Y-%m-%d %H:%M:%S', datetime(notes.saved_at, '+8 hours')) AS saved_at,
+                COALESCE(idx.state, 'ACTIVE') AS merge_state,
+                COALESCE(idx.merge_id, '') AS merge_id,
+                COALESCE(idx.canonical_note_id, notes.note_id) AS canonical_note_id
+            FROM saved_xiaohongshu_notes AS notes
+            LEFT JOIN note_source_index AS idx
+              ON idx.platform = 'xiaohongshu'
+             AND idx.source_note_id = notes.note_id
             {where_xhs}
         """
         if normalized_source == "bilibili":
@@ -425,15 +491,68 @@ class NoteLibraryRepository:
             ).fetchone()
             rows = conn.execute(
                 f"""
-                SELECT source, note_id, title, source_url, summary_markdown, saved_at
+                SELECT
+                    source,
+                    note_id,
+                    title,
+                    source_url,
+                    summary_markdown,
+                    saved_at,
+                    merge_state,
+                    merge_id,
+                    canonical_note_id,
+                    CASE
+                        WHEN merge_state != 'ACTIVE' OR note_id LIKE 'merged_note_%' THEN 1
+                        ELSE 0
+                    END AS is_merged
                 FROM ({union_sql}) AS unified_notes
-                ORDER BY saved_at DESC, note_id DESC
+                ORDER BY {order_expr} {order_direction}, note_id DESC
                 LIMIT ? OFFSET ?
                 """,
                 tuple(params) + (limit, offset),
             ).fetchall()
         total = int(dict(count_row or {}).get("total", 0) or 0)
         return total, [dict(row) for row in rows]
+
+    def list_unified_notes(
+        self,
+        *,
+        keyword: str = "",
+        source: str = "",
+        saved_from: str = "",
+        saved_to: str = "",
+        merged: bool | None = None,
+        sort_by: str = "saved_at",
+        sort_order: str = "desc",
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        _, items = self.search_notes(
+            keyword=keyword,
+            source=source,
+            saved_from=saved_from,
+            saved_to=saved_to,
+            merged=merged,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=limit,
+            offset=0,
+        )
+        return items
+
+    def get_unified_note(self, *, source: str, note_id: str) -> dict[str, Any] | None:
+        normalized_source = source.strip().lower()
+        normalized_note_id = note_id.strip()
+        if not normalized_source or not normalized_note_id:
+            return None
+        _, items = self.search_notes(
+            source=normalized_source,
+            limit=200,
+            offset=0,
+        )
+        for item in items:
+            if str(item.get("note_id", "")).strip() == normalized_note_id:
+                return item
+        return None
 
     def get_xiaohongshu_notes_by_ids(self, note_ids: list[str]) -> list[dict[str, Any]]:
         if not note_ids:

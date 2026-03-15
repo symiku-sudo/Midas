@@ -45,6 +45,29 @@ Failure:
 }
 ```
 
+## `GET /api/home/overview`
+
+用途：为 Android 首页总览聚合最近任务、最近新增笔记、今日财经建议和高频入口。
+
+Success `data`:
+
+```json
+{
+  "generated_at": "2026-03-15 18:00:00",
+  "recent_tasks": [],
+  "recent_notes": [],
+  "finance_focus_cards": [],
+  "quick_links": [
+    {
+      "target": "bilibili",
+      "title": "B站总结",
+      "subtitle": "贴链接，走后台任务"
+    }
+  ],
+  "asset_total_amount_wan": 12.3
+}
+```
+
 ## `GET /api/finance/signals`
 
 用途：读取 Finance Signals 面板所需状态（由 `server/finance_signals/main.py` 持续写入本地 JSON）。
@@ -82,6 +105,7 @@ Success `data`:
   ],
   "focus_cards": [
     {
+      "card_id": "a1b2c3",
       "title": "布伦特原油 已触发监控阈值",
       "summary": "阈值条件：>90；最近关联新闻 1 条",
       "priority": "HIGH",
@@ -91,7 +115,14 @@ Success `data`:
       "action_hint": "先看价格异动和关联新闻，再决定是否提升观察频率。",
       "reasons": ["threshold_triggered", "related_news_present"],
       "related_symbols": ["BZ=F"],
-      "related_watchlist_names": ["布伦特原油"]
+      "related_watchlist_names": ["布伦特原油"],
+      "related_asset_categories": ["stock", "equity_fund"],
+      "exposure_amount_wan": 10.2,
+      "exposure_relevance": "HIGH",
+      "portfolio_impact_summary": "关联资产暴露：股票 8.0万 / 股票基金 2.2万",
+      "status": "WATCHING",
+      "status_updated_at": "2026-03-15 18:20:00",
+      "handled_at": "2026-03-15 18:20:00"
     }
   ],
   "watchlist_ntfy_enabled": true,
@@ -116,7 +147,8 @@ Success `data`:
     "last_alert_signature": "布伦特原油（BZ=F）触发：价格突破 90",
     "last_alert_summary": "布伦特原油（BZ=F）触发：价格突破 90",
     "last_alert_status": "sent"
-  }
+  },
+  "history_count": 6
 }
 ```
 
@@ -126,6 +158,9 @@ Success `data`:
 - `news_last_fetch_time` / `news_stale` 用于客户端识别新闻抓取是否陈旧。
 - `top_news` 为“今日金融与时政新闻 Top5”结构化列表，已按时效、来源权重、主题关键词和跨源覆盖加权后去重。
 - `focus_cards` 为服务端按规则生成的“今日关注建议”，当前会优先覆盖“阈值已触发的标的”和“明确影响 watchlist 的新闻”两类信号。
+- `focus_cards[].card_id/status/status_updated_at/handled_at` 让客户端能把“已看过 / 今日忽略 / 保持关注 / 取消忽略”做成服务端闭环。
+- `focus_cards[].related_asset_categories/exposure_amount_wan/exposure_relevance/portfolio_impact_summary` 用于把 watchlist / 新闻与当前资产暴露关联起来。
+- `top_news` / `watchlist_preview` 也会附带资产暴露字段，便于客户端在明细视图继续展开。
 - `focus_cards[].action_type` 为结构化动作类型，当前包括 `REVIEW_NOW`、`FOLLOW_UP`、`WAIT_CONFIRM`、`MONITOR`。
 - `focus_cards[].action_label/action_hint` 提供建议动作和一句解释，便于客户端直接展示“现在该做什么”。
 - `focus_cards[].reasons` 为触发理由代码，当前会覆盖 `threshold_triggered`、`related_news_present`、`keyword_overlap`、`recent_alert_sent`、`news_impacts_watchlist`、`linked_alert_active`、`multi_asset_impact`。
@@ -137,6 +172,7 @@ Success `data`:
 - `news_debug.entries_filtered_by_source` 反映白名单/黑名单过滤效果。
 - `news_debug.digest_item_count/digest_prompt_chars/digest_status/digest_last_generated_at` 分别表示摘要样本数、单次 prompt 字符数、摘要生成状态和最近一次真实生成时间。
 - `market_alert_debug` 反映 Watchlist 行情阈值通知的发送状态。
+- `history_count` 表示当前已保留的建议历史条数。
 
 ## `PUT /api/finance/signals/watchlist-ntfy`
 
@@ -184,6 +220,51 @@ Success `data`:
     "last_alert_summary": "",
     "last_alert_status": ""
   }
+}
+```
+
+## `POST /api/finance/signals/cards/{card_id}/status`
+
+用途：更新单条财经建议卡的处理状态。
+
+Request:
+
+```json
+{
+  "status": "WATCHING"
+}
+```
+
+允许值：
+- `ACTIVE`
+- `SEEN`
+- `IGNORED_TODAY`
+- `WATCHING`
+
+## `GET /api/finance/signals/history`
+
+用途：读取最近财经建议历史，用于回看“为什么提醒过这个”。
+
+Query:
+- `limit`：默认 `50`，最大 `200`
+
+Success `data`:
+
+```json
+{
+  "total": 1,
+  "items": [
+    {
+      "card_id": "a1b2c3",
+      "title": "布伦特原油 已触发监控阈值",
+      "action_type": "REVIEW_NOW",
+      "action_label": "立即复核",
+      "status": "WATCHING",
+      "first_seen_at": "2026-03-15 10:00:00",
+      "last_seen_at": "2026-03-15 18:00:00",
+      "status_updated_at": "2026-03-15 18:20:00"
+    }
+  ]
 }
 ```
 
@@ -597,11 +678,15 @@ Success `data`:
 
 ## `GET /api/notes/search`
 
-用途：统一检索已保存笔记，当前会聚合 B 站和小红书结果，支持关键词、来源、分页。
+用途：统一检索已保存笔记，当前会聚合 B 站和小红书结果，支持关键词、来源、时间、是否已合并、排序与分页。
 
 Query：
 - `keyword`：可选，按标题和摘要内容模糊匹配
 - `source`：可选，支持 `bilibili`、`xiaohongshu`
+- `saved_from` / `saved_to`：可选，按东八区 `YYYY-MM-DD HH:MM:SS` 过滤保存时间
+- `merged`：可选，`true/false`
+- `sort_by`：可选，支持 `saved_at`、`title`、`source`
+- `sort_order`：可选，支持 `asc`、`desc`
 - `limit`：默认 `50`，范围 `1~200`
 - `offset`：默认 `0`
 
@@ -619,7 +704,12 @@ Success `data`:
       "title": "美联储观察",
       "source_url": "https://www.xiaohongshu.com/explore/x1",
       "summary_markdown": "# 降息交易",
-      "saved_at": "2026-03-03 08:00:00"
+      "saved_at": "2026-03-03 08:00:00",
+      "merge_state": "ACTIVE",
+      "merge_id": "",
+      "canonical_note_id": "x1",
+      "is_merged": false,
+      "topics": ["美联储观察", "降息交易"]
     },
     {
       "source": "bilibili",
@@ -627,11 +717,43 @@ Success `data`:
       "title": "宏观复盘",
       "source_url": "https://www.bilibili.com/video/BV1xx411c7mD",
       "summary_markdown": "# 美联储与降息",
-      "saved_at": "2026-03-01 08:00:00"
+      "saved_at": "2026-03-01 08:00:00",
+      "merge_state": "ACTIVE",
+      "merge_id": "",
+      "canonical_note_id": "b1",
+      "is_merged": false,
+      "topics": ["宏观复盘", "美联储与降息"]
     }
   ]
 }
 ```
+
+## `GET /api/notes/review/topics`
+
+用途：按“最近一周 / 最近一月”等窗口回顾主题聚类。
+
+Query：
+- `days`：默认 `30`
+- `limit`：默认 `8`
+- `per_topic_limit`：默认 `5`
+
+## `GET /api/notes/review/timeline`
+
+用途：按时间桶回看某时间段新增笔记。
+
+Query：
+- `days`：默认 `30`
+- `bucket`：`day` 或 `week`
+- `limit`：默认 `10`
+- `per_bucket_limit`：默认 `5`
+
+## `GET /api/notes/{source}/{note_id}/related`
+
+用途：独立回查某条笔记的相似/相关旧笔记，不强制进入 merge 流程。
+
+Query：
+- `limit`：默认 `8`
+- `min_score`：默认 `0.2`
 
 ## `DELETE /api/notes/bilibili/{note_id}`
 

@@ -119,6 +119,17 @@ else
   )
 fi
 
+echo "[export_apk] candidate_apks:"
+for candidate in "${candidate_apks[@]}"; do
+  if [[ -f "$candidate" ]]; then
+    candidate_sha="$(sha256sum "$candidate" | awk '{print $1}')"
+    candidate_stat="$(stat -c '%n | %y | %s' "$candidate")"
+    echo "  - $candidate_stat | sha256=$candidate_sha"
+  else
+    echo "  - $candidate | missing"
+  fi
+done
+
 SRC_APK=""
 SRC_MTIME=0
 for candidate in "${candidate_apks[@]}"; do
@@ -185,3 +196,9 @@ echo "[export_apk] build_type=$BUILD_TYPE"
 echo "[export_apk] source=$SRC_APK"
 echo "[export_apk] output=$OUTPUT_PATH"
 echo "[export_apk] latest=$LATEST_PATH"
+echo "[export_apk] source_stat=$(stat -c '%n | %y | %s' "$SRC_APK")"
+echo "[export_apk] source_sha256=$(sha256sum "$SRC_APK" | awk '{print $1}')"
+echo "[export_apk] output_stat=$(stat -c '%n | %y | %s' "$OUTPUT_PATH")"
+echo "[export_apk] output_sha256=$(sha256sum "$OUTPUT_PATH" | awk '{print $1}')"
+echo "[export_apk] latest_stat=$(stat -c '%n | %y | %s' "$LATEST_PATH")"
+echo "[export_apk] latest_sha256=$(sha256sum "$LATEST_PATH" | awk '{print $1}')"

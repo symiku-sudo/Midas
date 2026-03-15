@@ -3166,6 +3166,3 @@ class XiaohongshuService:
                 note.note_id,
             )
         return []
-
-
-XiaohongshuSyncService = XiaohongshuService

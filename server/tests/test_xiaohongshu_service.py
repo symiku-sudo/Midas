@@ -13,7 +13,7 @@ from app.services.comment_insights import CommentSnippet
 from app.services.xiaohongshu import (
     XiaohongshuNote,
     XiaohongshuPageBatch,
-    XiaohongshuSyncService,
+    XiaohongshuService,
     XiaohongshuWebReadonlySource,
 )
 
@@ -108,7 +108,7 @@ async def test_web_readonly_summarize_url_marks_synced(tmp_path: Path) -> None:
         note,
         comments=[CommentSnippet(text="太实用了。", like_count=12)],
     )
-    service = XiaohongshuSyncService(
+    service = XiaohongshuService(
         settings=settings,
         repository=repo,
         web_source=source,
@@ -150,7 +150,7 @@ async def test_summarize_url_returns_saved_summary_for_deduped_note(tmp_path: Pa
         content="正文",
         source_url="https://www.xiaohongshu.com/explore/u2",
     )
-    service = XiaohongshuSyncService(
+    service = XiaohongshuService(
         settings=settings,
         repository=repo,
         web_source=SingleUrlWebSource(note),
@@ -176,7 +176,7 @@ async def test_summarize_url_passes_image_urls_to_llm(tmp_path: Path) -> None:
         source_url="https://www.xiaohongshu.com/explore/img-1",
         image_urls=["https://sns-webpic-qc.xhscdn.com/abc/image-1"],
     )
-    service = XiaohongshuSyncService(
+    service = XiaohongshuService(
         settings=settings,
         repository=XiaohongshuSyncRepository(str(tmp_path / "midas.db")),
         web_source=SingleUrlWebSource(note),
@@ -221,7 +221,7 @@ async def test_summarize_url_video_note_uses_audio_asr_and_video_llm(tmp_path: P
         source_url="https://www.xiaohongshu.com/explore/video-1",
         is_video=True,
     )
-    service = XiaohongshuSyncService(
+    service = XiaohongshuService(
         settings=settings,
         repository=XiaohongshuSyncRepository(str(tmp_path / "midas.db")),
         web_source=SingleUrlWebSource(note),
@@ -263,7 +263,7 @@ async def test_summarize_url_video_note_falls_back_to_text_summary_when_asr_fail
         source_url="https://www.xiaohongshu.com/explore/video-2",
         is_video=True,
     )
-    service = XiaohongshuSyncService(
+    service = XiaohongshuService(
         settings=settings,
         repository=XiaohongshuSyncRepository(str(tmp_path / "midas.db")),
         web_source=SingleUrlWebSource(note),

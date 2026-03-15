@@ -31,6 +31,9 @@ data class FinanceWatchlistItem(
     @Json(name = "alert_active") val alertActive: Boolean = false,
     @Json(name = "related_news_count") val relatedNewsCount: Int = 0,
     @Json(name = "related_keywords") val relatedKeywords: List<String> = emptyList(),
+    @Json(name = "related_asset_categories") val relatedAssetCategories: List<String> = emptyList(),
+    @Json(name = "exposure_amount_wan") val exposureAmountWan: Double = 0.0,
+    @Json(name = "exposure_relevance") val exposureRelevance: String = "LOW",
 )
 
 data class FinanceNewsItem(
@@ -42,6 +45,9 @@ data class FinanceNewsItem(
     @Json(name = "matched_keywords") val matchedKeywords: List<String> = emptyList(),
     @Json(name = "related_symbols") val relatedSymbols: List<String> = emptyList(),
     @Json(name = "related_watchlist_names") val relatedWatchlistNames: List<String> = emptyList(),
+    @Json(name = "related_asset_categories") val relatedAssetCategories: List<String> = emptyList(),
+    @Json(name = "exposure_amount_wan") val exposureAmountWan: Double = 0.0,
+    @Json(name = "exposure_relevance") val exposureRelevance: String = "LOW",
 )
 
 data class FinanceNewsDebugData(
@@ -66,6 +72,7 @@ data class FinanceMarketAlertDebugData(
 )
 
 data class FinanceFocusCard(
+    @Json(name = "card_id") val cardId: String = "",
     val title: String,
     val summary: String = "",
     val priority: String = "MEDIUM",
@@ -76,6 +83,13 @@ data class FinanceFocusCard(
     val reasons: List<String> = emptyList(),
     @Json(name = "related_symbols") val relatedSymbols: List<String> = emptyList(),
     @Json(name = "related_watchlist_names") val relatedWatchlistNames: List<String> = emptyList(),
+    @Json(name = "related_asset_categories") val relatedAssetCategories: List<String> = emptyList(),
+    @Json(name = "exposure_amount_wan") val exposureAmountWan: Double = 0.0,
+    @Json(name = "exposure_relevance") val exposureRelevance: String = "LOW",
+    @Json(name = "portfolio_impact_summary") val portfolioImpactSummary: String = "",
+    val status: String = "ACTIVE",
+    @Json(name = "status_updated_at") val statusUpdatedAt: String = "",
+    @Json(name = "handled_at") val handledAt: String = "",
 )
 
 data class FinanceSignalsData(
@@ -89,6 +103,45 @@ data class FinanceSignalsData(
     @Json(name = "ai_insight_text") val aiInsightText: String = "",
     @Json(name = "news_debug") val newsDebug: FinanceNewsDebugData = FinanceNewsDebugData(),
     @Json(name = "market_alert_debug") val marketAlertDebug: FinanceMarketAlertDebugData = FinanceMarketAlertDebugData(),
+    @Json(name = "history_count") val historyCount: Int = 0,
+)
+
+data class FinanceFocusCardActionRequest(
+    val status: String,
+)
+
+data class FinanceFocusCardActionData(
+    @Json(name = "card_id") val cardId: String,
+    val status: String,
+    @Json(name = "status_updated_at") val statusUpdatedAt: String,
+    @Json(name = "handled_at") val handledAt: String = "",
+)
+
+data class FinanceFocusCardHistoryItem(
+    @Json(name = "card_id") val cardId: String,
+    val title: String,
+    val summary: String = "",
+    val priority: String = "MEDIUM",
+    val kind: String = "NEWS",
+    @Json(name = "action_type") val actionType: String = "MONITOR",
+    @Json(name = "action_label") val actionLabel: String = "",
+    val reasons: List<String> = emptyList(),
+    @Json(name = "related_symbols") val relatedSymbols: List<String> = emptyList(),
+    @Json(name = "related_watchlist_names") val relatedWatchlistNames: List<String> = emptyList(),
+    @Json(name = "related_asset_categories") val relatedAssetCategories: List<String> = emptyList(),
+    @Json(name = "exposure_amount_wan") val exposureAmountWan: Double = 0.0,
+    @Json(name = "exposure_relevance") val exposureRelevance: String = "LOW",
+    @Json(name = "portfolio_impact_summary") val portfolioImpactSummary: String = "",
+    val status: String = "ACTIVE",
+    @Json(name = "first_seen_at") val firstSeenAt: String = "",
+    @Json(name = "last_seen_at") val lastSeenAt: String = "",
+    @Json(name = "status_updated_at") val statusUpdatedAt: String = "",
+    @Json(name = "handled_at") val handledAt: String = "",
+)
+
+data class FinanceFocusCardHistoryData(
+    val total: Int,
+    val items: List<FinanceFocusCardHistoryItem> = emptyList(),
 )
 
 data class FinanceWatchlistNtfyUpdateRequest(
@@ -229,6 +282,11 @@ data class UnifiedNoteItem(
     @Json(name = "source_url") val sourceUrl: String,
     @Json(name = "summary_markdown") val summaryMarkdown: String,
     @Json(name = "saved_at") val savedAt: String,
+    @Json(name = "merge_state") val mergeState: String = "ACTIVE",
+    @Json(name = "merge_id") val mergeId: String = "",
+    @Json(name = "canonical_note_id") val canonicalNoteId: String = "",
+    @Json(name = "is_merged") val isMerged: Boolean = false,
+    val topics: List<String> = emptyList(),
 )
 
 data class UnifiedNotesData(
@@ -236,6 +294,73 @@ data class UnifiedNotesData(
     val limit: Int,
     val offset: Int,
     val items: List<UnifiedNoteItem>,
+)
+
+data class NotesReviewTopicItem(
+    val topic: String,
+    val total: Int,
+    @Json(name = "latest_saved_at") val latestSavedAt: String = "",
+    val items: List<UnifiedNoteItem> = emptyList(),
+)
+
+data class NotesReviewTopicsData(
+    @Json(name = "window_days") val windowDays: Int,
+    @Json(name = "total_topics") val totalTopics: Int,
+    val items: List<NotesReviewTopicItem> = emptyList(),
+)
+
+data class NotesTimelineReviewItem(
+    val label: String,
+    @Json(name = "start_time") val startTime: String = "",
+    @Json(name = "end_time") val endTime: String = "",
+    val total: Int,
+    val items: List<UnifiedNoteItem> = emptyList(),
+)
+
+data class NotesTimelineReviewData(
+    @Json(name = "window_days") val windowDays: Int,
+    val bucket: String,
+    @Json(name = "total_buckets") val totalBuckets: Int,
+    val items: List<NotesTimelineReviewItem> = emptyList(),
+)
+
+data class RelatedNoteItem(
+    val source: String,
+    @Json(name = "note_id") val noteId: String,
+    val title: String,
+    @Json(name = "source_url") val sourceUrl: String,
+    @Json(name = "saved_at") val savedAt: String,
+    @Json(name = "summary_excerpt") val summaryExcerpt: String = "",
+    val score: Double,
+    @Json(name = "relation_level") val relationLevel: String,
+    @Json(name = "reason_codes") val reasonCodes: List<String> = emptyList(),
+    @Json(name = "merge_state") val mergeState: String = "ACTIVE",
+    @Json(name = "merge_id") val mergeId: String = "",
+    @Json(name = "canonical_note_id") val canonicalNoteId: String = "",
+    @Json(name = "is_merged") val isMerged: Boolean = false,
+    val topics: List<String> = emptyList(),
+)
+
+data class RelatedNotesData(
+    val source: String,
+    @Json(name = "note_id") val noteId: String,
+    val total: Int,
+    val items: List<RelatedNoteItem> = emptyList(),
+)
+
+data class HomeQuickLinkItem(
+    val target: String,
+    val title: String,
+    val subtitle: String = "",
+)
+
+data class HomeOverviewData(
+    @Json(name = "generated_at") val generatedAt: String,
+    @Json(name = "recent_tasks") val recentTasks: List<AsyncJobListItemData> = emptyList(),
+    @Json(name = "recent_notes") val recentNotes: List<UnifiedNoteItem> = emptyList(),
+    @Json(name = "finance_focus_cards") val financeFocusCards: List<FinanceFocusCard> = emptyList(),
+    @Json(name = "quick_links") val quickLinks: List<HomeQuickLinkItem> = emptyList(),
+    @Json(name = "asset_total_amount_wan") val assetTotalAmountWan: Double = 0.0,
 )
 
 data class XiaohongshuSummarizeUrlRequest(

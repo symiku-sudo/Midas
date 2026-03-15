@@ -25,11 +25,22 @@ from app.models.schemas import (
     AsyncJobProgressData,
     AsyncJobStatusData,
     FinanceFocusCard,
+    FinanceFocusCardActionData,
+    FinanceFocusCardHistoryData,
+    FinanceFocusCardHistoryItem,
     FinanceMarketAlertDebugData,
     FinanceNewsDebugData,
     FinanceNewsItem,
     FinanceSignalsData,
     FinanceWatchlistItem,
+    HomeOverviewData,
+    HomeQuickLinkItem,
+    NotesReviewTopicItem,
+    NotesReviewTopicsData,
+    NotesTimelineReviewData,
+    NotesTimelineReviewItem,
+    RelatedNoteItem,
+    RelatedNotesData,
     UnifiedNoteItem,
     UnifiedNotesData,
 )
@@ -358,11 +369,21 @@ def test_search_notes_endpoint(monkeypatch) -> None:
             *,
             keyword: str = "",
             source: str = "",
+            saved_from: str = "",
+            saved_to: str = "",
+            merged: bool | None = None,
+            sort_by: str = "saved_at",
+            sort_order: str = "desc",
             limit: int = 50,
             offset: int = 0,
         ) -> UnifiedNotesData:
             assert keyword == "美联储"
             assert source == "bilibili"
+            assert saved_from == ""
+            assert saved_to == ""
+            assert merged is None
+            assert sort_by == "saved_at"
+            assert sort_order == "desc"
             assert limit == 10
             assert offset == 5
             return UnifiedNotesData(
@@ -397,6 +418,357 @@ def test_search_notes_endpoint(monkeypatch) -> None:
     assert body["data"]["total"] == 1
     assert body["data"]["items"][0]["source"] == "bilibili"
     assert body["data"]["items"][0]["note_id"] == "b1"
+
+
+def test_home_overview_endpoint(monkeypatch) -> None:
+    class _FakeAsyncJobService:
+        async def list_jobs(
+            self,
+            *,
+            limit: int = 20,
+            status: str = "",
+            job_type: str = "",
+        ) -> AsyncJobListData:
+            assert limit == 5
+            return AsyncJobListData(
+                total=1,
+                items=[
+                    AsyncJobListItem(
+                        job_id="job-1",
+                        job_type="bilibili_summarize",
+                        status="SUCCEEDED",
+                        message="任务执行完成。",
+                        submitted_at="2026-03-15 11:00:00",
+                    )
+                ],
+            )
+
+    class _FakeNoteLibraryService:
+        def search_notes(self, **_: object) -> UnifiedNotesData:
+            return UnifiedNotesData(
+                total=1,
+                limit=5,
+                offset=0,
+                items=[
+                    UnifiedNoteItem(
+                        source="bilibili",
+                        note_id="b1",
+                        title="宏观复盘",
+                        source_url="https://www.bilibili.com/video/BV1",
+                        summary_markdown="# 总结",
+                        saved_at="2026-03-15 11:30:00",
+                    )
+                ],
+            )
+
+    class _FakeFinanceSignalsService:
+        def get_dashboard_state(self) -> FinanceSignalsData:
+            return FinanceSignalsData(
+                update_time="2026-03-15 12:00:00",
+                watchlist_preview=[],
+                top_news=[],
+                focus_cards=[
+                    FinanceFocusCard(
+                        card_id="card-1",
+                        title="原油波动需要复核",
+                        kind="ALERT",
+                        action_type="REVIEW_NOW",
+                    )
+                ],
+                ai_insight_text="",
+            )
+
+    class _FakeAssetSnapshotService:
+        class _Current:
+            total_amount_wan = 18.6
+
+        def get_current(self) -> _Current:
+            return self._Current()
+
+    monkeypatch.setattr(routes_module, "_get_async_job_service", lambda request: _FakeAsyncJobService())
+    monkeypatch.setattr(routes_module, "_get_note_library_service", lambda: _FakeNoteLibraryService())
+    monkeypatch.setattr(routes_module, "_get_finance_signals_service", lambda: _FakeFinanceSignalsService())
+    monkeypatch.setattr(routes_module, "_get_asset_snapshot_service", lambda: _FakeAssetSnapshotService())
+
+    resp = client.get("/api/home/overview")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["recent_tasks"][0]["job_id"] == "job-1"
+    assert body["data"]["recent_notes"][0]["note_id"] == "b1"
+    assert body["data"]["finance_focus_cards"][0]["card_id"] == "card-1"
+    assert body["data"]["quick_links"][0]["target"] == "bilibili"
+    assert body["data"]["asset_total_amount_wan"] == 18.6
+
+
+def test_finance_focus_card_status_and_history_endpoints(monkeypatch) -> None:
+    class _FakeFinanceSignalsService:
+        def update_focus_card_status(
+            self,
+            *,
+            card_id: str,
+            status: str,
+        ) -> FinanceFocusCardActionData:
+            assert card_id == "card-1"
+            assert status == "WATCHING"
+            return FinanceFocusCardActionData(
+                card_id=card_id,
+                status=status,
+                status_updated_at="2026-03-15 12:01:00",
+                handled_at="2026-03-15 12:01:00",
+            )
+
+        def get_focus_card_history(self, *, limit: int = 50) -> FinanceFocusCardHistoryData:
+            assert limit == 10
+            return FinanceFocusCardHistoryData(
+                total=1,
+                items=[
+                    FinanceFocusCardHistoryItem(
+                        card_id="card-1",
+                        title="原油波动需要复核",
+                        action_type="REVIEW_NOW",
+                        status="WATCHING",
+                        last_seen_at="2026-03-15 12:00:00",
+                    )
+                ],
+            )
+
+    monkeypatch.setattr(routes_module, "_get_finance_signals_service", lambda: _FakeFinanceSignalsService())
+
+    update_resp = client.post("/api/finance/signals/cards/card-1/status", json={"status": "WATCHING"})
+    assert update_resp.status_code == 200
+    assert update_resp.json()["data"]["status"] == "WATCHING"
+
+    history_resp = client.get("/api/finance/signals/history", params={"limit": 10})
+    assert history_resp.status_code == 200
+    assert history_resp.json()["data"]["items"][0]["card_id"] == "card-1"
+
+
+def test_notes_review_and_related_endpoints(monkeypatch) -> None:
+    class _FakeNoteLibraryService:
+        def review_notes_by_topics(
+            self,
+            *,
+            days: int = 30,
+            limit: int = 8,
+            per_topic_limit: int = 5,
+        ) -> NotesReviewTopicsData:
+            assert days == 7
+            return NotesReviewTopicsData(
+                window_days=days,
+                total_topics=1,
+                items=[
+                    NotesReviewTopicItem(
+                        topic="美联储",
+                        total=2,
+                        latest_saved_at="2026-03-15 08:00:00",
+                        items=[],
+                    )
+                ],
+            )
+
+        def review_notes_by_timeline(
+            self,
+            *,
+            days: int = 30,
+            bucket: str = "day",
+            limit: int = 10,
+            per_bucket_limit: int = 5,
+        ) -> NotesTimelineReviewData:
+            assert bucket == "week"
+            return NotesTimelineReviewData(
+                window_days=days,
+                bucket=bucket,
+                total_buckets=1,
+                items=[
+                    NotesTimelineReviewItem(
+                        label="2026-03-09 ~ 2026-03-15",
+                        total=3,
+                        items=[],
+                    )
+                ],
+            )
+
+        def find_related_notes(
+            self,
+            *,
+            source: str,
+            note_id: str,
+            limit: int = 8,
+            min_score: float = 0.2,
+        ) -> RelatedNotesData:
+            assert source == "bilibili"
+            assert note_id == "b1"
+            return RelatedNotesData(
+                source=source,
+                note_id=note_id,
+                total=1,
+                items=[
+                    RelatedNoteItem(
+                        source="bilibili",
+                        note_id="b2",
+                        title="降息交易",
+                        source_url="https://www.bilibili.com/video/BV2",
+                        saved_at="2026-03-15 09:00:00",
+                        score=0.72,
+                        relation_level="STRONG",
+                    )
+                ],
+            )
+
+    monkeypatch.setattr(routes_module, "_get_note_library_service", lambda: _FakeNoteLibraryService())
+
+    topic_resp = client.get("/api/notes/review/topics", params={"days": 7})
+    assert topic_resp.status_code == 200
+    assert topic_resp.json()["data"]["items"][0]["topic"] == "美联储"
+
+    timeline_resp = client.get("/api/notes/review/timeline", params={"bucket": "week"})
+    assert timeline_resp.status_code == 200
+    assert timeline_resp.json()["data"]["items"][0]["label"] == "2026-03-09 ~ 2026-03-15"
+
+    related_resp = client.get("/api/notes/bilibili/b1/related")
+    assert related_resp.status_code == 200
+    assert related_resp.json()["data"]["items"][0]["note_id"] == "b2"
+
+
+def test_search_notes_endpoint_supports_new_filters(monkeypatch) -> None:
+    class _FakeNoteLibraryService:
+        def search_notes(self, **kwargs) -> UnifiedNotesData:
+            assert kwargs["keyword"] == "宏观"
+            assert kwargs["saved_from"] == "2026-03-01 00:00:00"
+            assert kwargs["saved_to"] == "2026-03-31 23:59:59"
+            assert kwargs["merged"] is True
+            assert kwargs["sort_by"] == "title"
+            assert kwargs["sort_order"] == "asc"
+            return UnifiedNotesData(total=0, limit=10, offset=0, items=[])
+
+    monkeypatch.setattr(routes_module, "_get_note_library_service", lambda: _FakeNoteLibraryService())
+
+    resp = client.get(
+        "/api/notes/search",
+        params={
+            "keyword": "宏观",
+            "saved_from": "2026-03-01 00:00:00",
+            "saved_to": "2026-03-31 23:59:59",
+            "merged": "true",
+            "sort_by": "title",
+            "sort_order": "asc",
+            "limit": 10,
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["total"] == 0
+
+
+def test_finance_focus_card_status_and_history_endpoints(monkeypatch) -> None:
+    class _FakeFinanceSignalsService:
+        def update_focus_card_status(self, *, card_id: str, status: str) -> FinanceFocusCardActionData:
+            assert card_id == "card-1"
+            assert status == "WATCHING"
+            return FinanceFocusCardActionData(
+                card_id=card_id,
+                status=status,
+                status_updated_at="2026-03-15 18:00:00",
+                handled_at="2026-03-15 18:00:00",
+            )
+
+        def get_focus_card_history(self, *, limit: int = 50) -> FinanceFocusCardHistoryData:
+            assert limit == 20
+            return FinanceFocusCardHistoryData(
+                total=1,
+                items=[
+                    FinanceFocusCardHistoryItem(
+                        card_id="card-1",
+                        title="布伦特原油 已触发监控阈值",
+                        action_type="REVIEW_NOW",
+                        action_label="立即复核",
+                        reasons=["threshold_triggered"],
+                        related_symbols=["BZ=F"],
+                        related_watchlist_names=["布伦特原油"],
+                        status="WATCHING",
+                        first_seen_at="2026-03-15 10:00:00",
+                        last_seen_at="2026-03-15 18:00:00",
+                        status_updated_at="2026-03-15 18:00:00",
+                    )
+                ],
+            )
+
+    monkeypatch.setattr(routes_module, "_get_finance_signals_service", lambda: _FakeFinanceSignalsService())
+
+    updated = client.post("/api/finance/signals/cards/card-1/status", json={"status": "WATCHING"})
+    assert updated.status_code == 200
+    assert updated.json()["data"]["status"] == "WATCHING"
+
+    history = client.get("/api/finance/signals/history", params={"limit": 20})
+    assert history.status_code == 200
+    assert history.json()["data"]["items"][0]["card_id"] == "card-1"
+
+
+def test_home_overview_endpoint(monkeypatch) -> None:
+    class _FakeAsyncJobService:
+        async def list_jobs(self, *, limit: int = 20, status: str = "", job_type: str = "") -> AsyncJobListData:
+            assert limit == 5
+            return AsyncJobListData(
+                total=1,
+                items=[
+                    AsyncJobListItem(
+                        job_id="job-1",
+                        job_type="bilibili_summarize",
+                        status="SUCCEEDED",
+                        message="任务执行完成。",
+                        submitted_at="2026-03-15 11:00:00",
+                    )
+                ],
+            )
+
+    class _FakeNoteLibraryService:
+        def search_notes(self, **kwargs) -> UnifiedNotesData:
+            return UnifiedNotesData(
+                total=1,
+                limit=5,
+                offset=0,
+                items=[
+                    UnifiedNoteItem(
+                        source="bilibili",
+                        note_id="b1",
+                        title="宏观复盘",
+                        source_url="https://example.com/b1",
+                        summary_markdown="# 宏观",
+                        saved_at="2026-03-15 12:00:00",
+                    )
+                ],
+            )
+
+    class _FakeFinanceSignalsService:
+        def get_dashboard_state(self) -> FinanceSignalsData:
+            return FinanceSignalsData(
+                update_time="2026-03-15 18:00:00",
+                watchlist_preview=[],
+                top_news=[],
+                focus_cards=[
+                    FinanceFocusCard(
+                        card_id="card-1",
+                        title="今日建议",
+                        action_type="REVIEW_NOW",
+                    )
+                ],
+                ai_insight_text="finance",
+            )
+
+    class _FakeAssetSnapshotService:
+        def get_current(self):
+            return type("AssetCurrent", (), {"total_amount_wan": 12.3})()
+
+    monkeypatch.setattr(routes_module, "_get_async_job_service", lambda request: _FakeAsyncJobService())
+    monkeypatch.setattr(routes_module, "_get_note_library_service", lambda: _FakeNoteLibraryService())
+    monkeypatch.setattr(routes_module, "_get_finance_signals_service", lambda: _FakeFinanceSignalsService())
+    monkeypatch.setattr(routes_module, "_get_asset_snapshot_service", lambda: _FakeAssetSnapshotService())
+
+    resp = client.get("/api/home/overview")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["data"]["recent_tasks"][0]["job_id"] == "job-1"
+    assert body["data"]["recent_notes"][0]["note_id"] == "b1"
+    assert body["data"]["finance_focus_cards"][0]["card_id"] == "card-1"
 
 
 def test_access_token_middleware_rejects_missing_token(monkeypatch) -> None:

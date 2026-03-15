@@ -132,7 +132,7 @@ class MainScreenContentRobolectricSmokeTest {
 
         composeRule.onNodeWithText("笔记").performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithText("刷新笔记库").performClick()
+        composeRule.onNodeWithText("刷新笔记库").performScrollTo().performClick()
 
         composeRule.onNodeWithText("设置").performClick()
         composeRule.waitForIdle()
@@ -689,7 +689,7 @@ class MainScreenContentRobolectricSmokeTest {
 
         composeRule.onNodeWithText("笔记").performClick()
         composeRule.waitForIdle()
-        composeRule.onNodeWithText("B站笔记（1/1）").assertIsDisplayed()
+        composeRule.onNodeWithText("B站笔记（1/1）").performScrollTo().assertIsDisplayed()
     }
 
     @Test

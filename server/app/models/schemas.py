@@ -18,6 +18,9 @@ class FinanceWatchlistItem(BaseModel):
     alert_active: bool = False
     related_news_count: int = 0
     related_keywords: list[str] = Field(default_factory=list)
+    related_asset_categories: list[str] = Field(default_factory=list)
+    exposure_amount_wan: float = 0.0
+    exposure_relevance: str = "LOW"
 
 
 class FinanceNewsItem(BaseModel):
@@ -29,6 +32,9 @@ class FinanceNewsItem(BaseModel):
     matched_keywords: list[str] = Field(default_factory=list)
     related_symbols: list[str] = Field(default_factory=list)
     related_watchlist_names: list[str] = Field(default_factory=list)
+    related_asset_categories: list[str] = Field(default_factory=list)
+    exposure_amount_wan: float = 0.0
+    exposure_relevance: str = "LOW"
 
 
 class FinanceNewsDebugData(BaseModel):
@@ -53,6 +59,7 @@ class FinanceMarketAlertDebugData(BaseModel):
 
 
 class FinanceFocusCard(BaseModel):
+    card_id: str = ""
     title: str
     summary: str = ""
     priority: str = "MEDIUM"
@@ -63,6 +70,13 @@ class FinanceFocusCard(BaseModel):
     reasons: list[str] = Field(default_factory=list)
     related_symbols: list[str] = Field(default_factory=list)
     related_watchlist_names: list[str] = Field(default_factory=list)
+    related_asset_categories: list[str] = Field(default_factory=list)
+    exposure_amount_wan: float = 0.0
+    exposure_relevance: str = "LOW"
+    portfolio_impact_summary: str = ""
+    status: str = "ACTIVE"
+    status_updated_at: str = ""
+    handled_at: str = ""
 
 
 class FinanceSignalsData(BaseModel):
@@ -78,6 +92,45 @@ class FinanceSignalsData(BaseModel):
     market_alert_debug: FinanceMarketAlertDebugData = Field(
         default_factory=FinanceMarketAlertDebugData
     )
+    history_count: int = 0
+
+
+class FinanceFocusCardActionRequest(BaseModel):
+    status: str = Field(min_length=1, max_length=64)
+
+
+class FinanceFocusCardActionData(BaseModel):
+    card_id: str
+    status: str
+    status_updated_at: str
+    handled_at: str = ""
+
+
+class FinanceFocusCardHistoryItem(BaseModel):
+    card_id: str
+    title: str
+    summary: str = ""
+    priority: str = "MEDIUM"
+    kind: str = "NEWS"
+    action_type: str = "MONITOR"
+    action_label: str = ""
+    reasons: list[str] = Field(default_factory=list)
+    related_symbols: list[str] = Field(default_factory=list)
+    related_watchlist_names: list[str] = Field(default_factory=list)
+    related_asset_categories: list[str] = Field(default_factory=list)
+    exposure_amount_wan: float = 0.0
+    exposure_relevance: str = "LOW"
+    portfolio_impact_summary: str = ""
+    status: str = "ACTIVE"
+    first_seen_at: str = ""
+    last_seen_at: str = ""
+    status_updated_at: str = ""
+    handled_at: str = ""
+
+
+class FinanceFocusCardHistoryData(BaseModel):
+    total: int
+    items: list[FinanceFocusCardHistoryItem] = Field(default_factory=list)
 
 
 class FinanceWatchlistNtfyUpdateRequest(BaseModel):
@@ -218,6 +271,11 @@ class UnifiedNoteItem(BaseModel):
     source_url: str
     summary_markdown: str
     saved_at: str
+    merge_state: str = "ACTIVE"
+    merge_id: str = ""
+    canonical_note_id: str = ""
+    is_merged: bool = False
+    topics: list[str] = Field(default_factory=list)
 
 
 class UnifiedNotesData(BaseModel):
@@ -225,6 +283,58 @@ class UnifiedNotesData(BaseModel):
     limit: int
     offset: int
     items: list[UnifiedNoteItem]
+
+
+class NotesReviewTopicItem(BaseModel):
+    topic: str
+    total: int
+    latest_saved_at: str = ""
+    items: list[UnifiedNoteItem] = Field(default_factory=list)
+
+
+class NotesReviewTopicsData(BaseModel):
+    window_days: int
+    total_topics: int
+    items: list[NotesReviewTopicItem] = Field(default_factory=list)
+
+
+class NotesTimelineReviewItem(BaseModel):
+    label: str
+    start_time: str = ""
+    end_time: str = ""
+    total: int
+    items: list[UnifiedNoteItem] = Field(default_factory=list)
+
+
+class NotesTimelineReviewData(BaseModel):
+    window_days: int
+    bucket: str
+    total_buckets: int
+    items: list[NotesTimelineReviewItem] = Field(default_factory=list)
+
+
+class RelatedNoteItem(BaseModel):
+    source: str
+    note_id: str
+    title: str
+    source_url: str
+    saved_at: str
+    summary_excerpt: str = ""
+    score: float
+    relation_level: str
+    reason_codes: list[str] = Field(default_factory=list)
+    merge_state: str = "ACTIVE"
+    merge_id: str = ""
+    canonical_note_id: str = ""
+    is_merged: bool = False
+    topics: list[str] = Field(default_factory=list)
+
+
+class RelatedNotesData(BaseModel):
+    source: str
+    note_id: str
+    total: int
+    items: list[RelatedNoteItem] = Field(default_factory=list)
 
 
 class XiaohongshuUrlSummaryRequest(BaseModel):
@@ -377,3 +487,18 @@ class EditableConfigData(BaseModel):
 
 class EditableConfigUpdateRequest(BaseModel):
     settings: dict[str, Any]
+
+
+class HomeQuickLinkItem(BaseModel):
+    target: str
+    title: str
+    subtitle: str = ""
+
+
+class HomeOverviewData(BaseModel):
+    generated_at: str
+    recent_tasks: list[AsyncJobListItem] = Field(default_factory=list)
+    recent_notes: list[UnifiedNoteItem] = Field(default_factory=list)
+    finance_focus_cards: list[FinanceFocusCard] = Field(default_factory=list)
+    quick_links: list[HomeQuickLinkItem] = Field(default_factory=list)
+    asset_total_amount_wan: float = 0.0
