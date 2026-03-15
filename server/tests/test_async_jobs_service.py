@@ -8,7 +8,7 @@ import pytest
 
 from app.core.errors import AppError, ErrorCode
 from app.core.config import get_settings
-from app.models.schemas import BilibiliSummaryData, XiaohongshuSummaryItem, XiaohongshuSyncData
+from app.models.schemas import BilibiliSummaryData, XiaohongshuSummaryItem
 from app.services.async_jobs import AsyncJobService
 
 
@@ -23,23 +23,6 @@ async def _wait_for_terminal_status(
         if asyncio.get_running_loop().time() >= deadline:
             raise AssertionError(f"Timed out waiting for job {job_id}")
         await asyncio.sleep(0.005)
-
-
-async def _wait_for_status(
-    service: AsyncJobService,
-    job_id: str,
-    *,
-    predicate,
-    timeout_seconds: float = 3.0,
-):
-    deadline = asyncio.get_running_loop().time() + timeout_seconds
-    while True:
-        status = await service.get_job(job_id)
-        if predicate(status):
-            return status
-        if asyncio.get_running_loop().time() >= deadline:
-            raise AssertionError(f"Timed out waiting for expected state on job {job_id}")
-        await asyncio.sleep(0.02)
 
 
 @pytest.mark.asyncio
@@ -64,22 +47,10 @@ async def test_async_job_service_runs_bilibili_job_and_persists_result(tmp_path:
             summary_markdown="ok",
         )
 
-    async def fake_xhs_sync_runner(limit, confirm_live, progress_callback) -> XiaohongshuSyncData:
-        return XiaohongshuSyncData(
-            requested_limit=limit or 2,
-            fetched_count=2,
-            new_count=2,
-            skipped_count=0,
-            failed_count=0,
-            circuit_opened=False,
-            summaries=[],
-        )
-
     service = AsyncJobService(
         settings,
         bilibili_runner=fake_bilibili_runner,
         xiaohongshu_runner=fake_xhs_runner,
-        xiaohongshu_sync_runner=fake_xhs_sync_runner,
     )
     await service.start()
     try:
@@ -158,22 +129,10 @@ async def test_async_job_service_marks_running_jobs_interrupted_on_restart(
             summary_markdown="ok",
         )
 
-    async def fake_xhs_sync_runner(limit, confirm_live, progress_callback) -> XiaohongshuSyncData:
-        return XiaohongshuSyncData(
-            requested_limit=limit or 1,
-            fetched_count=1,
-            new_count=1,
-            skipped_count=0,
-            failed_count=0,
-            circuit_opened=False,
-            summaries=[],
-        )
-
     service = AsyncJobService(
         settings,
         bilibili_runner=fake_bilibili_runner,
         xiaohongshu_runner=fake_xhs_runner,
-        xiaohongshu_sync_runner=fake_xhs_sync_runner,
     )
     await service.start()
     try:
@@ -216,22 +175,10 @@ async def test_async_job_service_retries_failed_job_with_same_payload(tmp_path: 
             summary_markdown="ok",
         )
 
-    async def fake_xhs_sync_runner(limit, confirm_live, progress_callback) -> XiaohongshuSyncData:
-        return XiaohongshuSyncData(
-            requested_limit=limit or 1,
-            fetched_count=1,
-            new_count=1,
-            skipped_count=0,
-            failed_count=0,
-            circuit_opened=False,
-            summaries=[],
-        )
-
     service = AsyncJobService(
         settings,
         bilibili_runner=fake_bilibili_runner,
         xiaohongshu_runner=fake_xhs_runner,
-        xiaohongshu_sync_runner=fake_xhs_sync_runner,
     )
     await service.start()
     try:
@@ -253,115 +200,3 @@ async def test_async_job_service_retries_failed_job_with_same_payload(tmp_path: 
     finally:
         await service.stop()
 
-
-@pytest.mark.asyncio
-async def test_async_job_service_tracks_xiaohongshu_sync_progress_and_completion(
-    tmp_path: Path,
-) -> None:
-    settings = get_settings().model_copy(deep=True)
-    settings.runtime.temp_dir = str(tmp_path)
-
-    async def fake_bilibili_runner(video_url: str) -> BilibiliSummaryData:
-        return BilibiliSummaryData(
-            video_url=video_url,
-            summary_markdown="# done",
-            elapsed_ms=12,
-            transcript_chars=34,
-        )
-
-    async def fake_xhs_runner(url: str) -> XiaohongshuSummaryItem:
-        return XiaohongshuSummaryItem(
-            note_id="xhs-1",
-            title="mock",
-            source_url=url,
-            summary_markdown="ok",
-        )
-
-    async def fake_xhs_sync_runner(limit, confirm_live, progress_callback) -> XiaohongshuSyncData:
-        assert limit == 2
-        assert confirm_live is True
-        assert progress_callback is not None
-        await progress_callback(
-            {
-                "current": 1,
-                "total": 2,
-                "message": "已完成有效同步：1/2（note-1）",
-                "summaries": [
-                    {
-                        "note_id": "note-1",
-                        "title": "第一条",
-                        "source_url": "https://www.xiaohongshu.com/explore/note-1",
-                        "summary_markdown": "# 1",
-                    }
-                ],
-            }
-        )
-        await asyncio.sleep(0.25)
-        return XiaohongshuSyncData(
-            requested_limit=2,
-            fetched_count=3,
-            new_count=2,
-            skipped_count=1,
-            failed_count=0,
-            circuit_opened=False,
-            summaries=[
-                XiaohongshuSummaryItem(
-                    note_id="note-1",
-                    title="第一条",
-                    source_url="https://www.xiaohongshu.com/explore/note-1",
-                    summary_markdown="# 1",
-                ),
-                XiaohongshuSummaryItem(
-                    note_id="note-2",
-                    title="第二条",
-                    source_url="https://www.xiaohongshu.com/explore/note-2",
-                    summary_markdown="# 2",
-                ),
-            ],
-        )
-
-    service = AsyncJobService(
-        settings,
-        bilibili_runner=fake_bilibili_runner,
-        xiaohongshu_runner=fake_xhs_runner,
-        xiaohongshu_sync_runner=fake_xhs_sync_runner,
-    )
-    await service.start()
-    try:
-        created = await service.create_xiaohongshu_sync_job(
-            limit=2,
-            confirm_live=True,
-            request_id="req-sync",
-        )
-        assert created.job_type == "xiaohongshu_sync"
-        assert created.progress_total == 2
-
-        interim = await _wait_for_status(
-            service,
-            created.job_id,
-            predicate=lambda status: (
-                status.status == "RUNNING"
-                and status.progress is not None
-                and status.progress.current >= 1
-                and status.result is not None
-                and len(status.result.get("summaries", [])) == 1
-            ),
-        )
-        assert interim.progress is not None
-        assert interim.progress.current >= 1
-        assert interim.progress.total == 2
-        assert interim.result is not None
-        assert len(interim.result["summaries"]) == 1
-
-        terminal = await _wait_for_terminal_status(service, created.job_id)
-        assert terminal == "SUCCEEDED"
-
-        status = await service.get_job(created.job_id)
-        assert status.progress is not None
-        assert status.progress.current == 2
-        assert status.progress.total == 2
-        assert status.result is not None
-        assert status.result["new_count"] == 2
-        assert len(status.result["summaries"]) == 2
-    finally:
-        await service.stop()

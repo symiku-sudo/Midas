@@ -227,11 +227,6 @@ class UnifiedNotesData(BaseModel):
     items: list[UnifiedNoteItem]
 
 
-class XiaohongshuSyncRequest(BaseModel):
-    limit: int | None = Field(default=None, ge=1, le=100)
-    confirm_live: bool = False
-
-
 class XiaohongshuUrlSummaryRequest(BaseModel):
     url: str = Field(min_length=8, max_length=2000)
 
@@ -241,16 +236,6 @@ class XiaohongshuSummaryItem(BaseModel):
     title: str
     source_url: str
     summary_markdown: str
-
-
-class XiaohongshuSyncData(BaseModel):
-    requested_limit: int
-    fetched_count: int
-    new_count: int
-    skipped_count: int
-    failed_count: int
-    circuit_opened: bool
-    summaries: list[XiaohongshuSummaryItem]
 
 
 class XiaohongshuNotesSaveRequest(BaseModel):
@@ -386,62 +371,9 @@ class XiaohongshuAuthUpdateData(BaseModel):
     cookie_pairs: int
 
 
-class XiaohongshuSyncCooldownData(BaseModel):
-    mode: str
-    allowed: bool
-    remaining_seconds: int
-    next_allowed_at_epoch: int
-    last_sync_at_epoch: int
-    min_interval_seconds: int
-
-
-class XiaohongshuPendingCountData(BaseModel):
-    mode: str
-    pending_count: int
-    scanned_count: int
-
-
 class EditableConfigData(BaseModel):
     settings: dict[str, Any]
 
 
 class EditableConfigUpdateRequest(BaseModel):
     settings: dict[str, Any]
-
-
-class XiaohongshuSyncJobCreateData(BaseModel):
-    job_id: str
-    status: str
-    requested_limit: int
-
-
-class XiaohongshuSyncJobAckRequest(BaseModel):
-    note_ids: list[str] = Field(min_length=1)
-
-
-class XiaohongshuSyncJobAckData(BaseModel):
-    job_id: str
-    status: str
-    requested_count: int
-    acked_count: int
-    already_acked_count: int
-    missing_note_ids: list[str]
-    acked_note_ids: list[str]
-
-
-class XiaohongshuSyncJobError(BaseModel):
-    code: str
-    message: str
-    details: dict[str, Any] | None = None
-
-
-class XiaohongshuSyncJobStatusData(BaseModel):
-    job_id: str
-    status: str
-    requested_limit: int
-    current: int
-    total: int
-    message: str
-    summaries: list[XiaohongshuSummaryItem] = Field(default_factory=list)
-    result: XiaohongshuSyncData | None = None
-    error: XiaohongshuSyncJobError | None = None

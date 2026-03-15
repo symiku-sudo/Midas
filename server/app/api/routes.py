@@ -44,10 +44,7 @@ from app.models.schemas import (
     XiaohongshuAuthUpdateData,
     XiaohongshuAuthUpdateRequest,
     XiaohongshuCaptureRefreshData,
-    XiaohongshuPendingCountData,
     XiaohongshuNotesSaveRequest,
-    XiaohongshuSyncCooldownData,
-    XiaohongshuSyncRequest,
     XiaohongshuUrlSummaryRequest,
     XiaohongshuSyncedNotesPruneData,
 )
@@ -58,7 +55,7 @@ from app.services.asset_snapshots import AssetSnapshotService
 from app.services.editable_config import EditableConfigService
 from app.services.finance_signals import FinanceSignalsService
 from app.services.note_library import NoteLibraryService
-from app.services.xiaohongshu import XiaohongshuSyncService
+from app.services.xiaohongshu import XiaohongshuService
 from tools import xhs_capture_to_config as xhs_capture_tool
 
 router = APIRouter()
@@ -72,9 +69,9 @@ def _get_summarizer() -> BilibiliSummarizer:
 
 
 @lru_cache(maxsize=1)
-def _get_xiaohongshu_sync_service() -> XiaohongshuSyncService:
+def _get_xiaohongshu_service() -> XiaohongshuService:
     settings = get_settings()
-    return XiaohongshuSyncService(settings)
+    return XiaohongshuService(settings)
 
 @lru_cache(maxsize=1)
 def _get_note_library_service() -> NoteLibraryService:
@@ -107,7 +104,7 @@ def _get_asset_snapshot_service() -> AssetSnapshotService:
 def _reload_runtime_services() -> None:
     clear_settings_cache()
     _get_summarizer.cache_clear()
-    _get_xiaohongshu_sync_service.cache_clear()
+    _get_xiaohongshu_service.cache_clear()
     _get_note_library_service.cache_clear()
     _get_editable_config_service.cache_clear()
     _get_finance_signals_service.cache_clear()
@@ -210,27 +207,8 @@ async def run_bilibili_summary_job(video_url: str):
 
 
 async def run_xiaohongshu_summary_job(url: str):
-    service = _get_xiaohongshu_sync_service()
+    service = _get_xiaohongshu_service()
     return await service.summarize_url(url)
-
-
-async def run_xiaohongshu_sync_job(
-    limit: int | None,
-    confirm_live: bool,
-    progress_callback,
-):
-    service = _get_xiaohongshu_sync_service()
-
-    async def _forward_progress(progress) -> None:
-        if progress_callback is None:
-            return
-        await progress_callback(progress.model_dump())
-
-    return await service.sync(
-        limit=limit,
-        confirm_live=confirm_live,
-        progress_callback=_forward_progress if progress_callback is not None else None,
-    )
 
 
 @router.get("/health")
@@ -342,19 +320,6 @@ async def create_xiaohongshu_summarize_job(
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 
-@router.post("/api/jobs/xiaohongshu/sync")
-async def create_xiaohongshu_sync_job(
-    payload: XiaohongshuSyncRequest, request: Request
-) -> dict:
-    service = _get_async_job_service(request)
-    data: AsyncJobCreateData = await service.create_xiaohongshu_sync_job(
-        limit=payload.limit,
-        confirm_live=payload.confirm_live,
-        request_id=request.state.request_id,
-    )
-    return success_response(data=data.model_dump(), request_id=request.state.request_id)
-
-
 @router.get("/api/jobs")
 async def list_async_jobs(
     request: Request,
@@ -455,25 +420,9 @@ async def xiaohongshu_summarize_url(
     payload: XiaohongshuUrlSummaryRequest, request: Request
 ) -> dict:
     logger.info("Receive xiaohongshu summarize-url request")
-    service = _get_xiaohongshu_sync_service()
+    service = _get_xiaohongshu_service()
     result = await service.summarize_url(payload.url)
     return success_response(data=result.model_dump(), request_id=request.state.request_id)
-
-
-@router.get("/api/xiaohongshu/sync/cooldown")
-async def get_xiaohongshu_sync_cooldown(request: Request) -> dict:
-    service = _get_xiaohongshu_sync_service()
-    result = service.get_live_sync_cooldown()
-    data = XiaohongshuSyncCooldownData(**result)
-    return success_response(data=data.model_dump(), request_id=request.state.request_id)
-
-
-@router.get("/api/xiaohongshu/sync/pending-count")
-async def get_xiaohongshu_pending_unsynced_count(request: Request) -> dict:
-    service = _get_xiaohongshu_sync_service()
-    result = await service.get_pending_unsynced_count()
-    data = XiaohongshuPendingCountData(**result)
-    return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 
 @router.post("/api/notes/xiaohongshu/save-batch")

@@ -55,7 +55,7 @@ notes_merge:
 xiaohongshu:
   # 可选：mock / web_readonly
   # - mock: 使用本地示例数据（最安全）
-  # - web_readonly: 只读请求网页端接口（需手动配置 request_url/headers）
+  # - web_readonly: 只读抓取网页内容；单链接总结主要依赖 headers，request_url 仅在列表扫描类能力里使用
   mode: web_readonly
   cookie: ""
   collection_id: ""
@@ -70,7 +70,7 @@ xiaohongshu:
   api_base: ""
   mock_notes_path: ""
   web_readonly:
-    # 从浏览器 DevTools 里复制“收藏列表”请求 URL（建议只读接口），放到 .env 的 XHS_REQUEST_URL。
+    # 可选：从浏览器 DevTools 里复制一个已登录的只读请求 URL；常见做法是用“收藏列表”请求。
     request_url: "${XHS_REQUEST_URL}"
     request_method: GET
     # 涉及隐私字段，统一从 .env 注入。

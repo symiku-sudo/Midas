@@ -578,11 +578,8 @@ class MainScreenContentRobolectricSmokeTest {
     }
 
     @Test
-    fun xhsPanel_batchAndSingleActions_shouldTriggerCallbacks() {
+    fun xhsPanel_singleLinkActions_shouldTriggerCallbacks() {
         var summarizeClicks = 0
-        var batchSyncClicks = 0
-        var saveAllClicks = 0
-        var refreshMetaClicks = 0
 
         composeRule.setContent {
             MaterialTheme {
@@ -613,11 +610,8 @@ class MainScreenContentRobolectricSmokeTest {
                     onSaveBilibiliNote = {},
                     onXiaohongshuUrlChange = {},
                     onSummarizeXiaohongshuUrl = { summarizeClicks += 1 },
-                    onStartXiaohongshuBatchSync = { batchSyncClicks += 1 },
                     onRefreshXiaohongshuAuthConfig = {},
                     onSaveSingleXiaohongshuNote = {},
-                    onSaveAllXiaohongshuNotes = { saveAllClicks += 1 },
-                    onRefreshXiaohongshuSyncMeta = { refreshMetaClicks += 1 },
                     onNotesKeywordChange = {},
                     onRefreshNotes = {},
                     onDeleteBilibiliNote = {},
@@ -635,21 +629,9 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithTag("xhs_refresh_sync_meta_button", useUnmergedTree = true)
-            .performScrollTo()
-            .performClick()
-        composeRule.onNodeWithTag("xhs_start_batch_sync_button", useUnmergedTree = true)
-            .performScrollTo()
-            .performClick()
-        composeRule.onNodeWithTag("xhs_save_all_button", useUnmergedTree = true)
-            .performScrollTo()
-            .performClick()
         composeRule.onNodeWithText("总结单篇").performScrollTo().performClick()
         composeRule.waitForIdle()
 
-        assertEquals(1, refreshMetaClicks)
-        assertEquals(1, batchSyncClicks)
-        assertEquals(1, saveAllClicks)
         assertEquals(1, summarizeClicks)
     }
 

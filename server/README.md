@@ -12,7 +12,6 @@
 - `DELETE /api/assets/snapshots/{record_id}`
 - `POST /api/jobs/bilibili-summarize`
 - `POST /api/jobs/xiaohongshu/summarize-url`
-- `POST /api/jobs/xiaohongshu/sync`
 - `GET /api/jobs`
 - `GET /api/jobs/{job_id}`
 - `POST /api/jobs/{job_id}/retry`
@@ -22,8 +21,6 @@
 - `GET /api/notes/search`
 - `DELETE /api/notes/bilibili/{note_id}` / `DELETE /api/notes/bilibili`
 - `POST /api/xiaohongshu/summarize-url`
-- `GET /api/xiaohongshu/sync/cooldown`
-- `GET /api/xiaohongshu/sync/pending-count`
 - `POST /api/notes/xiaohongshu/save-batch`
 - `GET /api/notes/xiaohongshu`
 - `DELETE /api/notes/xiaohongshu/{note_id}` / `DELETE /api/notes/xiaohongshu`
@@ -117,7 +114,6 @@ server/.venv/bin/python server/tools/prune_unsaved_synced_notes.py --dry-run --s
 当前支持：
 - `POST /api/jobs/bilibili-summarize`
 - `POST /api/jobs/xiaohongshu/summarize-url`
-- `POST /api/jobs/xiaohongshu/sync`
 - `GET /api/jobs`
 - `GET /api/jobs/{job_id}`
 - `POST /api/jobs/{job_id}/retry`
@@ -128,7 +124,6 @@ server/.venv/bin/python server/tools/prune_unsaved_synced_notes.py --dry-run --s
 - 服务重启后，已完成/失败历史会保留；启动时仍处于 `RUNNING` 的任务会被标记为 `INTERRUPTED`，避免假状态残留。
 - 重试任务会在响应和历史列表里携带 `retry_of_job_id`，便于客户端回溯来源。
 - 当前仅允许重试 `FAILED` / `INTERRUPTED` 状态的任务，重试时会复用原请求体创建新任务。
-- `xiaohongshu_sync` 任务会额外暴露 `progress.current/total` 与运行中 `summaries` 预览，客户端可边同步边展示进度。
 
 ## Finance Signals Worker
 
@@ -248,7 +243,7 @@ python -m playwright install chromium
 ```
 
 建议流程：
-1. 在浏览器 DevTools 里抓“小红书收藏列表”请求。
+1. 在浏览器 DevTools 里抓一个已登录的小红书网页请求；最常见的是“收藏列表”请求，用来提取认证头。
 2. 用脚本自动把抓包写入 `server/.env`（避免手填出错）：
    ```bash
    cd server
@@ -365,21 +360,10 @@ curl -X POST http://127.0.0.1:8000/api/xiaohongshu/summarize-url \
 curl -X POST http://127.0.0.1:8000/api/jobs/xiaohongshu/summarize-url \
   -H 'Content-Type: application/json' \
   -d '{"url":"https://www.xiaohongshu.com/explore/xxxxxx"}'
-
-# 读取批量同步冷却状态和待同步数量
-curl http://127.0.0.1:8000/api/xiaohongshu/sync/cooldown
-curl http://127.0.0.1:8000/api/xiaohongshu/sync/pending-count
-
-# 以异步任务方式批量同步最新小红书笔记
-curl -X POST http://127.0.0.1:8000/api/jobs/xiaohongshu/sync \
-  -H 'Content-Type: application/json' \
-  -d '{"limit":10,"confirm_live":true}'
 ```
 
-`/api/xiaohongshu/sync/pending-count` 当前只扫描最近一小段收藏窗口，用来给客户端展示“近期待同步队列”估计值，避免为了统计总量而把收藏历史从头扫到底。
-
 ```bash
-# 批量保存小红书总结结果（notes 数组元素结构与 /api/xiaohongshu/summarize-url 返回一致）
+# 保存小红书总结结果（notes 数组可传单条或多条，元素结构与 /api/xiaohongshu/summarize-url 返回一致）
 curl -X POST http://127.0.0.1:8000/api/notes/xiaohongshu/save-batch \
   -H 'Content-Type: application/json' \
   -d '{"notes":[{"note_id":"mock-note-001","title":"示例","source_url":"https://www.xiaohongshu.com/explore/mock-note-001","summary_markdown":"# 总结"}]}'

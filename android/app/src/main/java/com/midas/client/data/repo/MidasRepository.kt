@@ -37,11 +37,8 @@ import com.midas.client.data.model.UnifiedNotesData
 import com.midas.client.data.model.XiaohongshuAuthUpdateData
 import com.midas.client.data.model.XiaohongshuAuthUpdateRequest
 import com.midas.client.data.model.XiaohongshuCaptureRefreshData
-import com.midas.client.data.model.XiaohongshuPendingCountData
 import com.midas.client.data.model.XiaohongshuNotesSaveRequest
 import com.midas.client.data.model.XiaohongshuSavedNotesData
-import com.midas.client.data.model.XiaohongshuSyncCooldownData
-import com.midas.client.data.model.XiaohongshuSyncRequest
 import com.midas.client.data.model.XiaohongshuSummarizeUrlRequest
 import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.data.network.MidasApiFactory
@@ -175,21 +172,6 @@ class MidasRepository {
         }
     }
 
-    suspend fun createXiaohongshuSyncJob(
-        baseUrl: String,
-        limit: Int?,
-        confirmLive: Boolean = true,
-    ): AppResult<AsyncJobCreateData> {
-        return request(baseUrl) {
-            createXiaohongshuSyncJob(
-                XiaohongshuSyncRequest(
-                    limit = limit,
-                    confirmLive = confirmLive,
-                )
-            )
-        }
-    }
-
     suspend fun getAsyncJob(
         baseUrl: String,
         jobId: String,
@@ -266,18 +248,6 @@ class MidasRepository {
         return request(baseUrl) {
             summarizeXiaohongshuUrl(XiaohongshuSummarizeUrlRequest(url = url))
         }
-    }
-
-    suspend fun getXiaohongshuSyncCooldown(
-        baseUrl: String,
-    ): AppResult<XiaohongshuSyncCooldownData> {
-        return request(baseUrl) { getXiaohongshuSyncCooldown() }
-    }
-
-    suspend fun getXiaohongshuPendingCount(
-        baseUrl: String,
-    ): AppResult<XiaohongshuPendingCountData> {
-        return request(baseUrl) { getXiaohongshuPendingCount() }
     }
 
     suspend fun saveXiaohongshuNotes(

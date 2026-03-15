@@ -32,7 +32,7 @@ def test_check_llm_enabled_without_key_fails() -> None:
     assert status_by_name["llm.api_base"] == "pass"
 
 
-def test_check_xiaohongshu_web_readonly_missing_url_fails() -> None:
+def test_check_xiaohongshu_web_readonly_missing_url_warns_for_single_url_mode() -> None:
     settings = Settings(
         xiaohongshu=XiaohongshuConfig(
             mode="web_readonly",
@@ -42,7 +42,8 @@ def test_check_xiaohongshu_web_readonly_missing_url_fails() -> None:
 
     results = check_xiaohongshu(settings)
     status_by_name = {item.name: item.status for item in results}
-    assert status_by_name["xiaohongshu.web_readonly.request_url"] == "fail"
+    assert status_by_name["xiaohongshu.web_readonly.request_url"] == "warn"
+    assert status_by_name["xiaohongshu.web_readonly.host_allowlist"] == "warn"
 
 
 def test_check_xiaohongshu_web_readonly_valid_config_passes() -> None:

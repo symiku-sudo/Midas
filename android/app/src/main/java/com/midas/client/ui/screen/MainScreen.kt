@@ -104,8 +104,6 @@ private enum class ButtonTone {
 }
 
 private const val XIAOHONGSHU_SUMMARY_JOB_TYPE = "xiaohongshu_summarize_url"
-private const val XIAOHONGSHU_SYNC_JOB_TYPE = "xiaohongshu_sync"
-
 private val SuccessStatusColor = Color(0xFF7BE5A6)
 private val ErrorStatusColor = Color(0xFFFF9A9A)
 private val WarningStatusColor = Color(0xFFFFD187)
@@ -298,14 +296,10 @@ fun MainScreen(viewModel: MainViewModel) {
         onOpenBilibiliJob = viewModel::openBilibiliJob,
         onRetryBilibiliJob = viewModel::retryBilibiliJob,
         onXiaohongshuUrlChange = viewModel::onXiaohongshuUrlInputChange,
-        onXiaohongshuBatchLimitChange = viewModel::onXiaohongshuBatchLimitInputChange,
         onSummarizeXiaohongshuUrl = viewModel::summarizeXiaohongshuByUrl,
-        onStartXiaohongshuBatchSync = viewModel::startXiaohongshuBatchSync,
         onRefreshXiaohongshuAuthConfig = viewModel::refreshXiaohongshuAuthConfig,
         onSaveSingleXiaohongshuNote = viewModel::saveSingleXiaohongshuSummary,
-        onSaveAllXiaohongshuNotes = viewModel::saveAllXiaohongshuSummaries,
         onRefreshXiaohongshuJobs = viewModel::refreshXiaohongshuJobHistory,
-        onRefreshXiaohongshuSyncMeta = viewModel::refreshXiaohongshuSyncMeta,
         onOpenXiaohongshuJob = viewModel::openXiaohongshuJob,
         onRetryXiaohongshuJob = viewModel::retryXiaohongshuJob,
         onNotesKeywordChange = viewModel::onNotesKeywordInputChange,
@@ -355,14 +349,10 @@ fun MainScreenContent(
     onOpenBilibiliJob: (String) -> Unit = {},
     onRetryBilibiliJob: (String) -> Unit = {},
     onXiaohongshuUrlChange: (String) -> Unit,
-    onXiaohongshuBatchLimitChange: (String) -> Unit = {},
     onSummarizeXiaohongshuUrl: () -> Unit,
-    onStartXiaohongshuBatchSync: () -> Unit = {},
     onRefreshXiaohongshuAuthConfig: () -> Unit,
     onSaveSingleXiaohongshuNote: (XiaohongshuSummaryItem) -> Unit,
-    onSaveAllXiaohongshuNotes: () -> Unit = {},
     onRefreshXiaohongshuJobs: () -> Unit = {},
-    onRefreshXiaohongshuSyncMeta: () -> Unit = {},
     onOpenXiaohongshuJob: (String) -> Unit = {},
     onRetryXiaohongshuJob: (String) -> Unit = {},
     onNotesKeywordChange: (String) -> Unit,
@@ -472,7 +462,7 @@ fun MainScreenContent(
                     Text(
                         text = when (selectedSection) {
                             TopSection.BILIBILI -> "B 站视频总结与任务回看"
-                            TopSection.XHS -> "小红书单篇 / 批量同步 / 结果保存"
+                            TopSection.XHS -> "小红书单链接总结与结果保存"
                             TopSection.NOTES -> "统一笔记库、搜索与合并"
                             TopSection.FINANCE -> "先看建议，再决定要不要展开细节"
                             TopSection.SETTINGS -> "服务端连接、令牌与运行配置"
@@ -487,7 +477,6 @@ fun MainScreenContent(
                             selectedSection = TopSection.entries[index]
                             when (selectedSection) {
                                 TopSection.FINANCE -> onRefreshFinanceSignals()
-                                TopSection.XHS -> onRefreshXiaohongshuSyncMeta()
                                 else -> Unit
                             }
                         },
@@ -558,14 +547,10 @@ fun MainScreenContent(
                 TopSection.XHS -> XiaohongshuPanel(
                     state = xiaohongshu,
                     onUrlChange = onXiaohongshuUrlChange,
-                    onBatchLimitChange = onXiaohongshuBatchLimitChange,
                     onSummarizeUrl = onSummarizeXiaohongshuUrl,
-                    onStartBatchSync = onStartXiaohongshuBatchSync,
                     onRefreshAuthConfig = onRefreshXiaohongshuAuthConfig,
                     onSaveSingleNote = onSaveSingleXiaohongshuNote,
-                    onSaveAllNotes = onSaveAllXiaohongshuNotes,
                     onRefreshJobs = onRefreshXiaohongshuJobs,
-                    onRefreshSyncMeta = onRefreshXiaohongshuSyncMeta,
                     onOpenJob = onOpenXiaohongshuJob,
                     onRetryJob = onRetryXiaohongshuJob,
                     modifier = contentModifier,
@@ -1135,116 +1120,26 @@ private fun BilibiliResult(result: BilibiliSummaryData) {
 private fun XiaohongshuPanel(
     state: XiaohongshuUiState,
     onUrlChange: (String) -> Unit,
-    onBatchLimitChange: (String) -> Unit,
     onSummarizeUrl: () -> Unit,
-    onStartBatchSync: () -> Unit,
     onRefreshAuthConfig: () -> Unit,
     onSaveSingleNote: (XiaohongshuSummaryItem) -> Unit,
-    onSaveAllNotes: () -> Unit,
     onRefreshJobs: () -> Unit,
-    onRefreshSyncMeta: () -> Unit,
     onOpenJob: (String) -> Unit,
     onRetryJob: (String) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val pendingSaveCount = state.summaries.count { summary -> summary.noteId !in state.savedNoteIds }
-
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("小红书采集与同步", style = MaterialTheme.typography.titleMedium)
-        GlassCard(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
-            ) {
-                Text("批量同步最新笔记", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    text = "先看待同步数量和冷却状态，再决定要不要跑批量任务。",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                OutlinedTextField(
-                    value = state.batchLimitInput,
-                    onValueChange = onBatchLimitChange,
-                    label = { Text("本次最多同步多少条") },
-                    placeholder = { Text("默认 10，最大 100") },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("xhs_batch_limit_input"),
-                    singleLine = true,
-                )
-                Text(
-                    text = "待同步 ${state.batchPendingCount} 条 · 扫描范围 ${state.batchScannedCount} 条",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = if (state.batchCooldownAllowed) {
-                        "冷却状态：当前可直接执行"
-                    } else {
-                        "冷却状态：剩余 ${state.batchCooldownRemainingSeconds} 秒"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = if (state.batchCooldownAllowed) {
-                        SuccessStatusColor
-                    } else {
-                        WarningStatusColor
-                    },
-                )
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    MidasButton(
-                        onClick = onRefreshSyncMeta,
-                        enabled = !state.isRefreshingSyncMeta,
-                        tone = ButtonTone.NEUTRAL,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("xhs_refresh_sync_meta_button"),
-                    ) {
-                        SingleLineActionText(if (state.isRefreshingSyncMeta) "刷新中..." else "刷新队列")
-                    }
-                    MidasButton(
-                        onClick = onStartBatchSync,
-                        enabled = !state.isSummarizingUrl,
-                        modifier = Modifier
-                            .weight(1f)
-                            .testTag("xhs_start_batch_sync_button"),
-                    ) {
-                        SingleLineActionText(if (state.currentJobType == XIAOHONGSHU_SYNC_JOB_TYPE && state.isSummarizingUrl) "同步中..." else "开始批量同步")
-                    }
-                }
-                MidasButton(
-                    onClick = onSaveAllNotes,
-                    enabled = pendingSaveCount > 0 && !state.isSavingAllNotes,
-                    tone = ButtonTone.SUCCESS,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("xhs_save_all_button"),
-                ) {
-                    SingleLineActionText(
-                        if (state.isSavingAllNotes) {
-                            "批量保存中..."
-                        } else {
-                            "保存当前全部结果（$pendingSaveCount）"
-                        },
-                    )
-                }
-                if (state.batchSyncStatus.isNotBlank()) {
-                    Text(text = state.batchSyncStatus, color = SuccessStatusColor)
-                }
-            }
-        }
+        Text("小红书链接总结", style = MaterialTheme.typography.titleMedium)
 
         GlassCard(modifier = Modifier.fillMaxWidth()) {
             Column(
                 modifier = Modifier.padding(12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp),
             ) {
-                Text("单篇链接总结", style = MaterialTheme.typography.titleSmall)
+                Text("单链接总结", style = MaterialTheme.typography.titleSmall)
                 OutlinedTextField(
                     value = state.urlInput,
                     onValueChange = onUrlChange,
@@ -1332,7 +1227,7 @@ private fun XiaohongshuPanel(
 
         if (state.summaries.isNotEmpty()) {
             Text(
-                text = "当前结果（未保存 ${pendingSaveCount.coerceAtLeast(0)} 条）",
+                text = "当前结果（${state.summaries.size} 条）",
                 style = MaterialTheme.typography.titleSmall,
             )
         }
@@ -1540,7 +1435,6 @@ private fun asyncJobTypeLabel(jobType: String): String {
     return when (jobType.trim().lowercase(Locale.ROOT)) {
         "bilibili_summarize" -> "B站总结"
         "xiaohongshu_summarize_url" -> "小红书单篇"
-        "xiaohongshu_sync" -> "小红书批量同步"
         else -> "后台任务"
     }
 }

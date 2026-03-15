@@ -282,32 +282,40 @@ def check_xiaohongshu(settings: Settings) -> list[CheckResult]:
         results.append(
             CheckResult(
                 name="xiaohongshu.web_readonly.request_url",
-                status="fail",
-                message="request_url 为空。",
+                status="warn",
+                message="request_url 为空；单链接总结仍可用，但收藏扫描类能力不可用。",
             )
         )
-        return results
-
-    parsed = urlparse(request_url)
-    if parsed.scheme != "https" or not parsed.netloc:
-        results.append(
-            CheckResult(
-                name="xiaohongshu.web_readonly.request_url",
-                status="fail",
-                message="request_url 必须是 HTTPS 且包含域名。",
-            )
-        )
+        parsed = None
     else:
-        results.append(
-            CheckResult(
-                name="xiaohongshu.web_readonly.request_url",
-                status="pass",
-                message=f"request_url 已配置: {request_url}",
+        parsed = urlparse(request_url)
+        if parsed.scheme != "https" or not parsed.netloc:
+            results.append(
+                CheckResult(
+                    name="xiaohongshu.web_readonly.request_url",
+                    status="fail",
+                    message="request_url 必须是 HTTPS 且包含域名。",
+                )
             )
-        )
+        else:
+            results.append(
+                CheckResult(
+                    name="xiaohongshu.web_readonly.request_url",
+                    status="pass",
+                    message=f"request_url 已配置: {request_url}",
+                )
+            )
 
     allowlist = {item.strip() for item in cfg.web_readonly.host_allowlist if item.strip()}
-    if parsed.netloc and parsed.netloc not in allowlist:
+    if parsed is None or not parsed.netloc:
+        results.append(
+            CheckResult(
+                name="xiaohongshu.web_readonly.host_allowlist",
+                status="warn",
+                message="未校验 host_allowlist；若后续启用收藏扫描，请补齐 request_url。",
+            )
+        )
+    elif parsed.netloc not in allowlist:
         results.append(
             CheckResult(
                 name="xiaohongshu.web_readonly.host_allowlist",

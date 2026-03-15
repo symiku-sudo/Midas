@@ -242,26 +242,11 @@ data class XiaohongshuSummarizeUrlRequest(
     val url: String
 )
 
-data class XiaohongshuSyncRequest(
-    val limit: Int? = null,
-    @Json(name = "confirm_live") val confirmLive: Boolean = true,
-)
-
 data class XiaohongshuSummaryItem(
     @Json(name = "note_id") val noteId: String,
     val title: String,
     @Json(name = "source_url") val sourceUrl: String,
     @Json(name = "summary_markdown") val summaryMarkdown: String
-)
-
-data class XiaohongshuSyncData(
-    @Json(name = "requested_limit") val requestedLimit: Int,
-    @Json(name = "fetched_count") val fetchedCount: Int,
-    @Json(name = "new_count") val newCount: Int,
-    @Json(name = "skipped_count") val skippedCount: Int,
-    @Json(name = "failed_count") val failedCount: Int,
-    @Json(name = "circuit_opened") val circuitOpened: Boolean,
-    val summaries: List<XiaohongshuSummaryItem> = emptyList(),
 )
 
 data class XiaohongshuNotesSaveRequest(
@@ -390,21 +375,6 @@ data class XiaohongshuAuthUpdateData(
     @Json(name = "updated_keys") val updatedKeys: List<String>,
     @Json(name = "non_empty_keys") val nonEmptyKeys: Int,
     @Json(name = "cookie_pairs") val cookiePairs: Int
-)
-
-data class XiaohongshuSyncCooldownData(
-    val mode: String = "",
-    val allowed: Boolean = false,
-    @Json(name = "remaining_seconds") val remainingSeconds: Int = 0,
-    @Json(name = "next_allowed_at_epoch") val nextAllowedAtEpoch: Long = 0,
-    @Json(name = "last_sync_at_epoch") val lastSyncAtEpoch: Long = 0,
-    @Json(name = "min_interval_seconds") val minIntervalSeconds: Int = 0,
-)
-
-data class XiaohongshuPendingCountData(
-    val mode: String = "",
-    @Json(name = "pending_count") val pendingCount: Int = 0,
-    @Json(name = "scanned_count") val scannedCount: Int = 0,
 )
 
 data class EditableConfigData(

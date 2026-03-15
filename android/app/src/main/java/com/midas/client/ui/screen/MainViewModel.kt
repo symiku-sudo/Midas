@@ -16,7 +16,6 @@ import com.midas.client.data.model.NotesMergeCommitData
 import com.midas.client.data.model.NotesMergePreviewData
 import com.midas.client.data.model.UnifiedNoteItem
 import com.midas.client.data.model.XiaohongshuSavedNote
-import com.midas.client.data.model.XiaohongshuSyncData
 import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.data.network.ServerAuthState
 import com.midas.client.data.repo.AssetImageUpload
@@ -74,27 +73,19 @@ data class BilibiliUiState(
 
 data class XiaohongshuUiState(
     val urlInput: String = "",
-    val batchLimitInput: String = "10",
     val isSummarizingUrl: Boolean = false,
     val isRefreshingCaptureConfig: Boolean = false,
-    val isRefreshingSyncMeta: Boolean = false,
     val isRecentJobsLoading: Boolean = false,
-    val isSavingAllNotes: Boolean = false,
     val savingSingleNoteIds: Set<String> = emptySet(),
     val savedNoteIds: Set<String> = emptySet(),
     val errorMessage: String = "",
     val saveStatus: String = "",
     val captureRefreshStatus: String = "",
     val summarizeUrlStatus: String = "",
-    val batchSyncStatus: String = "",
     val currentJobId: String = "",
     val currentJobType: String = "",
     val recentJobsStatus: String = "",
     val recentJobs: List<AsyncJobListItemData> = emptyList(),
-    val batchCooldownAllowed: Boolean = true,
-    val batchCooldownRemainingSeconds: Int = 0,
-    val batchPendingCount: Int = 0,
-    val batchScannedCount: Int = 0,
     val summaries: List<XiaohongshuSummaryItem> = emptyList(),
 )
 
@@ -150,7 +141,6 @@ private const val MAX_ASSET_IMAGE_UPLOAD = 5
 private const val ASYNC_JOB_POLL_INTERVAL_MS = 1500L
 private const val ASYNC_JOB_POLL_MAX_ATTEMPTS = 800
 private const val XIAOHONGSHU_SUMMARY_JOB_TYPE = "xiaohongshu_summarize_url"
-private const val XIAOHONGSHU_SYNC_JOB_TYPE = "xiaohongshu_sync"
 
 private fun defaultAssetDrafts(): List<AssetCategoryDraft> {
     return assetCategorySpecs.map { spec ->
@@ -948,22 +938,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 urlInput = newValue,
                 errorMessage = "",
                 summarizeUrlStatus = "",
-                batchSyncStatus = "",
                 currentJobId = "",
                 currentJobType = "",
                 saveStatus = "",
                 captureRefreshStatus = "",
-            )
-        }
-    }
-
-    fun onXiaohongshuBatchLimitInputChange(newValue: String) {
-        _xiaohongshuState.update {
-            it.copy(
-                batchLimitInput = newValue,
-                errorMessage = "",
-                batchSyncStatus = "",
-                saveStatus = "",
             )
         }
     }
@@ -985,7 +963,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     isSummarizingUrl = true,
                     errorMessage = "",
                     summarizeUrlStatus = "",
-                    batchSyncStatus = "",
                     currentJobId = "",
                     currentJobType = XIAOHONGSHU_SUMMARY_JOB_TYPE,
                     saveStatus = "",
@@ -1002,7 +979,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         )
                     }
                     refreshXiaohongshuAsyncJobs(baseUrl)
-                    refreshXiaohongshuSyncMeta(baseUrl)
                     awaitXiaohongshuSummaryJob(baseUrl, jobResult.data.jobId)
                 }
 
@@ -1013,73 +989,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             errorMessage = ErrorMessageMapper.format(
                                 code = jobResult.code,
                                 message = jobResult.message,
-                                context = ErrorContext.XIAOHONGSHU_SYNC,
-                            ),
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    fun startXiaohongshuBatchSync() {
-        val baseUrl = requireBaseUrl {
-            _xiaohongshuState.update { it.copy(errorMessage = "请先填写服务端地址。") }
-        } ?: return
-        val limitInput = _xiaohongshuState.value.batchLimitInput.trim()
-        val limit = if (limitInput.isBlank()) {
-            null
-        } else {
-            limitInput.toIntOrNull()
-        }
-        if (limitInput.isNotBlank() && (limit == null || limit <= 0 || limit > 100)) {
-            _xiaohongshuState.update {
-                it.copy(errorMessage = "批量同步数量需为 1-100 之间的整数。")
-            }
-            return
-        }
-
-        xiaohongshuSummaryJob?.cancel()
-        xiaohongshuSummaryJob = viewModelScope.launch {
-            _xiaohongshuState.update {
-                it.copy(
-                    isSummarizingUrl = true,
-                    errorMessage = "",
-                    summarizeUrlStatus = "",
-                    batchSyncStatus = "",
-                    saveStatus = "",
-                    captureRefreshStatus = "",
-                    currentJobId = "",
-                    currentJobType = XIAOHONGSHU_SYNC_JOB_TYPE,
-                )
-            }
-            when (val jobResult = apiRepository.createXiaohongshuSyncJob(baseUrl, limit, confirmLive = true)) {
-                is AppResult.Success -> {
-                    _xiaohongshuState.update {
-                        it.copy(
-                            currentJobId = jobResult.data.jobId,
-                            currentJobType = jobResult.data.jobType,
-                            batchSyncStatus = if (jobResult.data.progressTotal > 0) {
-                                "批量同步已提交，目标 ${jobResult.data.progressTotal} 条。"
-                            } else {
-                                "批量同步已提交，正在后台执行..."
-                            },
-                        )
-                    }
-                    refreshXiaohongshuAsyncJobs(baseUrl)
-                    refreshXiaohongshuSyncMeta(baseUrl)
-                    awaitXiaohongshuSummaryJob(baseUrl, jobResult.data.jobId)
-                }
-
-                is AppResult.Error -> {
-                    _xiaohongshuState.update {
-                        it.copy(
-                            isSummarizingUrl = false,
-                            currentJobType = "",
-                            errorMessage = ErrorMessageMapper.format(
-                                code = jobResult.code,
-                                message = jobResult.message,
-                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                                context = ErrorContext.XIAOHONGSHU_JOB,
                             ),
                         )
                     }
@@ -1129,55 +1039,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             saveStatus = ErrorMessageMapper.format(
                                 code = result.code,
                                 message = result.message,
-                                context = ErrorContext.XIAOHONGSHU_SYNC,
-                            ),
-                        )
-                    }
-                }
-            }
-        }
-    }
-
-    fun saveAllXiaohongshuSummaries() {
-        val baseUrl = requireBaseUrl {
-            _xiaohongshuState.update { it.copy(saveStatus = "请先填写服务端地址。") }
-        } ?: return
-        val current = _xiaohongshuState.value
-        val pendingItems = current.summaries.filter { it.noteId !in current.savedNoteIds }
-        if (pendingItems.isEmpty()) {
-            _xiaohongshuState.update { it.copy(saveStatus = "当前没有待保存的批量结果。") }
-            return
-        }
-
-        viewModelScope.launch {
-            _xiaohongshuState.update {
-                it.copy(
-                    isSavingAllNotes = true,
-                    saveStatus = "",
-                    errorMessage = "",
-                )
-            }
-            when (val result = apiRepository.saveXiaohongshuNotes(baseUrl, pendingItems)) {
-                is AppResult.Success -> {
-                    val savedIds = pendingItems.map { item -> item.noteId }.toSet()
-                    _xiaohongshuState.update {
-                        it.copy(
-                            isSavingAllNotes = false,
-                            savedNoteIds = it.savedNoteIds + savedIds,
-                            saveStatus = "已批量保存 ${result.data.savedCount} 篇小红书笔记。",
-                        )
-                    }
-                    loadSavedNotes()
-                }
-
-                is AppResult.Error -> {
-                    _xiaohongshuState.update {
-                        it.copy(
-                            isSavingAllNotes = false,
-                            saveStatus = ErrorMessageMapper.format(
-                                code = result.code,
-                                message = result.message,
-                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                                context = ErrorContext.XIAOHONGSHU_JOB,
                             ),
                         )
                     }
@@ -1237,7 +1099,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             errorMessage = ErrorMessageMapper.format(
                                 code = result.code,
                                 message = result.message,
-                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                                context = ErrorContext.XIAOHONGSHU_JOB,
                             ),
                         )
                     }
@@ -1290,7 +1152,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             errorMessage = ErrorMessageMapper.format(
                                 code = result.code,
                                 message = result.message,
-                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                                context = ErrorContext.XIAOHONGSHU_JOB,
                             ),
                         )
                     }
@@ -1307,7 +1169,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             refreshBilibiliAsyncJobs(baseUrl)
             refreshXiaohongshuAsyncJobs(baseUrl)
-            refreshXiaohongshuSyncMeta(baseUrl)
         }
     }
 
@@ -1326,16 +1187,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         } ?: return
         viewModelScope.launch {
             refreshXiaohongshuAsyncJobs(baseUrl)
-            refreshXiaohongshuSyncMeta(baseUrl)
-        }
-    }
-
-    fun refreshXiaohongshuSyncMeta() {
-        val baseUrl = requireBaseUrl {
-            _xiaohongshuState.update { it.copy(errorMessage = "请先填写服务端地址。") }
-        } ?: return
-        viewModelScope.launch {
-            refreshXiaohongshuSyncMeta(baseUrl)
         }
     }
 
@@ -1424,7 +1275,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     isSummarizingUrl = true,
                     errorMessage = "",
                     summarizeUrlStatus = "正在加载任务结果...（${normalizedJobId.take(8)}）",
-                    batchSyncStatus = "",
                     currentJobId = normalizedJobId,
                     currentJobType = "",
                 )
@@ -1448,31 +1298,32 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                     isSummarizingUrl = true,
                     errorMessage = "",
                     summarizeUrlStatus = "",
-                    batchSyncStatus = "",
                     saveStatus = "",
                     captureRefreshStatus = "",
                 )
             }
             when (val result = apiRepository.retryAsyncJob(baseUrl, normalizedJobId)) {
                 is AppResult.Success -> {
+                    if (result.data.jobType != XIAOHONGSHU_SUMMARY_JOB_TYPE) {
+                        _xiaohongshuState.update {
+                            it.copy(
+                                isSummarizingUrl = false,
+                                currentJobId = "",
+                                currentJobType = "",
+                                errorMessage = "该任务类型已下线，请改用单链接总结。",
+                            )
+                        }
+                        refreshXiaohongshuAsyncJobs(baseUrl)
+                        return@launch
+                    }
                     _xiaohongshuState.update {
                         it.copy(
                             currentJobId = result.data.jobId,
                             currentJobType = result.data.jobType,
-                            summarizeUrlStatus = if (result.data.jobType == XIAOHONGSHU_SUMMARY_JOB_TYPE) {
-                                "已重新提交后台总结...（${result.data.jobId.take(8)}）"
-                            } else {
-                                ""
-                            },
-                            batchSyncStatus = if (result.data.jobType == XIAOHONGSHU_SYNC_JOB_TYPE) {
-                                "已重新提交批量同步...（${result.data.jobId.take(8)}）"
-                            } else {
-                                ""
-                            },
+                            summarizeUrlStatus = "已重新提交后台总结...（${result.data.jobId.take(8)}）",
                         )
                     }
                     refreshXiaohongshuAsyncJobs(baseUrl)
-                    refreshXiaohongshuSyncMeta(baseUrl)
                     awaitXiaohongshuSummaryJob(baseUrl, result.data.jobId)
                 }
 
@@ -1481,11 +1332,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         it.copy(
                             isSummarizingUrl = false,
                             summarizeUrlStatus = "",
-                            batchSyncStatus = "",
                             errorMessage = ErrorMessageMapper.format(
                                 code = result.code,
                                 message = result.message,
-                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                                context = ErrorContext.XIAOHONGSHU_JOB,
                             ),
                         )
                     }
@@ -2466,7 +2316,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             val result = apiRepository.listAsyncJobs(
                 baseUrl = baseUrl,
                 limit = 6,
-                jobType = "$XIAOHONGSHU_SUMMARY_JOB_TYPE,$XIAOHONGSHU_SYNC_JOB_TYPE",
+                jobType = XIAOHONGSHU_SUMMARY_JOB_TYPE,
             )
         ) {
             is AppResult.Success -> {
@@ -2490,65 +2340,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         recentJobsStatus = ErrorMessageMapper.format(
                             code = result.code,
                             message = result.message,
-                            context = ErrorContext.XIAOHONGSHU_SYNC,
+                            context = ErrorContext.XIAOHONGSHU_JOB,
                         ),
                     )
                 }
             }
-        }
-    }
-
-    private suspend fun refreshXiaohongshuSyncMeta(baseUrl: String) {
-        _xiaohongshuState.update {
-            it.copy(
-                isRefreshingSyncMeta = true,
-                errorMessage = "",
-            )
-        }
-
-        val cooldownResult = apiRepository.getXiaohongshuSyncCooldown(baseUrl)
-        val pendingResult = apiRepository.getXiaohongshuPendingCount(baseUrl)
-        _xiaohongshuState.update { state ->
-            var nextState = state.copy(isRefreshingSyncMeta = false)
-            when (cooldownResult) {
-                is AppResult.Success -> {
-                    nextState = nextState.copy(
-                        batchCooldownAllowed = cooldownResult.data.allowed,
-                        batchCooldownRemainingSeconds = cooldownResult.data.remainingSeconds,
-                    )
-                }
-
-                is AppResult.Error -> {
-                    nextState = nextState.copy(
-                        errorMessage = ErrorMessageMapper.format(
-                            code = cooldownResult.code,
-                            message = cooldownResult.message,
-                            context = ErrorContext.XIAOHONGSHU_SYNC,
-                        ),
-                    )
-                }
-            }
-            when (pendingResult) {
-                is AppResult.Success -> {
-                    nextState = nextState.copy(
-                        batchPendingCount = pendingResult.data.pendingCount,
-                        batchScannedCount = pendingResult.data.scannedCount,
-                    )
-                }
-
-                is AppResult.Error -> {
-                    if (nextState.errorMessage.isBlank()) {
-                        nextState = nextState.copy(
-                            errorMessage = ErrorMessageMapper.format(
-                                code = pendingResult.code,
-                                message = pendingResult.message,
-                                context = ErrorContext.XIAOHONGSHU_SYNC,
-                            ),
-                        )
-                    }
-                }
-            }
-            nextState
         }
     }
 
@@ -2668,33 +2464,16 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         repeat(ASYNC_JOB_POLL_MAX_ATTEMPTS) { attempt ->
             when (val status = apiRepository.getAsyncJob(baseUrl, jobId)) {
                 is AppResult.Success -> {
-                    val jobType = status.data.jobType.trim().ifBlank { XIAOHONGSHU_SUMMARY_JOB_TYPE }
                     when (status.data.status) {
                         "PENDING", "RUNNING" -> {
-                            val previewSummaries = status.data.result?.toXiaohongshuSummaryItems().orEmpty()
                             _xiaohongshuState.update {
-                                val nextSummaries = if (previewSummaries.isEmpty()) {
-                                    it.summaries
-                                } else {
-                                    mergeXiaohongshuSummaries(it.summaries, previewSummaries)
-                                }
                                 it.copy(
-                                    summaries = nextSummaries,
                                     currentJobId = jobId,
-                                    currentJobType = jobType,
-                                    summarizeUrlStatus = if (jobType == XIAOHONGSHU_SUMMARY_JOB_TYPE) {
-                                        if (status.data.status == "PENDING") {
-                                            "任务排队中...（${jobId.take(8)}）"
-                                        } else {
-                                            "后台总结中...（${jobId.take(8)}）"
-                                        }
+                                    currentJobType = XIAOHONGSHU_SUMMARY_JOB_TYPE,
+                                    summarizeUrlStatus = if (status.data.status == "PENDING") {
+                                        "任务排队中...（${jobId.take(8)}）"
                                     } else {
-                                        ""
-                                    },
-                                    batchSyncStatus = if (jobType == XIAOHONGSHU_SYNC_JOB_TYPE) {
-                                        formatXiaohongshuBatchStatus(status.data.status, status.data.progress?.current, status.data.progress?.total, status.data.message, jobId)
-                                    } else {
-                                        it.batchSyncStatus
+                                        "后台总结中...（${jobId.take(8)}）"
                                     },
                                 )
                             }
@@ -2704,53 +2483,27 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         }
 
                         "SUCCEEDED" -> {
-                            if (jobType == XIAOHONGSHU_SYNC_JOB_TYPE) {
-                                val parsed = status.data.result?.toXiaohongshuSyncData()
-                                if (parsed == null) {
-                                    _xiaohongshuState.update {
-                                        it.copy(
-                                            isSummarizingUrl = false,
-                                            currentJobType = jobType,
-                                            batchSyncStatus = "",
-                                            errorMessage = "批量任务完成，但结果格式无法识别。",
-                                        )
-                                    }
-                                } else {
-                                    _xiaohongshuState.update {
-                                        it.copy(
-                                            isSummarizingUrl = false,
-                                            currentJobType = jobType,
-                                            summaries = mergeXiaohongshuSummaries(it.summaries, parsed.summaries),
-                                            summarizeUrlStatus = "",
-                                            batchSyncStatus = "批量同步完成：新增 ${parsed.newCount} 条，跳过 ${parsed.skippedCount} 条，失败 ${parsed.failedCount} 条。",
-                                        )
-                                    }
+                            val parsed = status.data.result?.toXiaohongshuSummaryItem()
+                            if (parsed == null) {
+                                _xiaohongshuState.update {
+                                    it.copy(
+                                        isSummarizingUrl = false,
+                                        currentJobType = XIAOHONGSHU_SUMMARY_JOB_TYPE,
+                                        summarizeUrlStatus = "",
+                                        errorMessage = "任务完成，但结果格式无法识别。",
+                                    )
                                 }
                             } else {
-                                val parsed = status.data.result?.toXiaohongshuSummaryItem()
-                                if (parsed == null) {
-                                    _xiaohongshuState.update {
-                                        it.copy(
-                                            isSummarizingUrl = false,
-                                            currentJobType = jobType,
-                                            summarizeUrlStatus = "",
-                                            errorMessage = "任务完成，但结果格式无法识别。",
-                                        )
-                                    }
-                                } else {
-                                    _xiaohongshuState.update {
-                                        it.copy(
-                                            isSummarizingUrl = false,
-                                            currentJobType = jobType,
-                                            summaries = mergeXiaohongshuSummaries(it.summaries, listOf(parsed)),
-                                            summarizeUrlStatus = "单篇笔记总结完成，可直接保存。",
-                                            batchSyncStatus = "",
-                                        )
-                                    }
+                                _xiaohongshuState.update {
+                                    it.copy(
+                                        isSummarizingUrl = false,
+                                        currentJobType = XIAOHONGSHU_SUMMARY_JOB_TYPE,
+                                        summaries = mergeXiaohongshuSummaries(it.summaries, listOf(parsed)),
+                                        summarizeUrlStatus = "单篇笔记总结完成，可直接保存。",
+                                    )
                                 }
                             }
                             refreshXiaohongshuAsyncJobs(baseUrl)
-                            refreshXiaohongshuSyncMeta(baseUrl)
                             return
                         }
 
@@ -2758,15 +2511,13 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             _xiaohongshuState.update {
                                 it.copy(
                                     isSummarizingUrl = false,
-                                    currentJobType = jobType,
-                                    summarizeUrlStatus = if (jobType == XIAOHONGSHU_SUMMARY_JOB_TYPE) "" else it.summarizeUrlStatus,
-                                    batchSyncStatus = if (jobType == XIAOHONGSHU_SYNC_JOB_TYPE) "" else it.batchSyncStatus,
+                                    currentJobType = XIAOHONGSHU_SUMMARY_JOB_TYPE,
+                                    summarizeUrlStatus = "",
                                     errorMessage = status.data.error?.message
                                         ?: status.data.message.ifBlank { "后台总结失败。" },
                                 )
                             }
                             refreshXiaohongshuAsyncJobs(baseUrl)
-                            refreshXiaohongshuSyncMeta(baseUrl)
                             return
                         }
                     }
@@ -2777,16 +2528,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                         it.copy(
                             isSummarizingUrl = false,
                             summarizeUrlStatus = "",
-                            batchSyncStatus = "",
                             errorMessage = ErrorMessageMapper.format(
                                 code = status.code,
                                 message = status.message,
-                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                                context = ErrorContext.XIAOHONGSHU_JOB,
                             ),
                         )
                     }
                     refreshXiaohongshuAsyncJobs(baseUrl)
-                    refreshXiaohongshuSyncMeta(baseUrl)
                     return
                 }
             }
@@ -2795,12 +2544,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             it.copy(
                 isSummarizingUrl = false,
                 summarizeUrlStatus = "",
-                batchSyncStatus = "",
                 errorMessage = "后台任务等待超时，请稍后重试。任务ID：$jobId",
             )
         }
         refreshXiaohongshuAsyncJobs(baseUrl)
-        refreshXiaohongshuSyncMeta(baseUrl)
     }
 
     private fun Map<String, Any?>.toBilibiliSummaryData(): BilibiliSummaryData? {
@@ -2835,32 +2582,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         )
     }
 
-    private fun Map<String, Any?>.toXiaohongshuSummaryItems(): List<XiaohongshuSummaryItem> {
-        val rawList = this["summaries"] as? List<*> ?: return emptyList()
-        return rawList.mapNotNull { rawItem ->
-            (rawItem as? Map<*, *>)?.entries
-                ?.associate { entry -> entry.key.toString() to entry.value }
-                ?.toXiaohongshuSummaryItem()
-        }
-    }
-
-    private fun Map<String, Any?>.toXiaohongshuSyncData(): XiaohongshuSyncData? {
-        val requestedLimit = intValue("requested_limit")
-        val summaries = toXiaohongshuSummaryItems()
-        if (requestedLimit <= 0 && summaries.isEmpty()) {
-            return null
-        }
-        return XiaohongshuSyncData(
-            requestedLimit = requestedLimit,
-            fetchedCount = intValue("fetched_count"),
-            newCount = intValue("new_count"),
-            skippedCount = intValue("skipped_count"),
-            failedCount = intValue("failed_count"),
-            circuitOpened = boolValue("circuit_opened"),
-            summaries = summaries,
-        )
-    }
-
     private fun mergeXiaohongshuSummaries(
         existing: List<XiaohongshuSummaryItem>,
         incoming: List<XiaohongshuSummaryItem>,
@@ -2873,25 +2594,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             }
         }
         return merged.values.toList()
-    }
-
-    private fun formatXiaohongshuBatchStatus(
-        status: String,
-        current: Int?,
-        total: Int?,
-        message: String,
-        jobId: String,
-    ): String {
-        val safeCurrent = current ?: 0
-        val safeTotal = total ?: 0
-        if (status == "PENDING") {
-            return "批量任务排队中...（${jobId.take(8)}）"
-        }
-        if (safeTotal > 0) {
-            val suffix = message.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()
-            return "批量同步中（$safeCurrent/$safeTotal）$suffix"
-        }
-        return message.ifBlank { "批量同步中...（${jobId.take(8)}）" }
     }
 
     private fun Map<String, Any?>.stringValue(key: String): String {
@@ -2911,15 +2613,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             is Float -> value.toInt()
             is String -> value.toIntOrNull() ?: 0
             else -> 0
-        }
-    }
-
-    private fun Map<String, Any?>.boolValue(key: String): Boolean {
-        return when (val value = this[key]) {
-            is Boolean -> value
-            is String -> value.equals("true", ignoreCase = true)
-            is Number -> value.toInt() != 0
-            else -> false
         }
     }
 
@@ -3057,7 +2750,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             errorMessage = ErrorMessageMapper.format(
                                 code = result.code,
                                 message = result.message,
-                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                                context = ErrorContext.XIAOHONGSHU_JOB,
                             ),
                         )
                     }
@@ -3085,7 +2778,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                             errorMessage = ErrorMessageMapper.format(
                                 code = result.code,
                                 message = result.message,
-                                context = ErrorContext.XIAOHONGSHU_SYNC,
+                                context = ErrorContext.XIAOHONGSHU_JOB,
                             ),
                         )
                     }

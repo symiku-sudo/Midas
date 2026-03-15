@@ -414,39 +414,6 @@ Success `data`:
 }
 ```
 
-## `POST /api/jobs/xiaohongshu/sync`
-
-用途：以异步任务方式批量同步最新小红书笔记，请求会立即返回 `job_id`，实际同步由服务端后台 worker 顺序执行。
-
-Request:
-
-```json
-{
-  "limit": 10,
-  "confirm_live": true
-}
-```
-
-Success `data`:
-
-```json
-{
-  "job_id": "f34f96ef0d824efea92df4b98a5dbfe4",
-  "job_type": "xiaohongshu_sync",
-  "status": "PENDING",
-  "message": "任务已入队，等待执行。",
-  "submitted_at": "2026-03-14 10:20:00",
-  "retry_of_job_id": "",
-  "progress_current": 0,
-  "progress_total": 10
-}
-```
-
-说明：
-- `limit` 可选，范围 `1~100`；留空时由服务端按默认批量上限执行。
-- `confirm_live=true` 表示确认本次会读取真实收藏列表并访问小红书上游。
-- 任务执行中会通过 `GET /api/jobs` 和 `GET /api/jobs/{job_id}` 暴露 `progress.current/total` 与部分 `summaries` 预览，方便客户端边跑边看。
-
 ## `GET /api/jobs`
 
 用途：读取最近异步任务历史。
@@ -454,8 +421,8 @@ Success `data`:
 Query：
 - `limit`：返回条数，默认 `20`，范围 `1~100`
 - `status`：可选，按 `PENDING/RUNNING/SUCCEEDED/FAILED/INTERRUPTED` 过滤
-- `job_type`：可选，当前支持 `bilibili_summarize`、`xiaohongshu_summarize_url`、`xiaohongshu_sync`
-  - 支持逗号分隔多个值，例如 `xiaohongshu_summarize_url,xiaohongshu_sync`
+- `job_type`：可选，当前支持 `bilibili_summarize`、`xiaohongshu_summarize_url`
+  - 支持逗号分隔多个值，例如 `bilibili_summarize,xiaohongshu_summarize_url`
 
 Success `data`:
 
@@ -483,7 +450,6 @@ Success `data`:
 
 字段说明：
 - `retry_of_job_id`：若本任务由历史失败/中断任务重试创建，则这里会记录原任务 `job_id`；首次提交时为空字符串。
-- `progress`：仅对带进度的任务返回；当前主要用于 `xiaohongshu_sync`。
 
 ## `GET /api/jobs/{job_id}`
 
@@ -521,7 +487,6 @@ Success `data`:
 失败说明：
 - 当 `job_id` 不存在时，返回 `404` + `JOB_NOT_FOUND`。
 - 服务启动时若发现历史任务残留在 `RUNNING`，会将其改写为 `INTERRUPTED`，并保留原请求体以便重新提交。
-- 对 `xiaohongshu_sync`，运行中 `result` 可能是一个预览对象，包含 `current/total/message/summaries`；完成后才会切换成最终 `XiaohongshuSyncData`。
 
 ## `POST /api/jobs/{job_id}/retry`
 
@@ -545,7 +510,6 @@ Success `data`:
 失败说明：
 - 当 `job_id` 不存在时，返回 `404` + `JOB_NOT_FOUND`。
 - 当原任务不是 `FAILED/INTERRUPTED`，或缺少原始请求参数时，返回 `400` + `INVALID_INPUT`。
-- 若原任务类型是 `xiaohongshu_sync`，重试时会沿用原始 `limit` 并重新计算进度总数。
 
 ## `POST /api/bilibili/summarize`
 
@@ -720,40 +684,6 @@ Success `data`:
 - 对视频型笔记，会走“音频导出 -> ASR 转写 -> LLM 总结”，并合并正文（若存在）。
 - 总结成功后会自动写入去重表 `xiaohongshu_synced_notes`。
 - 新生成的 `summary_markdown` 会追加“`## 评论区洞察（含点赞权重）`”章节（best-effort，不影响主摘要返回）。
-
-## `GET /api/xiaohongshu/sync/cooldown`
-
-用途：读取当前批量同步冷却状态，供客户端在“开始批量同步”前展示。
-
-Success `data`:
-
-```json
-{
-  "mode": "web_readonly",
-  "allowed": true,
-  "remaining_seconds": 0,
-  "next_allowed_at_epoch": 0,
-  "last_sync_at_epoch": 1710382800,
-  "min_interval_seconds": 120
-}
-```
-
-## `GET /api/xiaohongshu/sync/pending-count`
-
-用途：读取当前待同步的小红书笔记数量与扫描范围。
-
-Success `data`:
-
-```json
-{
-  "mode": "web_readonly",
-  "pending_count": 8,
-  "scanned_count": 30
-}
-```
-
-说明：
-- 为保证前端可快速刷新，该接口当前只扫描最近一小段收藏窗口（头部若干页），返回值更适合作为“近期待同步队列”的实时估计，而不是全量历史总数。
 
 ## `POST /api/notes/xiaohongshu/save-batch`
 
