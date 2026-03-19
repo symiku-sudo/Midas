@@ -3,16 +3,22 @@ package com.midas.client.ui.screen
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.RowScope
+import androidx.compose.foundation.layout.defaultMinSize
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -32,11 +38,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.Lifecycle
@@ -68,6 +77,7 @@ internal val SuccessStatusColor = Color(0xFF7BE5A6)
 internal val ErrorStatusColor = Color(0xFFFF9A9A)
 internal val WarningStatusColor = Color(0xFFFFD187)
 internal val LinkStatusColor = Color(0xFF8ED8FF)
+private const val WrappedTabThreshold = 4
 
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
@@ -413,28 +423,91 @@ internal fun GlassTabBar(
             )
             .padding(3.dp),
     ) {
-        TabRow(
-            selectedTabIndex = selectedTabIndex,
-            containerColor = Color.Transparent,
-            divider = {},
-            indicator = { tabPositions ->
-                TabRowDefaults.SecondaryIndicator(
-                    modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
-                    height = 2.dp,
-                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.95f),
-                )
-            },
-        ) {
-            labels.forEachIndexed { index, label ->
-                Tab(
-                    selected = selectedTabIndex == index,
-                    onClick = { onSelect(index) },
-                    selectedContentColor = MaterialTheme.colorScheme.onSurface,
-                    unselectedContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.76f),
-                    text = { SingleLineActionText(label) },
-                )
+        if (labels.size > WrappedTabThreshold) {
+            LazyRow(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .testTag("glass_tab_bar_scroll"),
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                contentPadding = PaddingValues(horizontal = 2.dp),
+            ) {
+                itemsIndexed(labels) { index, label ->
+                    GlassTabChip(
+                        label = label,
+                        selected = selectedTabIndex == index,
+                        onClick = { onSelect(index) },
+                        modifier = Modifier.widthIn(min = 104.dp),
+                    )
+                }
+            }
+        } else {
+            TabRow(
+                selectedTabIndex = selectedTabIndex,
+                containerColor = Color.Transparent,
+                divider = {},
+                indicator = { tabPositions ->
+                    TabRowDefaults.SecondaryIndicator(
+                        modifier = Modifier.tabIndicatorOffset(tabPositions[selectedTabIndex]),
+                        height = 2.dp,
+                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.95f),
+                    )
+                },
+            ) {
+                labels.forEachIndexed { index, label ->
+                    Tab(
+                        selected = selectedTabIndex == index,
+                        onClick = { onSelect(index) },
+                        selectedContentColor = MaterialTheme.colorScheme.onSurface,
+                        unselectedContentColor = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.76f),
+                        text = { SingleLineActionText(label) },
+                    )
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun GlassTabChip(
+    label: String,
+    selected: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val containerColor = if (selected) {
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.18f)
+    } else {
+        MaterialTheme.colorScheme.surface.copy(alpha = 0.18f)
+    }
+    val borderColor = if (selected) {
+        MaterialTheme.colorScheme.primary.copy(alpha = 0.72f)
+    } else {
+        MaterialTheme.colorScheme.outline.copy(alpha = 0.34f)
+    }
+    val textColor = if (selected) {
+        MaterialTheme.colorScheme.onSurface
+    } else {
+        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.82f)
+    }
+
+    Box(
+        modifier = modifier
+            .defaultMinSize(minHeight = 42.dp)
+            .border(width = 1.dp, color = borderColor, shape = RoundedCornerShape(16.dp))
+            .background(color = containerColor, shape = RoundedCornerShape(16.dp))
+            .clickable(onClick = onClick)
+            .padding(horizontal = 10.dp, vertical = 10.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        Text(
+            text = label,
+            style = MaterialTheme.typography.labelMedium,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Medium,
+            color = textColor,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            textAlign = TextAlign.Center,
+        )
     }
 }
 

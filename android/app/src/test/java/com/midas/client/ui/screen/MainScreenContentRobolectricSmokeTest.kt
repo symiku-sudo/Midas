@@ -1,21 +1,27 @@
 package com.midas.client.ui.screen
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
-import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.dp
 import com.midas.client.data.model.AsyncJobListItemData
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSummaryData
@@ -37,6 +43,36 @@ import org.robolectric.annotation.Config
 class MainScreenContentRobolectricSmokeTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    private fun clickTopSection(title: String) {
+        composeRule.onNodeWithTag("glass_tab_bar_scroll", useUnmergedTree = true)
+            .performScrollToNode(hasText(title))
+        composeRule.onNodeWithText(title, useUnmergedTree = true).performClick()
+        composeRule.waitForIdle()
+    }
+
+    @Test
+    fun glassTabBar_shouldKeepAllSectionsReachable_onCompactWidth() {
+        composeRule.setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.width(240.dp)) {
+                    GlassTabBar(
+                        selectedTabIndex = TopSection.HOME.ordinal,
+                        labels = TopSection.entries.map { it.title },
+                        onSelect = {},
+                    )
+                }
+            }
+        }
+
+        TopSection.entries.forEach { section ->
+            composeRule.onNodeWithTag("glass_tab_bar_scroll", useUnmergedTree = true)
+                .performScrollToNode(hasText(section.title))
+            val node = composeRule.onNodeWithText(section.title, useUnmergedTree = true)
+            node.assertIsDisplayed()
+            node.performClick()
+        }
+    }
 
     @Test
     fun smoke_clickMainButtons_withoutDevice_usesOnlyInjectedCallbacks() {
@@ -130,12 +166,10 @@ class MainScreenContentRobolectricSmokeTest {
         composeRule.onNodeWithText("开始总结").performClick()
         composeRule.onNodeWithText("保存总结").performClick()
 
-        composeRule.onNodeWithText("笔记").performClick()
-        composeRule.waitForIdle()
+        clickTopSection("笔记")
         composeRule.onNodeWithText("刷新笔记库").performScrollTo().performClick()
 
-        composeRule.onNodeWithText("设置").performClick()
-        composeRule.waitForIdle()
+        clickTopSection("设置")
         composeRule.onNodeWithText("保存").performClick()
         composeRule.onNodeWithText("连接测试").performClick()
         composeRule.onNodeWithText("恢复默认").performScrollTo().performClick()
@@ -273,8 +307,7 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("资产").performClick()
-        composeRule.waitForIdle()
+        clickTopSection("资产")
 
         composeRule.onAllNodesWithText("Watchlist").assertCountEquals(1)
         composeRule.onAllNodesWithText("24小时新闻摘要").assertCountEquals(1)
@@ -334,7 +367,7 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("资产").performClick()
+        clickTopSection("资产")
         composeRule.onNodeWithText("资产总览").performClick()
         composeRule.waitForIdle()
 
@@ -390,7 +423,7 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("资产").performClick()
+        clickTopSection("资产")
         composeRule.onNodeWithText("资产总览").performClick()
         composeRule.waitForIdle()
 
@@ -464,7 +497,7 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("资产").performClick()
+        clickTopSection("资产")
         composeRule.onNodeWithText("资产总览").performClick()
         composeRule.waitForIdle()
 
@@ -687,8 +720,7 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("笔记").performClick()
-        composeRule.waitForIdle()
+        clickTopSection("笔记")
         composeRule.onNodeWithText("B站笔记（1/1）").performScrollTo().assertIsDisplayed()
     }
 
@@ -744,8 +776,7 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("笔记").performClick()
-        composeRule.waitForIdle()
+        clickTopSection("笔记")
         composeRule.onNodeWithTag("saved_note_open_merged_note_abc123", useUnmergedTree = true)
             .performScrollTo()
             .performClick()
@@ -812,8 +843,7 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("笔记").performClick()
-        composeRule.waitForIdle()
+        clickTopSection("笔记")
         composeRule.onNodeWithTag("saved_note_open_b-normal-1", useUnmergedTree = true)
             .performScrollTo()
             .performClick()
