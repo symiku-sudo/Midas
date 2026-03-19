@@ -16,7 +16,7 @@ from app.api.routes import (
     _get_note_library_service,
     _get_xiaohongshu_service,
 )
-from app.core.config import get_settings
+from app.core.config import get_settings, resolve_runtime_path
 from app.main import app
 from app.models.schemas import (
     AsyncJobCreateData,
@@ -51,7 +51,7 @@ client = TestClient(app)
 
 
 def _notes_db_path() -> Path:
-    return Path(get_settings().xiaohongshu.db_path)
+    return resolve_runtime_path(get_settings().xiaohongshu.db_path)
 
 
 def _notes_backup_dir() -> Path:
@@ -1268,7 +1268,7 @@ def test_existing_merge_note_format_is_refreshed_for_legacy_markdown() -> None:
     merged_note_id = commit_resp.json()["data"]["merged_note_id"]
 
     legacy_markdown = "# 旧版合并笔记\n\n## 差异与冲突\n\n- 旧格式内容"
-    repo = NoteLibraryRepository(get_settings().xiaohongshu.db_path)
+    repo = NoteLibraryRepository(str(_notes_db_path()))
     updated_count = repo.update_bilibili_note_summary(
         note_id=merged_note_id,
         summary_markdown=legacy_markdown,
@@ -1347,7 +1347,7 @@ def test_legacy_merge_history_without_titles_is_rehydrated_from_markdown_links()
         f"- [历史标题一](<{first_url}>)\n"
         f"- [历史标题二](<{second_url}>)"
     )
-    repo = NoteLibraryRepository(get_settings().xiaohongshu.db_path)
+    repo = NoteLibraryRepository(str(_notes_db_path()))
     assert (
         repo.update_bilibili_note_summary(
             note_id=merged_note_id,
@@ -1455,7 +1455,7 @@ def test_existing_merge_history_with_duplicate_source_refs_is_collapsed_on_refre
     merge_id = merge_data["merge_id"]
     merged_note_id = merge_data["merged_note_id"]
 
-    repo = NoteLibraryRepository(get_settings().xiaohongshu.db_path)
+    repo = NoteLibraryRepository(str(_notes_db_path()))
     legacy_markdown = "# 旧版合并笔记\n\n- 占位内容"
     assert (
         repo.update_bilibili_note_summary(

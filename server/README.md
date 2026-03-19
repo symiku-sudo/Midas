@@ -188,6 +188,7 @@ runtime:
 - 仍保留“保存成功后立即备份”的原有行为。
 - 周期备份是额外兜底，主要覆盖“长时间无写入、但希望保留近期副本”的场景。
 - 实际数据库路径来自 `xiaohongshu.db_path`；默认是 `server/.tmp/midas.db`。
+- 若配置里使用相对路径（例如 `.tmp/midas.db`），会固定按 `server/` 目录解析，不受启动时当前工作目录影响。
 - `keep_latest_files` 只统计时间戳备份文件；`midas_latest.db` 始终保留。
 
 ## Refresh XHS auth config
@@ -436,8 +437,8 @@ curl -X POST http://127.0.0.1:8000/api/config/editable/reset
 - Default ASR mode is `faster_whisper` with `asr.model_size=base`.
 - Default LLM mode is enabled (`llm.enabled=true`); set `llm.api_key` before real run.
 - Default Xiaohongshu integration mode is `web_readonly`.
-- Synced note IDs persist in `xiaohongshu.db_path` (default `.tmp/midas.db`).
-- Async job history persists in `.tmp/async_jobs.json`.
+- Synced note IDs persist in `xiaohongshu.db_path` (default `.tmp/midas.db`, resolved under `server/`).
+- Async job history persists in `.tmp/async_jobs.json` (resolved under `server/`).
 - 单篇 URL 总结成功后会自动把 `note_id` 写入去重表。
 - 删除“已保存小红书笔记”不会删除去重表中的 `note_id`，后续按 URL 总结仍会复用已处理状态。
 - 每次新增 B 站或小红书已保存笔记后，服务会自动备份一次数据库到 `.tmp/backups/`。

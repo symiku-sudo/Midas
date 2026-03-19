@@ -178,6 +178,13 @@ def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+def resolve_runtime_path(raw_path: str | Path) -> Path:
+    candidate = Path(raw_path).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (_project_root() / candidate).resolve()
+
+
 def _load_dotenv(project_root: Path) -> None:
     dotenv_path = project_root / ".env"
     if not dotenv_path.exists():

@@ -12,7 +12,7 @@ from typing import Any
 
 import yaml
 
-from app.core.config import Settings
+from app.core.config import Settings, resolve_runtime_path
 from app.core.errors import AppError, ErrorCode
 from app.models.schemas import (
     FinanceFocusCardActionData,
@@ -48,7 +48,7 @@ class FinanceSignalsService:
         db_path = ""
         if settings is not None:
             runtime_temp_dir = settings.runtime.temp_dir
-            db_path = settings.xiaohongshu.db_path
+            db_path = str(resolve_runtime_path(settings.xiaohongshu.db_path))
         self._state_path = self._resolve_runtime_path(
             runtime_temp_dir,
             default_name="finance_focus_cards_state.json",

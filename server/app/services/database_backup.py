@@ -4,7 +4,7 @@ import asyncio
 import logging
 from pathlib import Path
 
-from app.core.config import Settings
+from app.core.config import Settings, resolve_runtime_path
 from app.repositories.note_repo import NoteLibraryRepository
 
 logger = logging.getLogger(__name__)
@@ -17,7 +17,7 @@ class PeriodicDatabaseBackupService:
         repository: NoteLibraryRepository | None = None,
     ) -> None:
         self._settings = settings
-        self._db_path = Path(settings.xiaohongshu.db_path).expanduser().resolve()
+        self._db_path = resolve_runtime_path(settings.xiaohongshu.db_path)
         self._repository = repository
         self._backup_dir = self._db_path.parent / "backups"
 

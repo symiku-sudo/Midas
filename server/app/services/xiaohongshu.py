@@ -14,7 +14,7 @@ from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlencode, urlpars
 
 import httpx
 
-from app.core.config import Settings
+from app.core.config import Settings, resolve_runtime_path
 from app.core.errors import AppError, ErrorCode
 from app.models.schemas import XiaohongshuSummaryItem
 from app.repositories.xiaohongshu_repo import XiaohongshuSyncRepository
@@ -2899,7 +2899,7 @@ class XiaohongshuService:
     ) -> None:
         self._settings = settings
         self._repository = repository or XiaohongshuSyncRepository(
-            settings.xiaohongshu.db_path
+            str(resolve_runtime_path(settings.xiaohongshu.db_path))
         )
         self._source = source or MockXiaohongshuSource(settings)
         self._web_source = web_source or XiaohongshuWebReadonlySource(settings)
@@ -3067,7 +3067,7 @@ class XiaohongshuService:
         )
 
     async def _transcribe_video_note(self, note: XiaohongshuNote) -> str:
-        base_temp = Path(self._settings.runtime.temp_dir)
+        base_temp = resolve_runtime_path(self._settings.runtime.temp_dir)
         job_dir = base_temp / f"xhs-video-{uuid.uuid4().hex}"
         job_dir.mkdir(parents=True, exist_ok=True)
 

@@ -10,7 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from app.core.config import Settings
+from app.core.config import Settings, resolve_runtime_path
 from app.core.errors import AppError, ErrorCode
 from app.models.schemas import (
     AsyncJobCreateData,
@@ -56,7 +56,7 @@ class AsyncJobService:
         self._settings = settings
         self._bilibili_runner = bilibili_runner
         self._xiaohongshu_runner = xiaohongshu_runner
-        self._store_path = Path(settings.runtime.temp_dir) / "async_jobs.json"
+        self._store_path = resolve_runtime_path(settings.runtime.temp_dir) / "async_jobs.json"
         self._queue: asyncio.Queue[str | None] = asyncio.Queue()
         self._jobs_by_id: dict[str, dict[str, Any]] = {}
         self._write_lock = asyncio.Lock()

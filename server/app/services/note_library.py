@@ -9,7 +9,7 @@ from difflib import SequenceMatcher
 from itertools import combinations
 from typing import Any
 
-from app.core.config import Settings
+from app.core.config import Settings, resolve_runtime_path
 from app.core.errors import AppError, ErrorCode
 from app.models.schemas import (
     BilibiliSavedNote,
@@ -95,7 +95,7 @@ class NoteLibraryService:
     ) -> None:
         self._settings = settings
         self._repository = repository or NoteLibraryRepository(
-            settings.xiaohongshu.db_path
+            str(resolve_runtime_path(settings.xiaohongshu.db_path))
         )
         self._llm = LLMService(settings)
         self._semantic_model: Any | None = None
