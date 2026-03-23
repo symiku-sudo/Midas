@@ -138,7 +138,7 @@ tools/finance_signals.sh stop
 ```
 
 说明：
-- 运行参数全部来自 `finance_signals/financial_config.yaml`。
+- 默认运行参数来自 `finance_signals/financial_config.yaml`；用户在客户端切换 Watchlist ntfy 开关时，只会写入 `finance_status.json`，不会改动仓库内 YAML。
 - `check` 会校验 `finance_status.json` 是否存在且更新时间未过期（阈值由 `runtime.health_max_staleness_seconds` 控制）。
 - 新闻面板现已输出“今日金融与时政新闻 Top5”，默认过滤 24 小时外旧新闻。
 - “过去 24 小时新闻摘要”改为客户端按钮触发；Worker 只维护新闻候选与 Top5，不再自动占用 LLM。
@@ -153,7 +153,7 @@ tools/finance_signals.sh stop
 - 可通过 `news.digest.max_items/max_summary_chars_per_item/prompt_char_limit/reuse_within_seconds` 控制摘要样本数、单条摘要截断长度、单次 prompt 文本长度上限，以及“3 小时内复用上次摘要”的窗口。
 - 可通过 `market_data.alerting.*` 配置 Watchlist 行情阈值告警；其状态会写入 `market_alert_debug`。
 - Watchlist ntfy 仅针对真正的阈值触发发送通知，`抓取异常/行情拉取为空/缺少收盘价` 只会留在面板，不会推送。
-- Watchlist ntfy 开关可通过 `PUT /api/finance/signals/watchlist-ntfy` 动态切换，worker 会在下一个轮询周期自动生效。
+- Watchlist ntfy 开关可通过 `PUT /api/finance/signals/watchlist-ntfy` 动态切换；该接口会把当前开关状态写入 `finance_status.json`，worker 会在下一个轮询周期自动生效。
 - 新闻摘要可通过 `POST /api/finance/signals/digest` 触发；Worker 会持续保留最近一次摘要结果，不会在后续轮询中覆盖为空。
 - Worker 会额外写出 `news_last_fetch_time`、`news_stale`（由 API 服务端计算）、`news_debug.entries_scanned/matched_entries_count/top_news_count/top_unmatched_titles/digest_item_count/digest_prompt_chars/digest_status/digest_last_generated_at`，便于定位召回漏检并观察摘要 prompt 长度。
 

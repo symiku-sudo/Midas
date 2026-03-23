@@ -236,7 +236,6 @@ async def update_finance_watchlist_ntfy(
 ) -> dict:
     service = _get_finance_signals_service()
     enabled = service.set_watchlist_ntfy_enabled(payload.enabled)
-    _reload_runtime_services()
     data = FinanceWatchlistNtfyData(enabled=enabled)
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 

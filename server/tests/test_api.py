@@ -191,7 +191,6 @@ def test_update_finance_watchlist_ntfy(monkeypatch) -> None:
         "_get_finance_signals_service",
         lambda: _FakeFinanceSignalsService(),
     )
-    monkeypatch.setattr(routes_module, "_reload_runtime_services", lambda: None)
 
     resp = client.put("/api/finance/signals/watchlist-ntfy", json={"enabled": False})
     assert resp.status_code == 200

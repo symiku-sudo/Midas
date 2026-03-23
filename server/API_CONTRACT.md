@@ -143,7 +143,7 @@ Success `data`:
 - `focus_cards[].reasons` 为触发理由代码，当前会覆盖 `threshold_triggered`、`related_news_present`、`keyword_overlap`、`recent_alert_sent`、`news_impacts_watchlist`、`linked_alert_active`、`multi_asset_impact`。
 - `watchlist_preview[].related_news_count/related_keywords` 表示该关注标的在当前 Top5 新闻里的关联数量与命中关键词。
 - `top_news[].related_symbols/related_watchlist_names` 表示该新闻可能影响的关注标的，服务端会根据 `finance_signals/financial_config.yaml` 里的 `market_data.instruments[].aliases` 做映射。
-- `watchlist_ntfy_enabled` 表示 Watchlist 行情阈值 ntfy 通知当前开关状态。
+- `watchlist_ntfy_enabled` 表示 Watchlist 行情阈值 ntfy 通知当前开关状态；接口切换后会持久化到 `finance_status.json`，配置文件只提供默认值。
 - `ai_insight_text` 仅在用户主动触发摘要按钮后写入；未触发时允许为空字符串。
 - `news_debug` 用于排查“有新闻但未进入 Top5”的召回/排序问题，以及观察 24 小时摘要的样本数与单次 prompt 文本长度。
 - `news_debug.entries_filtered_by_source` 反映白名单/黑名单过滤效果。
@@ -154,6 +154,10 @@ Success `data`:
 ## `PUT /api/finance/signals/watchlist-ntfy`
 
 用途：切换 Watchlist 行情阈值的 ntfy 通知开关。
+
+行为说明：
+- 当前开关状态会写入 `finance_status.json`，不会改写 `finance_signals/financial_config.yaml`。
+- 当状态文件里还没有该字段时，服务端会回退到 `financial_config.yaml` 里的 `market_data.alerting.enabled` 作为默认值。
 
 Request:
 

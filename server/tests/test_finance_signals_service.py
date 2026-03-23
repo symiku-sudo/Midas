@@ -148,8 +148,11 @@ market_data:
 
 def test_finance_signals_service_updates_watchlist_ntfy_toggle(tmp_path: Path) -> None:
     config_path = tmp_path / "financial_config.yaml"
+    status_path = tmp_path / "finance_status.json"
     config_path.write_text(
         """
+output:
+  status_file: "finance_status.json"
 market_data:
   alerting:
     enabled: true
@@ -163,6 +166,10 @@ market_data:
     assert service.get_watchlist_ntfy_enabled() is True
     assert service.set_watchlist_ntfy_enabled(False) is False
     assert service.get_watchlist_ntfy_enabled() is False
+    config_payload = config_path.read_text(encoding="utf-8")
+    assert "enabled: true" in config_payload
+    status_payload = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status_payload["watchlist_ntfy_enabled"] is False
 
 
 def test_finance_signals_service_links_news_with_watchlist_aliases(tmp_path: Path) -> None:

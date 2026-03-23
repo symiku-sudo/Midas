@@ -395,6 +395,29 @@ class FinanceSignalsService:
         return FinanceFocusCardHistoryData(total=len(items), items=items[:limit])
 
     def get_watchlist_ntfy_enabled(self) -> bool:
+        status_enabled = self._load_watchlist_ntfy_from_status()
+        if status_enabled is not None:
+            return status_enabled
+        return self._load_watchlist_ntfy_default()
+
+    def set_watchlist_ntfy_enabled(self, enabled: bool) -> bool:
+        normalized = bool(enabled)
+        status_path = self._resolve_status_path()
+        with _CONFIG_WRITE_LOCK:
+            payload = self._load_status_payload(status_path)
+            payload["watchlist_ntfy_enabled"] = normalized
+            self._write_json(status_path, payload)
+        return normalized
+
+    def _load_watchlist_ntfy_from_status(self) -> bool | None:
+        status_path = self._resolve_status_path()
+        payload = self._load_status_payload(status_path)
+        raw_enabled = payload.get("watchlist_ntfy_enabled")
+        if raw_enabled is None:
+            return None
+        return bool(raw_enabled)
+
+    def _load_watchlist_ntfy_default(self) -> bool:
         cfg = self._load_config()
         market_data = cfg.get("market_data")
         if not isinstance(market_data, dict):
@@ -403,21 +426,6 @@ class FinanceSignalsService:
         if not isinstance(alerting, dict):
             return False
         return bool(alerting.get("enabled", False))
-
-    def set_watchlist_ntfy_enabled(self, enabled: bool) -> bool:
-        with _CONFIG_WRITE_LOCK:
-            raw = self._load_config()
-            market_data = raw.get("market_data")
-            if not isinstance(market_data, dict):
-                market_data = {}
-                raw["market_data"] = market_data
-            alerting = market_data.get("alerting")
-            if not isinstance(alerting, dict):
-                alerting = {}
-                market_data["alerting"] = alerting
-            alerting["enabled"] = bool(enabled)
-            self._write_yaml(self._config_path, raw)
-        return bool(enabled)
 
     def _resolve_status_path(self) -> Path:
         status_file = "finance_status.json"
