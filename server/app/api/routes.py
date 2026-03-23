@@ -2,12 +2,11 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
 from functools import lru_cache
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, File, Query, Request, UploadFile
+from fastapi import APIRouter, Query, Request
 
 from app.core.config import clear_settings_cache, get_settings
 from app.core.errors import AppError, ErrorCode
@@ -16,12 +15,6 @@ from app.models.schemas import (
     AsyncJobCreateData,
     AsyncJobListData,
     AsyncJobStatusData,
-    AssetCurrentData,
-    AssetCurrentUpdateRequest,
-    AssetSnapshotHistoryData,
-    AssetSnapshotSaveRequest,
-    AssetSnapshotRecord,
-    AssetImageFillData,
     BilibiliNoteSaveRequest,
     BilibiliSummaryRequest,
     EditableConfigData,
@@ -32,7 +25,6 @@ from app.models.schemas import (
     FinanceWatchlistNtfyData,
     FinanceWatchlistNtfyUpdateRequest,
     HealthData,
-    HomeOverviewData,
     NotesMergeCommitData,
     NotesMergeCommitRequest,
     NotesMergeFinalizeData,
@@ -58,8 +50,6 @@ from app.models.schemas import (
 )
 from app.services.bilibili import BilibiliSummarizer
 from app.services.async_jobs import AsyncJobService
-from app.services.asset_image_fill import AssetImageFillService
-from app.services.asset_snapshots import AssetSnapshotService
 from app.services.editable_config import EditableConfigService
 from app.services.finance_signals import FinanceSignalsService
 from app.services.note_library import NoteLibraryService
@@ -97,18 +87,6 @@ def _get_finance_signals_service() -> FinanceSignalsService:
     return FinanceSignalsService(get_settings())
 
 
-@lru_cache(maxsize=1)
-def _get_asset_image_fill_service() -> AssetImageFillService:
-    settings = get_settings()
-    return AssetImageFillService(settings)
-
-
-@lru_cache(maxsize=1)
-def _get_asset_snapshot_service() -> AssetSnapshotService:
-    settings = get_settings()
-    return AssetSnapshotService(settings)
-
-
 def _reload_runtime_services() -> None:
     clear_settings_cache()
     _get_summarizer.cache_clear()
@@ -116,8 +94,6 @@ def _reload_runtime_services() -> None:
     _get_note_library_service.cache_clear()
     _get_editable_config_service.cache_clear()
     _get_finance_signals_service.cache_clear()
-    _get_asset_image_fill_service.cache_clear()
-    _get_asset_snapshot_service.cache_clear()
 
 
 def _get_async_job_service(request: Request) -> AsyncJobService:
@@ -225,38 +201,6 @@ async def health(request: Request) -> dict:
     return success_response(data=data, request_id=request.state.request_id)
 
 
-@router.get("/api/home/overview")
-async def get_home_overview(request: Request) -> dict:
-    async_job_service = _get_async_job_service(request)
-    notes_service = _get_note_library_service()
-    finance_service = _get_finance_signals_service()
-    asset_service = _get_asset_snapshot_service()
-
-    recent_jobs = await async_job_service.list_jobs(limit=5)
-    recent_notes = notes_service.search_notes(
-        limit=5,
-        offset=0,
-        sort_by="saved_at",
-        sort_order="desc",
-    )
-    finance_data = finance_service.get_dashboard_state()
-    asset_current = asset_service.get_current()
-
-    data = HomeOverviewData(
-        generated_at=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        recent_tasks=recent_jobs.items,
-        recent_notes=recent_notes.items,
-        finance_focus_cards=finance_data.focus_cards[:3],
-        quick_links=[
-            {"target": "bilibili", "title": "B站总结", "subtitle": "贴链接，走后台任务"},
-            {"target": "xiaohongshu", "title": "小红书单链", "subtitle": "总结后直接保存"},
-            {"target": "notes", "title": "笔记回看", "subtitle": "按筛选和时间回顾"},
-        ],
-        asset_total_amount_wan=asset_current.total_amount_wan,
-    )
-    return success_response(data=data.model_dump(), request_id=request.state.request_id)
-
-
 @router.get("/api/finance/signals")
 async def get_finance_signals(request: Request) -> dict:
     service = _get_finance_signals_service()
@@ -303,60 +247,6 @@ async def get_finance_focus_card_history(
 ) -> dict:
     service = _get_finance_signals_service()
     data: FinanceFocusCardHistoryData = service.get_focus_card_history(limit=limit)
-    return success_response(data=data.model_dump(), request_id=request.state.request_id)
-
-
-@router.post("/api/assets/fill-from-images")
-async def fill_asset_stats_from_images(
-    request: Request,
-    images: list[UploadFile] = File(...),
-) -> dict:
-    service = _get_asset_image_fill_service()
-    result: AssetImageFillData = await service.extract_from_uploads(images)
-    return success_response(data=result.model_dump(), request_id=request.state.request_id)
-
-
-@router.get("/api/assets/current")
-async def get_asset_current(request: Request) -> dict:
-    service = _get_asset_snapshot_service()
-    data: AssetCurrentData = service.get_current()
-    return success_response(data=data.model_dump(), request_id=request.state.request_id)
-
-
-@router.put("/api/assets/current")
-async def save_asset_current(payload: AssetCurrentUpdateRequest, request: Request) -> dict:
-    service = _get_asset_snapshot_service()
-    data: AssetCurrentData = service.save_current(
-        total_amount_wan=payload.total_amount_wan,
-        amounts=payload.amounts,
-    )
-    return success_response(data=data.model_dump(), request_id=request.state.request_id)
-
-
-@router.get("/api/assets/snapshots")
-async def list_asset_snapshots(request: Request) -> dict:
-    service = _get_asset_snapshot_service()
-    data: AssetSnapshotHistoryData = service.list_history()
-    return success_response(data=data.model_dump(), request_id=request.state.request_id)
-
-
-@router.post("/api/assets/snapshots")
-async def save_asset_snapshot(payload: AssetSnapshotSaveRequest, request: Request) -> dict:
-    service = _get_asset_snapshot_service()
-    data: AssetSnapshotRecord = service.save_snapshot(
-        record_id=payload.id,
-        saved_at=payload.saved_at,
-        total_amount_wan=payload.total_amount_wan,
-        amounts=payload.amounts,
-    )
-    return success_response(data=data.model_dump(), request_id=request.state.request_id)
-
-
-@router.delete("/api/assets/snapshots/{record_id}")
-async def delete_asset_snapshot(record_id: str, request: Request) -> dict:
-    service = _get_asset_snapshot_service()
-    deleted_count = service.delete_snapshot(record_id)
-    data = NotesDeleteData(deleted_count=deleted_count)
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 

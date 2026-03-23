@@ -152,41 +152,6 @@ data class FinanceWatchlistNtfyData(
     val enabled: Boolean,
 )
 
-data class AssetImageFillData(
-    @Json(name = "image_count") val imageCount: Int,
-    @Json(name = "category_amounts") val categoryAmounts: Map<String, Double>,
-    @Json(name = "total_amount_wan") val totalAmountWan: Double,
-)
-
-data class AssetSnapshotRecordData(
-    val id: String,
-    @Json(name = "saved_at") val savedAt: String,
-    @Json(name = "total_amount_wan") val totalAmountWan: Double,
-    val amounts: Map<String, Double>,
-)
-
-data class AssetCurrentData(
-    @Json(name = "total_amount_wan") val totalAmountWan: Double,
-    val amounts: Map<String, Double>,
-)
-
-data class AssetSnapshotHistoryData(
-    val total: Int,
-    val items: List<AssetSnapshotRecordData>,
-)
-
-data class AssetSnapshotSaveRequest(
-    val id: String = "",
-    @Json(name = "saved_at") val savedAt: String = "",
-    @Json(name = "total_amount_wan") val totalAmountWan: Double,
-    val amounts: Map<String, Double>,
-)
-
-data class AssetCurrentUpdateRequest(
-    @Json(name = "total_amount_wan") val totalAmountWan: Double,
-    val amounts: Map<String, Double>,
-)
-
 data class AsyncJobCreateData(
     @Json(name = "job_id") val jobId: String,
     @Json(name = "job_type") val jobType: String,
@@ -346,21 +311,6 @@ data class RelatedNotesData(
     @Json(name = "note_id") val noteId: String,
     val total: Int,
     val items: List<RelatedNoteItem> = emptyList(),
-)
-
-data class HomeQuickLinkItem(
-    val target: String,
-    val title: String,
-    val subtitle: String = "",
-)
-
-data class HomeOverviewData(
-    @Json(name = "generated_at") val generatedAt: String,
-    @Json(name = "recent_tasks") val recentTasks: List<AsyncJobListItemData> = emptyList(),
-    @Json(name = "recent_notes") val recentNotes: List<UnifiedNoteItem> = emptyList(),
-    @Json(name = "finance_focus_cards") val financeFocusCards: List<FinanceFocusCard> = emptyList(),
-    @Json(name = "quick_links") val quickLinks: List<HomeQuickLinkItem> = emptyList(),
-    @Json(name = "asset_total_amount_wan") val assetTotalAmountWan: Double = 0.0,
 )
 
 data class XiaohongshuSummarizeUrlRequest(

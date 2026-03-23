@@ -487,18 +487,3 @@ class EditableConfigData(BaseModel):
 
 class EditableConfigUpdateRequest(BaseModel):
     settings: dict[str, Any]
-
-
-class HomeQuickLinkItem(BaseModel):
-    target: str
-    title: str
-    subtitle: str = ""
-
-
-class HomeOverviewData(BaseModel):
-    generated_at: str
-    recent_tasks: list[AsyncJobListItem] = Field(default_factory=list)
-    recent_notes: list[UnifiedNoteItem] = Field(default_factory=list)
-    finance_focus_cards: list[FinanceFocusCard] = Field(default_factory=list)
-    quick_links: list[HomeQuickLinkItem] = Field(default_factory=list)
-    asset_total_amount_wan: float = 0.0

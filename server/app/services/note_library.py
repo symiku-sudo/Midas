@@ -66,7 +66,10 @@ _MEDIUM_SUMMARY_MIN = 0.62
 _MEDIUM_KEYWORD_MIN = 0.08
 _ASCII_TOKEN_PATTERN = re.compile(r"[0-9a-z]+")
 _CJK_BLOCK_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
-_TOPIC_PHRASE_PATTERN = re.compile(r"[0-9A-Za-z\u4e00-\u9fff]{2,16}")
+_TOPIC_PHRASE_PATTERN = re.compile(
+    r"[A-Za-z][A-Za-z0-9.+#/\-]{1,23}|[0-9]+[A-Za-z][A-Za-z0-9.+#/\-]{1,23}|[\u4e00-\u9fff]{2,18}"
+)
+_TOPIC_SPLIT_PATTERN = re.compile(r"[|｜/·•,:：;；()（）\[\]【】<>《》“”\"'、]+")
 _ASCII_STOPWORDS = {
     "the",
     "and",
@@ -83,8 +86,49 @@ _ASCII_STOPWORDS = {
     "were",
     "can",
     "will",
+    "note",
+    "notes",
+    "summary",
+    "review",
+    "report",
+    "update",
+    "guide",
+    "tips",
+    "issue",
 }
 _CJK_STOPWORDS = {"的", "了", "和", "是", "在", "与", "及", "并", "对", "将"}
+_TOPIC_GENERIC_LABELS = {
+    "摘要",
+    "总结",
+    "关键要点",
+    "可执行建议",
+    "评论区洞察",
+    "高赞分析",
+    "样本说明",
+    "原文链接",
+    "数据来源",
+    "最近一周",
+    "最近一月",
+    "未分类",
+}
+_TOPIC_SUFFIXES = (
+    "报告",
+    "总结",
+    "摘要",
+    "分析",
+    "复盘",
+    "随记",
+    "笔记",
+    "分享",
+    "教程",
+    "指南",
+    "盘点",
+    "详解",
+    "记录",
+    "观察",
+    "合集",
+    "求助",
+)
 
 
 class NoteLibraryService:
@@ -251,14 +295,21 @@ class NoteLibraryService:
             saved_from=window_start,
             sort_by="saved_at",
             sort_order="desc",
-            limit=max(limit * per_topic_limit * 4, 60),
+            limit=max(limit * per_topic_limit * 8, 120),
         )
         grouped: dict[str, list[UnifiedNoteItem]] = {}
         for row in rows:
             item = self._build_unified_note_item(row)
-            topics = item.topics or ["未分类"]
-            primary_topic = topics[0]
-            grouped.setdefault(primary_topic, []).append(item)
+            unique_topics = []
+            seen_topics: set[str] = set()
+            for topic in item.topics or ["未分类"]:
+                normalized = topic.strip()
+                if not normalized or normalized in seen_topics:
+                    continue
+                seen_topics.add(normalized)
+                unique_topics.append(normalized)
+            for topic in unique_topics or ["未分类"]:
+                grouped.setdefault(topic, []).append(item)
 
         ranked_topics = sorted(
             grouped.items(),
@@ -1103,31 +1154,134 @@ class NoteLibraryService:
         summary_markdown: str,
         limit: int = 3,
     ) -> list[str]:
+        headline = self._extract_h1_title(summary_markdown, fallback=title)
+        weighted_texts: list[tuple[str, int]] = []
+        for text, weight in [
+            (title, 8),
+            (headline, 7),
+            *[(heading, 5) for heading in self._extract_markdown_headings(summary_markdown, limit=6)],
+            (self._summary_excerpt(summary_markdown, limit=320), 2),
+        ]:
+            normalized_text = text.strip()
+            if normalized_text:
+                weighted_texts.append((normalized_text, weight))
+
+        scores: dict[str, int] = {}
+        display: dict[str, str] = {}
+        source_hits: dict[str, int] = {}
+        for source_text, weight in weighted_texts:
+            source_seen: set[str] = set()
+            ranked_candidates = self._collect_topic_candidates(source_text)
+            for index, raw_candidate in enumerate(ranked_candidates):
+                candidate = self._normalize_topic_candidate(raw_candidate)
+                if not candidate:
+                    continue
+                key = candidate.lower() if candidate.isascii() else candidate
+                score = weight + max(0, 4 - index)
+                if any(ch.isdigit() for ch in candidate):
+                    score += 2
+                if re.search(r"[A-Z]{2,}", raw_candidate):
+                    score += 1
+                scores[key] = scores.get(key, 0) + score
+                display.setdefault(key, candidate)
+                if key not in source_seen:
+                    source_hits[key] = source_hits.get(key, 0) + 1
+                    source_seen.add(key)
+
+        ranked = sorted(
+            display,
+            key=lambda key: (
+                -(scores.get(key, 0) + source_hits.get(key, 0) * 3),
+                -len(display[key]),
+                display[key],
+            ),
+        )
+        topics = [display[key] for key in ranked[:limit]]
+        if len(topics) < limit:
+            fallback_candidates = []
+            seen_topics = {topic.lower() if topic.isascii() else topic for topic in topics}
+            for token in self._tokenize(f"{title}\n{headline}\n{summary_markdown[:320]}"):
+                candidate = self._normalize_topic_candidate(token)
+                if not candidate:
+                    continue
+                key = candidate.lower() if candidate.isascii() else candidate
+                if key in seen_topics:
+                    continue
+                seen_topics.add(key)
+                fallback_candidates.append(candidate)
+                if len(topics) + len(fallback_candidates) >= limit:
+                    break
+            topics.extend(fallback_candidates)
+        return topics[:limit] or ["未分类"]
+
+    def _extract_markdown_headings(self, markdown: str, *, limit: int = 6) -> list[str]:
+        headings: list[str] = []
+        for raw_line in markdown.splitlines():
+            line = raw_line.strip()
+            if not line.startswith("#"):
+                continue
+            text = line.lstrip("#").strip()
+            normalized = self._normalize_topic_candidate(text)
+            if normalized:
+                headings.append(normalized)
+            if len(headings) >= limit:
+                break
+        return headings
+
+    def _collect_topic_candidates(self, text: str) -> list[str]:
         candidates: list[str] = []
         seen: set[str] = set()
-        headline = self._extract_h1_title(summary_markdown, fallback=title)
-        for source_text in [title, headline]:
-            for raw in _TOPIC_PHRASE_PATTERN.findall(source_text):
-                candidate = raw.strip()
-                lowered = candidate.lower()
-                if len(candidate) < 2 or lowered in seen or candidate.isdigit():
+        for clause in _TOPIC_SPLIT_PATTERN.split(text):
+            normalized_clause = self._normalize_topic_candidate(clause)
+            if normalized_clause:
+                key = normalized_clause.lower() if normalized_clause.isascii() else normalized_clause
+                if key not in seen:
+                    seen.add(key)
+                    candidates.append(normalized_clause)
+            for raw in _TOPIC_PHRASE_PATTERN.findall(clause):
+                normalized = self._normalize_topic_candidate(raw)
+                if not normalized:
                     continue
-                if lowered in _ASCII_STOPWORDS or candidate in _CJK_STOPWORDS:
+                key = normalized.lower() if normalized.isascii() else normalized
+                if key in seen:
                     continue
-                seen.add(lowered)
-                candidates.append(candidate[:16])
-                if len(candidates) >= limit:
-                    return candidates
+                seen.add(key)
+                candidates.append(normalized)
+        return candidates
 
-        for token in self._tokenize(f"{title}\n{headline}\n{summary_markdown[:280]}"):
-            lowered = token.lower()
-            if len(token) < 2 or lowered in seen:
-                continue
-            seen.add(lowered)
-            candidates.append(token[:16])
-            if len(candidates) >= limit:
+    def _normalize_topic_candidate(self, raw: str) -> str:
+        candidate = raw.strip().strip("-:：|/·•()[]【】<>《》“”\"' ")
+        if not candidate:
+            return ""
+        candidate = re.sub(r"^(摘要|总结|关键要点|可执行建议|评论区洞察|高赞分析|样本说明|原文链接|数据来源)[:：]?", "", candidate).strip()
+        if not candidate:
+            return ""
+        candidate = re.sub(r"\s+", " ", candidate)
+        if candidate in _TOPIC_GENERIC_LABELS:
+            return ""
+        if candidate.isdigit():
+            return ""
+        lowered = candidate.lower()
+        if lowered in _ASCII_STOPWORDS:
+            return ""
+        if candidate in _CJK_STOPWORDS:
+            return ""
+        if self._contains_cjk(candidate):
+            candidate = self._strip_topic_suffix(candidate)
+        if len(candidate) < 2:
+            return ""
+        return candidate[:18]
+
+    def _strip_topic_suffix(self, value: str) -> str:
+        candidate = value
+        for suffix in _TOPIC_SUFFIXES:
+            if candidate.endswith(suffix) and len(candidate) - len(suffix) >= 2:
+                candidate = candidate[: -len(suffix)].strip()
                 break
-        return candidates or ["未分类"]
+        return candidate
+
+    def _contains_cjk(self, value: str) -> bool:
+        return bool(_CJK_BLOCK_PATTERN.search(value))
 
     def _summary_excerpt(self, markdown: str, limit: int = 120) -> str:
         lines: list[str] = []

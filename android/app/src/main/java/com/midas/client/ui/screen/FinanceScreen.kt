@@ -1,12 +1,7 @@
 package com.midas.client.ui.screen
 
-import android.content.ClipData
-import android.content.ClipboardManager
-import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -29,7 +24,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -40,35 +34,24 @@ import com.midas.client.data.model.FinanceWatchlistItem
 import com.midas.client.ui.components.MarkdownText
 import java.util.Locale
 
-private enum class AssetPanelTab(val title: String) {
-    MARKET("市场信号"),
-    ASSET_STATS("资产总览"),
-}
-
 @Composable
 internal fun FinanceSignalsPanel(
     state: FinanceSignalsUiState,
     onRefresh: () -> Unit,
-    onAssetAmountChange: (String, String) -> Unit,
-    onSaveAssetStats: () -> Unit,
-    onDeleteAssetHistoryRecord: (String) -> Unit,
-    onAssetSummaryCopied: () -> Unit,
     onGenerateFinanceNewsDigest: () -> Unit,
     onToggleWatchlistNtfy: (Boolean) -> Unit,
     onDismissFocusCard: (FinanceFocusCard) -> Unit,
     onRestoreFocusCards: () -> Unit,
     onUpdateFocusCardStatus: (String, String) -> Unit,
-    onFillAssetStatsFromImages: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    var selectedAssetTab by remember { mutableStateOf(AssetPanelTab.MARKET) }
     var showAllNews by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("资产系统", style = MaterialTheme.typography.titleMedium)
+        Text("财经信号", style = MaterialTheme.typography.titleMedium)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -110,14 +93,7 @@ internal fun FinanceSignalsPanel(
             }
         }
 
-        GlassTabBar(
-            selectedTabIndex = selectedAssetTab.ordinal,
-            labels = AssetPanelTab.entries.map { it.title },
-            onSelect = { index -> selectedAssetTab = AssetPanelTab.entries[index] },
-        )
-
-        if (selectedAssetTab == AssetPanelTab.MARKET) {
-            if (state.focusCards.isNotEmpty()) {
+        if (state.focusCards.isNotEmpty()) {
                 GlassCard(modifier = Modifier.fillMaxWidth()) {
                     Column(
                         modifier = Modifier.padding(12.dp),
@@ -322,16 +298,6 @@ internal fun FinanceSignalsPanel(
                         isLoading = state.isLoading,
                     )
                 }
-            }
-        } else {
-            AssetStatsCard(
-                state = state,
-                onAssetAmountChange = onAssetAmountChange,
-                onSaveAssetStats = onSaveAssetStats,
-                onDeleteAssetHistoryRecord = onDeleteAssetHistoryRecord,
-                onAssetSummaryCopied = onAssetSummaryCopied,
-                onFillAssetStatsFromImages = onFillAssetStatsFromImages,
-            )
         }
 
         if (state.errorMessage.isNotBlank()) {
@@ -341,10 +307,6 @@ internal fun FinanceSignalsPanel(
             Text(text = state.statusMessage, color = SuccessStatusColor)
         }
     }
-}
-
-private fun formatAmountWanRmb(amount: Double): String {
-    return "${"%.2f".format(Locale.US, amount)} 万元人民币"
 }
 
 @Composable
@@ -539,340 +501,6 @@ private fun financeReasonLabel(code: String): String {
         "linked_alert_active" -> "关联标的已触发阈值"
         "multi_asset_impact" -> "影响多个标的"
         else -> code
-    }
-}
-
-private data class AssetBreakdownItem(
-    val label: String,
-    val amountWan: Double,
-)
-
-private fun collectNonZeroAssetBreakdown(
-    drafts: List<AssetCategoryDraft>,
-): List<AssetBreakdownItem> {
-    return drafts.mapNotNull { draft ->
-        val amount = draft.amountInput.trim().replace(",", "").toDoubleOrNull() ?: 0.0
-        if (amount > 0.0) {
-            AssetBreakdownItem(label = draft.label, amountWan = amount)
-        } else {
-            null
-        }
-    }.sortedByDescending { it.amountWan }
-}
-
-@Composable
-private fun AssetStatsCard(
-    state: FinanceSignalsUiState,
-    onAssetAmountChange: (String, String) -> Unit,
-    onSaveAssetStats: () -> Unit,
-    onDeleteAssetHistoryRecord: (String) -> Unit,
-    onAssetSummaryCopied: () -> Unit,
-    onFillAssetStatsFromImages: () -> Unit,
-) {
-    val context = LocalContext.current
-    var selectedHistoryId by remember { mutableStateOf<String?>(null) }
-    val selectedHistory = state.assetHistory.firstOrNull { it.id == selectedHistoryId }
-    val nonZeroBreakdown = collectNonZeroAssetBreakdown(state.assetDrafts)
-    var showEditor by remember(state.assetHistory.size) {
-        mutableStateOf(state.assetHistory.isEmpty() && nonZeroBreakdown.isEmpty())
-    }
-    var showHistory by remember(state.assetHistory.size) { mutableStateOf(false) }
-    BackHandler(enabled = selectedHistoryId != null) {
-        selectedHistoryId = null
-    }
-
-    if (selectedHistory != null) {
-        AssetHistoryDetailPanel(
-            record = selectedHistory,
-            drafts = state.assetDrafts,
-            onBack = { selectedHistoryId = null },
-        )
-        return
-    }
-
-    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        GlassCard(modifier = Modifier.fillMaxWidth()) {
-            Column(
-                modifier = Modifier.padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(10.dp),
-            ) {
-                Text("资产总览", style = MaterialTheme.typography.titleSmall)
-                Text(
-                    text = formatAmountWanRmb(state.assetTotalAmount),
-                    style = MaterialTheme.typography.headlineSmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-                Text(
-                    text = if (state.assetHistory.isNotEmpty()) {
-                        "最近保存：${state.assetHistory.first().savedAt}"
-                    } else {
-                        "最近保存：暂无历史记录"
-                    },
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    text = "非零分类 ${nonZeroBreakdown.size} 项 · 历史记录 ${state.assetHistory.size} 条",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                if (nonZeroBreakdown.isEmpty()) {
-                    Text(
-                        "还没有录入资产分类，先展开下方“编辑资产分类”。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                } else {
-                    nonZeroBreakdown.take(3).forEach { item ->
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Text(
-                                text = item.label,
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            )
-                            Text(
-                                text = formatAmountWanRmb(item.amountWan),
-                                style = MaterialTheme.typography.bodySmall,
-                                fontWeight = FontWeight.SemiBold,
-                            )
-                        }
-                    }
-                    if (nonZeroBreakdown.size > 3) {
-                        Text(
-                            "其余 ${nonZeroBreakdown.size - 3} 项已折叠到编辑区。",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                MidasButton(
-                    onClick = { showEditor = !showEditor },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("asset_toggle_editor_button"),
-                    tone = if (showEditor) ButtonTone.NEUTRAL else ButtonTone.SUCCESS,
-                ) {
-                    SingleLineActionText(if (showEditor) "收起资产录入" else "编辑资产分类")
-                }
-                if (state.assetHistory.isNotEmpty()) {
-                    MidasButton(
-                        onClick = { showHistory = !showHistory },
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("asset_toggle_history_button"),
-                        tone = ButtonTone.NEUTRAL,
-                    ) {
-                        SingleLineActionText(
-                            if (showHistory) {
-                                "收起历史记录"
-                            } else {
-                                "查看历史记录（${state.assetHistory.size}）"
-                            },
-                        )
-                    }
-                }
-                MidasButton(
-                    onClick = {
-                        val text = buildAssetSummaryText(state)
-                        val clipboard = context.getSystemService(ClipboardManager::class.java)
-                        clipboard?.setPrimaryClip(ClipData.newPlainText("asset_summary", text))
-                        onAssetSummaryCopied()
-                    },
-                    enabled = !state.isFillingAssetFromImages,
-                    modifier = Modifier.fillMaxWidth(),
-                    tone = ButtonTone.NEUTRAL,
-                ) {
-                    SingleLineActionText("复制资产情况")
-                }
-                if (state.assetErrorMessage.isNotBlank()) {
-                    Text(text = state.assetErrorMessage, color = ErrorStatusColor)
-                }
-                if (state.assetStatusMessage.isNotBlank()) {
-                    Text(text = state.assetStatusMessage, color = SuccessStatusColor)
-                }
-            }
-        }
-
-        if (showEditor) {
-            GlassCard(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text("资产分类录入", style = MaterialTheme.typography.titleSmall)
-                    Text(
-                        "按风险从高到低排序，单位：万元人民币。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    state.assetDrafts.forEach { draft ->
-                        OutlinedTextField(
-                            value = draft.amountInput,
-                            onValueChange = { value ->
-                                onAssetAmountChange(draft.key, value)
-                            },
-                            label = { Text(draft.label) },
-                            placeholder = { Text("例如：12.50（万元）") },
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("asset_amount_${draft.key}"),
-                            singleLine = true,
-                        )
-                    }
-                    MidasButton(
-                        onClick = onSaveAssetStats,
-                        enabled = !state.isSavingAssetStats && !state.isFillingAssetFromImages,
-                        modifier = Modifier.fillMaxWidth(),
-                        tone = ButtonTone.SUCCESS,
-                    ) {
-                        SingleLineActionText(
-                            if (state.isSavingAssetStats) "保存中..." else "保存资产统计",
-                        )
-                    }
-                    MidasButton(
-                        onClick = onFillAssetStatsFromImages,
-                        enabled = !state.isFillingAssetFromImages && !state.isSavingAssetStats,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("asset_fill_from_images_button"),
-                    ) {
-                        SingleLineActionText(
-                            if (state.isFillingAssetFromImages) "识别中..." else "图片识别回填",
-                        )
-                    }
-                    Text(
-                        text = "支持最多上传 5 张图片，回填后不会自动保存。",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                }
-            }
-        }
-
-        if (showHistory) {
-            GlassCard(modifier = Modifier.fillMaxWidth()) {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text("历史记录（近到远）", style = MaterialTheme.typography.titleSmall)
-                    state.assetHistory.forEach { record ->
-                        AssetHistoryListItem(
-                            record = record,
-                            onOpen = { selectedHistoryId = record.id },
-                            onDelete = { onDeleteAssetHistoryRecord(record.id) },
-                        )
-                    }
-                }
-            }
-        }
-    }
-}
-
-private fun buildAssetSummaryText(state: FinanceSignalsUiState): String {
-    val lines = mutableListOf<String>()
-    lines += "资产情况（单位：万元人民币）"
-    var nonZeroCount = 0
-    state.assetDrafts.forEach { draft ->
-        val amount = draft.amountInput.trim().replace(",", "").toDoubleOrNull() ?: 0.0
-        if (amount > 0.0) {
-            lines += "${draft.label}：${formatAmountWanRmb(amount)}"
-            nonZeroCount += 1
-        }
-    }
-    if (nonZeroCount == 0) {
-        lines += "暂无已填资产。"
-    }
-    lines += "总资产：${formatAmountWanRmb(state.assetTotalAmount)}"
-    return lines.joinToString("\n")
-}
-
-@Composable
-private fun AssetHistoryListItem(
-    record: AssetHistoryRecord,
-    onOpen: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    var menuExpanded by remember(record.id) { mutableStateOf(false) }
-    GlassCard(
-        modifier = Modifier
-            .fillMaxWidth()
-            .testTag("asset_history_open_${record.id}")
-            .clickable(onClick = onOpen),
-    ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Column(
-                modifier = Modifier.weight(1f),
-                verticalArrangement = Arrangement.spacedBy(4.dp),
-            ) {
-                Text("保存时间：${record.savedAt}", style = MaterialTheme.typography.bodySmall)
-                Text(
-                    "总资产：${formatAmountWanRmb(record.totalAmountWan)}",
-                    style = MaterialTheme.typography.bodySmall,
-                    fontWeight = FontWeight.SemiBold,
-                )
-            }
-            Box {
-                IconButton(
-                    onClick = { menuExpanded = true },
-                    modifier = Modifier.testTag("asset_history_menu_${record.id}"),
-                ) {
-                    Text("⋮")
-                }
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("删除记录") },
-                        onClick = {
-                            menuExpanded = false
-                            onDelete()
-                        },
-                    )
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AssetHistoryDetailPanel(
-    record: AssetHistoryRecord,
-    drafts: List<AssetCategoryDraft>,
-    onBack: () -> Unit,
-) {
-    GlassCard(modifier = Modifier.fillMaxWidth()) {
-        Column(
-            modifier = Modifier.padding(12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            Text("历史记录详情", style = MaterialTheme.typography.titleSmall)
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                MidasButton(onClick = onBack, tone = ButtonTone.NEUTRAL) {
-                    SingleLineActionText("返回列表")
-                }
-            }
-            Text("保存时间：${record.savedAt}", style = MaterialTheme.typography.bodySmall)
-            Text(
-                "总资产：${formatAmountWanRmb(record.totalAmountWan)}",
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold,
-            )
-            HorizontalDivider()
-            drafts.forEach { draft ->
-                val amount = record.amounts[draft.key] ?: 0.0
-                Text("${draft.label}：${formatAmountWanRmb(amount)}", style = MaterialTheme.typography.bodySmall)
-            }
-        }
     }
 }
 

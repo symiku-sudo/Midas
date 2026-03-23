@@ -126,52 +126,54 @@ internal fun NotesPanel(
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MidasButton(onClick = { onSourceFilterChange("") }, tone = ButtonTone.NEUTRAL) {
-                SingleLineActionText(if (state.sourceFilter.isBlank()) "全部来源" else "重置来源")
-            }
-            MidasButton(onClick = { onSourceFilterChange("bilibili") }, tone = ButtonTone.NEUTRAL) {
-                SingleLineActionText("B站")
-            }
-            MidasButton(onClick = { onSourceFilterChange("xiaohongshu") }, tone = ButtonTone.NEUTRAL) {
-                SingleLineActionText("小红书")
-            }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            NotesFilterDropdown(
+                title = "来源",
+                currentLabel = notesSourceFilterLabel(state.sourceFilter),
+                options = listOf(
+                    NotesFilterOption("全部来源") { onSourceFilterChange("") },
+                    NotesFilterOption("B站") { onSourceFilterChange("bilibili") },
+                    NotesFilterOption("小红书") { onSourceFilterChange("xiaohongshu") },
+                ),
+                modifier = Modifier.weight(1f),
+            )
+            NotesFilterDropdown(
+                title = "时间",
+                currentLabel = notesDateWindowLabel(state.dateWindowDays),
+                options = listOf(
+                    NotesFilterOption("全部时间") { onDateWindowChange(0) },
+                    NotesFilterOption("近7天") { onDateWindowChange(7) },
+                    NotesFilterOption("近30天") { onDateWindowChange(30) },
+                ),
+                modifier = Modifier.weight(1f),
+            )
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MidasButton(onClick = { onDateWindowChange(0) }, tone = ButtonTone.NEUTRAL) {
-                SingleLineActionText(if (state.dateWindowDays == 0) "全部时间" else "重置时间")
-            }
-            MidasButton(onClick = { onDateWindowChange(7) }, tone = ButtonTone.NEUTRAL) {
-                SingleLineActionText("近7天")
-            }
-            MidasButton(onClick = { onDateWindowChange(30) }, tone = ButtonTone.NEUTRAL) {
-                SingleLineActionText("近30天")
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MidasButton(onClick = { onMergedFilterChange("all") }, tone = ButtonTone.NEUTRAL) {
-                SingleLineActionText("全部状态")
-            }
-            MidasButton(onClick = { onMergedFilterChange("merged") }, tone = ButtonTone.NEUTRAL) {
-                SingleLineActionText("已合并")
-            }
-            MidasButton(onClick = { onMergedFilterChange("unmerged") }, tone = ButtonTone.NEUTRAL) {
-                SingleLineActionText("未合并")
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MidasButton(
-                onClick = { onSortChange("saved_at", "desc") },
-                tone = ButtonTone.NEUTRAL,
-            ) {
-                SingleLineActionText("最新优先")
-            }
-            MidasButton(
-                onClick = { onSortChange("title", "asc") },
-                tone = ButtonTone.NEUTRAL,
-            ) {
-                SingleLineActionText("标题排序")
-            }
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            NotesFilterDropdown(
+                title = "状态",
+                currentLabel = notesMergedFilterLabel(state.mergedFilter),
+                options = listOf(
+                    NotesFilterOption("全部状态") { onMergedFilterChange("all") },
+                    NotesFilterOption("已合并") { onMergedFilterChange("merged") },
+                    NotesFilterOption("未合并") { onMergedFilterChange("unmerged") },
+                ),
+                modifier = Modifier.weight(1f),
+            )
+            NotesFilterDropdown(
+                title = "排序",
+                currentLabel = notesSortLabel(state.sortBy, state.sortOrder),
+                options = listOf(
+                    NotesFilterOption("最新优先") { onSortChange("saved_at", "desc") },
+                    NotesFilterOption("标题排序") { onSortChange("title", "asc") },
+                ),
+                modifier = Modifier.weight(1f),
+            )
         }
         Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
             MidasButton(
@@ -416,6 +418,75 @@ internal fun NotesPanel(
                 onDelete = { onDeleteXiaohongshu(item.noteId) },
             )
         }
+    }
+}
+
+private data class NotesFilterOption(
+    val label: String,
+    val onSelect: () -> Unit,
+)
+
+@Composable
+private fun NotesFilterDropdown(
+    title: String,
+    currentLabel: String,
+    options: List<NotesFilterOption>,
+    modifier: Modifier = Modifier,
+) {
+    var expanded by remember(title, currentLabel) { mutableStateOf(false) }
+    Box(modifier = modifier) {
+        MidasButton(
+            onClick = { expanded = true },
+            modifier = Modifier.fillMaxWidth(),
+            tone = ButtonTone.NEUTRAL,
+        ) {
+            SingleLineActionText("$title：$currentLabel")
+        }
+        DropdownMenu(
+            expanded = expanded,
+            onDismissRequest = { expanded = false },
+        ) {
+            options.forEach { option ->
+                DropdownMenuItem(
+                    text = { Text(option.label) },
+                    onClick = {
+                        expanded = false
+                        option.onSelect()
+                    },
+                )
+            }
+        }
+    }
+}
+
+private fun notesSourceFilterLabel(value: String): String {
+    return when (value) {
+        "bilibili" -> "B站"
+        "xiaohongshu" -> "小红书"
+        else -> "全部来源"
+    }
+}
+
+private fun notesDateWindowLabel(days: Int): String {
+    return when (days) {
+        7 -> "近7天"
+        30 -> "近30天"
+        else -> "全部时间"
+    }
+}
+
+private fun notesMergedFilterLabel(value: String): String {
+    return when (value) {
+        "merged" -> "已合并"
+        "unmerged" -> "未合并"
+        else -> "全部状态"
+    }
+}
+
+private fun notesSortLabel(sortBy: String, sortOrder: String): String {
+    return when {
+        sortBy == "title" && sortOrder == "asc" -> "标题排序"
+        else -> "最新优先"
     }
 }
 

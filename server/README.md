@@ -3,16 +3,9 @@
 ## What is implemented
 
 - `GET /health`
-- `GET /api/home/overview`
 - `GET /api/finance/signals`
 - `GET /api/finance/signals/history`
 - `POST /api/finance/signals/cards/{card_id}/status`
-- `POST /api/assets/fill-from-images`
-- `GET /api/assets/current`
-- `PUT /api/assets/current`
-- `GET /api/assets/snapshots`
-- `POST /api/assets/snapshots`
-- `DELETE /api/assets/snapshots/{record_id}`
 - `POST /api/jobs/bilibili-summarize`
 - `POST /api/jobs/xiaohongshu/summarize-url`
 - `GET /api/jobs`
@@ -282,48 +275,6 @@ curl http://127.0.0.1:8000/health
 ```bash
 # 读取 Finance Signals 面板状态
 curl http://127.0.0.1:8000/api/finance/signals
-```
-
-```bash
-# 上传资产截图（最多 5 张）并返回分类汇总（单位：万元人民币）
-curl -X POST http://127.0.0.1:8000/api/assets/fill-from-images \
-  -F "images=@/path/to/asset-1.jpg" \
-  -F "images=@/path/to/asset-2.png"
-```
-
-```bash
-# 读取当前资产金额（服务端持久化）
-curl http://127.0.0.1:8000/api/assets/current
-```
-
-```bash
-# 保存当前资产金额（不会追加历史快照）
-curl -X PUT http://127.0.0.1:8000/api/assets/current \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "total_amount_wan": 15.5,
-    "amounts": {
-      "stock": 12.0,
-      "gold": 3.5
-    }
-  }'
-```
-
-```bash
-# 读取资产历史快照（服务端持久化）
-curl http://127.0.0.1:8000/api/assets/snapshots
-```
-
-```bash
-# 保存一条资产历史快照
-curl -X POST http://127.0.0.1:8000/api/assets/snapshots \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "id":"asset-history-1",
-    "saved_at":"2026-03-08 14:40:00",
-    "total_amount_wan":15.5,
-    "amounts":{"stock":12.0,"gold":3.5}
-  }'
 ```
 
 ```bash

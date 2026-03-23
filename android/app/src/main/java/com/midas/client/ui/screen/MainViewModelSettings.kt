@@ -48,8 +48,6 @@ fun MainViewModel.saveBaseUrl() {
     loadEditableConfig()
     refreshAsyncJobHistories()
     loadFinanceSignals()
-    loadAssetCurrent()
-    loadAssetSnapshotHistory()
 }
 
 fun MainViewModel.testConnection() {

@@ -7,7 +7,6 @@
 - 服务端（FastAPI）：已完成
   - `GET /health`
   - `GET /api/finance/signals`
-  - `GET /api/home/overview`
   - `GET /api/finance/signals/history`
   - `POST /api/finance/signals/cards/{card_id}/status`
   - `POST /api/jobs/bilibili-summarize|xiaohongshu/summarize-url`
@@ -23,11 +22,10 @@
 - Android 客户端（Compose）：已完成最小可用版本
   - 服务端地址配置与持久化
   - 连接测试
-  - 首页总览 + 单层导航（`首页 / B站 / 小红书 / 笔记 / 资产 / 设置`）
+  - 单层导航（`B站 / 小红书 / 笔记 / 财经 / 设置`）
   - B 站总结请求、任务历史与 Markdown 展示
   - 小红书单链接总结、任务历史与结果保存
-  - 资产系统面板（今日建议 + 关键变化 + 资产总览 + 建议历史）
-  - 资产截图识别回填（最多 5 张，端侧压缩后上传，识别后手动保存）
+  - 资产系统面板（今日建议 + 关键变化）
   - 笔记库筛选 / 主题回顾 / 时间回顾 / 相似笔记回查
   - 笔记库智能合并（候选、预览、回退、确认破坏性收尾）
 
@@ -165,7 +163,7 @@ tools/ntfy_notify.sh --config .tmp/ntfy/notify.env
 - 当前小红书能力为“按 URL 总结单篇”。
 - 服务端异步任务中心支持任务历史、结果回看和失败/中断任务重试；历史保存在 `server/.tmp/async_jobs.json`。
 - 服务端支持可选访问令牌保护：当 `server/config.yaml` 里配置 `auth.access_token` 后，客户端需带 `Authorization: Bearer <token>`。
-- Android 端启动后现在先进入“首页总览”，把最近任务、最近新增笔记、今日财经建议和高频入口收在一个入口页，不用先切 tab 才知道当前该看什么。
+- Android 端已移除“首页总览”，启动后默认进入 `财经`，顶层导航为 `财经 / B站 / 小红书 / 笔记 / 设置`。
 - Android 端的 B 站/小红书面板现在都统一为“输入链接 -> 提交后台任务 -> 查看结果 -> 保存笔记 -> 回看最近任务”的交互骨架，可刷新任务列表、查看成功结果，并对失败/中断任务直接重试。
 - 笔记页现在支持来源 / 时间 / 已合并状态 / 排序筛选，并补了“主题回顾”“时间回顾”“相似笔记回查”三类回看入口。
 - Android 财经面板现在会按动作类型分组显示 `focus_cards`，并支持端侧“已处理/恢复全部”闭环；Top5 新闻默认先展示 3 条，减少首屏信息量。

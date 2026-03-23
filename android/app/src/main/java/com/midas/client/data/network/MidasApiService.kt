@@ -4,12 +4,6 @@ import com.midas.client.data.model.ApiEnvelope
 import com.midas.client.data.model.AsyncJobCreateData
 import com.midas.client.data.model.AsyncJobListData
 import com.midas.client.data.model.AsyncJobStatusData
-import com.midas.client.data.model.AssetCurrentData
-import com.midas.client.data.model.AssetCurrentUpdateRequest
-import com.midas.client.data.model.AssetImageFillData
-import com.midas.client.data.model.AssetSnapshotHistoryData
-import com.midas.client.data.model.AssetSnapshotRecordData
-import com.midas.client.data.model.AssetSnapshotSaveRequest
 import com.midas.client.data.model.BilibiliNoteSaveRequest
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSavedNotesData
@@ -24,7 +18,6 @@ import com.midas.client.data.model.FinanceSignalsData
 import com.midas.client.data.model.FinanceWatchlistNtfyData
 import com.midas.client.data.model.FinanceWatchlistNtfyUpdateRequest
 import com.midas.client.data.model.HealthData
-import com.midas.client.data.model.HomeOverviewData
 import com.midas.client.data.model.NotesMergeCommitData
 import com.midas.client.data.model.NotesMergeCommitRequest
 import com.midas.client.data.model.NotesMergeFinalizeData
@@ -52,20 +45,14 @@ import retrofit2.Response
 import retrofit2.http.Body
 import retrofit2.http.DELETE
 import retrofit2.http.GET
-import retrofit2.http.Multipart
-import retrofit2.http.Part
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
 import retrofit2.http.Query
-import okhttp3.MultipartBody
 
 interface MidasApiService {
     @GET("health")
     suspend fun health(): Response<ApiEnvelope<HealthData>>
-
-    @GET("api/home/overview")
-    suspend fun getHomeOverview(): Response<ApiEnvelope<HomeOverviewData>>
 
     @GET("api/finance/signals")
     suspend fun getFinanceSignals(): Response<ApiEnvelope<FinanceSignalsData>>
@@ -88,33 +75,6 @@ interface MidasApiService {
     suspend fun getFinanceFocusCardHistory(
         @Query("limit") limit: Int = 50,
     ): Response<ApiEnvelope<FinanceFocusCardHistoryData>>
-
-    @Multipart
-    @POST("api/assets/fill-from-images")
-    suspend fun fillAssetStatsFromImages(
-        @Part images: List<MultipartBody.Part>
-    ): Response<ApiEnvelope<AssetImageFillData>>
-
-    @GET("api/assets/current")
-    suspend fun getAssetCurrent(): Response<ApiEnvelope<AssetCurrentData>>
-
-    @PUT("api/assets/current")
-    suspend fun saveAssetCurrent(
-        @Body request: AssetCurrentUpdateRequest
-    ): Response<ApiEnvelope<AssetCurrentData>>
-
-    @GET("api/assets/snapshots")
-    suspend fun listAssetSnapshots(): Response<ApiEnvelope<AssetSnapshotHistoryData>>
-
-    @POST("api/assets/snapshots")
-    suspend fun saveAssetSnapshot(
-        @Body request: AssetSnapshotSaveRequest
-    ): Response<ApiEnvelope<AssetSnapshotRecordData>>
-
-    @DELETE("api/assets/snapshots/{recordId}")
-    suspend fun deleteAssetSnapshot(
-        @Path("recordId") recordId: String
-    ): Response<ApiEnvelope<NotesDeleteData>>
 
     @POST("api/jobs/bilibili-summarize")
     suspend fun createBilibiliSummaryJob(

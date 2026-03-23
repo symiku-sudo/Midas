@@ -10,7 +10,6 @@ import app.middleware.access_token as access_token_module
 from fastapi.testclient import TestClient
 
 from app.api.routes import (
-    _get_asset_snapshot_service,
     _get_editable_config_service,
     _get_finance_signals_service,
     _get_note_library_service,
@@ -33,8 +32,6 @@ from app.models.schemas import (
     FinanceNewsItem,
     FinanceSignalsData,
     FinanceWatchlistItem,
-    HomeOverviewData,
-    HomeQuickLinkItem,
     NotesReviewTopicItem,
     NotesReviewTopicsData,
     NotesTimelineReviewData,
@@ -45,7 +42,6 @@ from app.models.schemas import (
     UnifiedNotesData,
 )
 from app.repositories.note_repo import NoteLibraryRepository
-from app.services.asset_categories import ASSET_CATEGORY_KEYS
 
 client = TestClient(app)
 
@@ -68,7 +64,6 @@ def _reset_xiaohongshu_state() -> None:
     _get_editable_config_service.cache_clear()
     _get_finance_signals_service.cache_clear()
     _get_note_library_service.cache_clear()
-    _get_asset_snapshot_service.cache_clear()
     _get_xiaohongshu_service.cache_clear()
     get_settings.cache_clear()
     db_path = _notes_db_path()
@@ -420,86 +415,6 @@ def test_search_notes_endpoint(monkeypatch) -> None:
     assert body["data"]["items"][0]["note_id"] == "b1"
 
 
-def test_home_overview_endpoint(monkeypatch) -> None:
-    class _FakeAsyncJobService:
-        async def list_jobs(
-            self,
-            *,
-            limit: int = 20,
-            status: str = "",
-            job_type: str = "",
-        ) -> AsyncJobListData:
-            assert limit == 5
-            return AsyncJobListData(
-                total=1,
-                items=[
-                    AsyncJobListItem(
-                        job_id="job-1",
-                        job_type="bilibili_summarize",
-                        status="SUCCEEDED",
-                        message="任务执行完成。",
-                        submitted_at="2026-03-15 11:00:00",
-                    )
-                ],
-            )
-
-    class _FakeNoteLibraryService:
-        def search_notes(self, **_: object) -> UnifiedNotesData:
-            return UnifiedNotesData(
-                total=1,
-                limit=5,
-                offset=0,
-                items=[
-                    UnifiedNoteItem(
-                        source="bilibili",
-                        note_id="b1",
-                        title="宏观复盘",
-                        source_url="https://www.bilibili.com/video/BV1",
-                        summary_markdown="# 总结",
-                        saved_at="2026-03-15 11:30:00",
-                    )
-                ],
-            )
-
-    class _FakeFinanceSignalsService:
-        def get_dashboard_state(self) -> FinanceSignalsData:
-            return FinanceSignalsData(
-                update_time="2026-03-15 12:00:00",
-                watchlist_preview=[],
-                top_news=[],
-                focus_cards=[
-                    FinanceFocusCard(
-                        card_id="card-1",
-                        title="原油波动需要复核",
-                        kind="ALERT",
-                        action_type="REVIEW_NOW",
-                    )
-                ],
-                ai_insight_text="",
-            )
-
-    class _FakeAssetSnapshotService:
-        class _Current:
-            total_amount_wan = 18.6
-
-        def get_current(self) -> _Current:
-            return self._Current()
-
-    monkeypatch.setattr(routes_module, "_get_async_job_service", lambda request: _FakeAsyncJobService())
-    monkeypatch.setattr(routes_module, "_get_note_library_service", lambda: _FakeNoteLibraryService())
-    monkeypatch.setattr(routes_module, "_get_finance_signals_service", lambda: _FakeFinanceSignalsService())
-    monkeypatch.setattr(routes_module, "_get_asset_snapshot_service", lambda: _FakeAssetSnapshotService())
-
-    resp = client.get("/api/home/overview")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["data"]["recent_tasks"][0]["job_id"] == "job-1"
-    assert body["data"]["recent_notes"][0]["note_id"] == "b1"
-    assert body["data"]["finance_focus_cards"][0]["card_id"] == "card-1"
-    assert body["data"]["quick_links"][0]["target"] == "bilibili"
-    assert body["data"]["asset_total_amount_wan"] == 18.6
-
-
 def test_finance_focus_card_status_and_history_endpoints(monkeypatch) -> None:
     class _FakeFinanceSignalsService:
         def update_focus_card_status(
@@ -703,74 +618,6 @@ def test_finance_focus_card_status_and_history_endpoints(monkeypatch) -> None:
     assert history.json()["data"]["items"][0]["card_id"] == "card-1"
 
 
-def test_home_overview_endpoint(monkeypatch) -> None:
-    class _FakeAsyncJobService:
-        async def list_jobs(self, *, limit: int = 20, status: str = "", job_type: str = "") -> AsyncJobListData:
-            assert limit == 5
-            return AsyncJobListData(
-                total=1,
-                items=[
-                    AsyncJobListItem(
-                        job_id="job-1",
-                        job_type="bilibili_summarize",
-                        status="SUCCEEDED",
-                        message="任务执行完成。",
-                        submitted_at="2026-03-15 11:00:00",
-                    )
-                ],
-            )
-
-    class _FakeNoteLibraryService:
-        def search_notes(self, **kwargs) -> UnifiedNotesData:
-            return UnifiedNotesData(
-                total=1,
-                limit=5,
-                offset=0,
-                items=[
-                    UnifiedNoteItem(
-                        source="bilibili",
-                        note_id="b1",
-                        title="宏观复盘",
-                        source_url="https://example.com/b1",
-                        summary_markdown="# 宏观",
-                        saved_at="2026-03-15 12:00:00",
-                    )
-                ],
-            )
-
-    class _FakeFinanceSignalsService:
-        def get_dashboard_state(self) -> FinanceSignalsData:
-            return FinanceSignalsData(
-                update_time="2026-03-15 18:00:00",
-                watchlist_preview=[],
-                top_news=[],
-                focus_cards=[
-                    FinanceFocusCard(
-                        card_id="card-1",
-                        title="今日建议",
-                        action_type="REVIEW_NOW",
-                    )
-                ],
-                ai_insight_text="finance",
-            )
-
-    class _FakeAssetSnapshotService:
-        def get_current(self):
-            return type("AssetCurrent", (), {"total_amount_wan": 12.3})()
-
-    monkeypatch.setattr(routes_module, "_get_async_job_service", lambda request: _FakeAsyncJobService())
-    monkeypatch.setattr(routes_module, "_get_note_library_service", lambda: _FakeNoteLibraryService())
-    monkeypatch.setattr(routes_module, "_get_finance_signals_service", lambda: _FakeFinanceSignalsService())
-    monkeypatch.setattr(routes_module, "_get_asset_snapshot_service", lambda: _FakeAssetSnapshotService())
-
-    resp = client.get("/api/home/overview")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["data"]["recent_tasks"][0]["job_id"] == "job-1"
-    assert body["data"]["recent_notes"][0]["note_id"] == "b1"
-    assert body["data"]["finance_focus_cards"][0]["card_id"] == "card-1"
-
-
 def test_access_token_middleware_rejects_missing_token(monkeypatch) -> None:
     settings = get_settings().model_copy(deep=True)
     settings.auth.access_token = "secret-token"
@@ -799,99 +646,6 @@ def test_access_token_middleware_accepts_bearer_token(monkeypatch) -> None:
         headers={"Authorization": "Bearer secret-token"},
     )
     assert resp_protected.status_code == 200
-
-
-def test_asset_fill_from_images_returns_structured_amounts() -> None:
-    files = [
-        ("images", ("asset-1.jpg", b"\xff\xd8\xff\xdbmock1", "image/jpeg")),
-        ("images", ("asset-2.jpg", b"\xff\xd8\xff\xdbmock2", "image/jpeg")),
-    ]
-    resp = client.post("/api/assets/fill-from-images", files=files)
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["ok"] is True
-    data = body["data"]
-    assert data["image_count"] == 2
-    assert set(data["category_amounts"].keys()) == set(ASSET_CATEGORY_KEYS)
-    assert data["total_amount_wan"] == 0.0
-
-
-def test_asset_snapshot_history_crud() -> None:
-    _reset_xiaohongshu_state()
-
-    save = client.post(
-        "/api/assets/snapshots",
-        json={
-            "id": "asset-history-1",
-            "saved_at": "2026-03-08 14:40:00",
-            "total_amount_wan": 15.5,
-            "amounts": {
-                "stock": 12.0,
-                "gold": 3.5,
-            },
-        },
-    )
-    assert save.status_code == 200
-    save_body = save.json()
-    assert save_body["ok"] is True
-    assert save_body["data"]["id"] == "asset-history-1"
-    assert save_body["data"]["amounts"]["gold"] == 3.5
-
-    listed = client.get("/api/assets/snapshots")
-    assert listed.status_code == 200
-    listed_body = listed.json()
-    assert listed_body["ok"] is True
-    assert listed_body["data"]["total"] == 1
-    assert listed_body["data"]["items"][0]["id"] == "asset-history-1"
-
-    deleted = client.delete("/api/assets/snapshots/asset-history-1")
-    assert deleted.status_code == 200
-    assert deleted.json()["data"]["deleted_count"] == 1
-
-    listed_after = client.get("/api/assets/snapshots")
-    assert listed_after.status_code == 200
-    assert listed_after.json()["data"]["total"] == 0
-
-
-def test_asset_current_crud() -> None:
-    _reset_xiaohongshu_state()
-
-    empty = client.get("/api/assets/current")
-    assert empty.status_code == 200
-    empty_body = empty.json()
-    assert empty_body["ok"] is True
-    assert empty_body["data"] == {
-        "total_amount_wan": 0.0,
-        "amounts": {},
-    }
-
-    saved = client.put(
-        "/api/assets/current",
-        json={
-            "total_amount_wan": 15.5,
-            "amounts": {
-                "stock": 12.0,
-                "gold": 3.5,
-            },
-        },
-    )
-    assert saved.status_code == 200
-    saved_body = saved.json()
-    assert saved_body["ok"] is True
-    assert saved_body["data"]["total_amount_wan"] == 15.5
-    assert saved_body["data"]["amounts"]["stock"] == 12.0
-
-    fetched = client.get("/api/assets/current")
-    assert fetched.status_code == 200
-    fetched_body = fetched.json()
-    assert fetched_body["ok"] is True
-    assert fetched_body["data"] == {
-        "total_amount_wan": 15.5,
-        "amounts": {
-            "gold": 3.5,
-            "stock": 12.0,
-        },
-    }
 
 
 def test_bilibili_invalid_url() -> None:

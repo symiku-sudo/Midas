@@ -22,9 +22,6 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     )
     val settingsState: StateFlow<SettingsUiState> = _settingsState.asStateFlow()
 
-    internal val _homeState = MutableStateFlow(HomeUiState())
-    val homeState: StateFlow<HomeUiState> = _homeState.asStateFlow()
-
     internal val _bilibiliState = MutableStateFlow(BilibiliUiState())
     val bilibiliState: StateFlow<BilibiliUiState> = _bilibiliState.asStateFlow()
 
@@ -39,29 +36,21 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     internal var autoSaveConfigJob: Job? = null
     internal var financeSignalsJob: Job? = null
-    internal var assetCurrentJob: Job? = null
-    internal var assetHistoryJob: Job? = null
     internal var notesSearchJob: Job? = null
     internal var bilibiliSummaryJob: Job? = null
     internal var xiaohongshuSummaryJob: Job? = null
 
     init {
         ServerAuthState.updateAccessToken(settingsRepository.getServerAccessToken())
-        loadLocalAssetStats()
         loadEditableConfig()
         loadSavedNotes()
         refreshAsyncJobHistories()
         loadFinanceSignals()
-        loadHomeOverview()
-        loadAssetCurrent()
-        loadAssetSnapshotHistory()
     }
 
     override fun onCleared() {
         autoSaveConfigJob?.cancel()
         financeSignalsJob?.cancel()
-        assetCurrentJob?.cancel()
-        assetHistoryJob?.cancel()
         notesSearchJob?.cancel()
         bilibiliSummaryJob?.cancel()
         xiaohongshuSummaryJob?.cancel()

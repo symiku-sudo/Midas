@@ -1,7 +1,5 @@
 package com.midas.client.ui.screen
 
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -59,11 +57,10 @@ import com.midas.client.data.model.XiaohongshuSummaryItem
 import kotlinx.coroutines.delay
 
 enum class TopSection(val title: String) {
-    HOME("首页"),
+    FINANCE("财经"),
     BILIBILI("B站"),
     XHS("小红书"),
     NOTES("笔记"),
-    FINANCE("资产"),
     SETTINGS("设置"),
 }
 
@@ -81,26 +78,19 @@ private const val WrappedTabThreshold = 4
 
 @Composable
 fun MainScreen(viewModel: MainViewModel) {
-    val home by viewModel.homeState.collectAsStateWithLifecycle()
     val settings by viewModel.settingsState.collectAsStateWithLifecycle()
     val bilibili by viewModel.bilibiliState.collectAsStateWithLifecycle()
     val xiaohongshu by viewModel.xiaohongshuState.collectAsStateWithLifecycle()
     val notes by viewModel.notesState.collectAsStateWithLifecycle()
     val finance by viewModel.financeState.collectAsStateWithLifecycle()
-    val assetImagePickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.GetMultipleContents(),
-        onResult = { uris -> viewModel.onAssetImagesSelected(uris) },
-    )
 
     MainScreenContent(
-        home = home,
         settings = settings,
         bilibili = bilibili,
         xiaohongshu = xiaohongshu,
         notes = notes,
         finance = finance,
         onAppForeground = viewModel::onAppForeground,
-        onRefreshHome = viewModel::loadHomeOverview,
         onBaseUrlChange = viewModel::onBaseUrlInputChange,
         onAccessTokenChange = viewModel::onAccessTokenInputChange,
         onSaveBaseUrl = viewModel::saveBaseUrl,
@@ -138,31 +128,24 @@ fun MainScreen(viewModel: MainViewModel) {
         onRollbackLastMerge = viewModel::rollbackLastMerge,
         onFinalizeLastMerge = viewModel::finalizeLastMerge,
         onRefreshFinanceSignals = viewModel::loadFinanceSignals,
-        onAssetAmountChange = viewModel::onAssetAmountInputChange,
-        onSaveAssetStats = viewModel::saveAssetStats,
-        onDeleteAssetHistoryRecord = viewModel::deleteAssetHistoryRecord,
-        onAssetSummaryCopied = viewModel::markAssetSummaryCopied,
         onGenerateFinanceNewsDigest = viewModel::generateFinanceNewsDigest,
         onToggleWatchlistNtfy = viewModel::setWatchlistNtfyEnabled,
         onDismissFinanceFocusCard = viewModel::dismissFinanceFocusCard,
         onRestoreFinanceFocusCards = viewModel::restoreDismissedFinanceFocusCards,
         onUpdateFinanceFocusCardStatus = viewModel::updateFinanceFocusCardStatus,
-        onFillAssetStatsFromImages = { assetImagePickerLauncher.launch("image/*") },
-        initialSection = TopSection.HOME,
+        initialSection = TopSection.FINANCE,
     )
 }
 
 @Composable
 @Suppress("UNUSED_PARAMETER")
 fun MainScreenContent(
-    home: HomeUiState = HomeUiState(),
     settings: SettingsUiState,
     bilibili: BilibiliUiState,
     xiaohongshu: XiaohongshuUiState,
     notes: NotesUiState,
     finance: FinanceSignalsUiState = FinanceSignalsUiState(),
     onAppForeground: () -> Unit,
-    onRefreshHome: () -> Unit = {},
     onBaseUrlChange: (String) -> Unit,
     onAccessTokenChange: (String) -> Unit = {},
     onSaveBaseUrl: () -> Unit,
@@ -200,17 +183,12 @@ fun MainScreenContent(
     onRollbackLastMerge: () -> Unit,
     onFinalizeLastMerge: () -> Unit,
     onRefreshFinanceSignals: () -> Unit = {},
-    onAssetAmountChange: (String, String) -> Unit = { _, _ -> },
-    onSaveAssetStats: () -> Unit = {},
-    onDeleteAssetHistoryRecord: (String) -> Unit = {},
-    onAssetSummaryCopied: () -> Unit = {},
     onGenerateFinanceNewsDigest: () -> Unit = {},
     onToggleWatchlistNtfy: (Boolean) -> Unit = {},
     onDismissFinanceFocusCard: (FinanceFocusCard) -> Unit = {},
     onRestoreFinanceFocusCards: () -> Unit = {},
     onUpdateFinanceFocusCardStatus: (String, String) -> Unit = { _, _ -> },
-    onFillAssetStatsFromImages: () -> Unit = {},
-    initialSection: TopSection = TopSection.BILIBILI,
+    initialSection: TopSection = TopSection.FINANCE,
     enableLifecycleAutoRefresh: Boolean = true,
     enableFinanceAutoRefresh: Boolean = true,
     financeAutoRefreshIntervalMs: Long = 90_000L,
@@ -295,11 +273,10 @@ fun MainScreenContent(
                     )
                     Text(
                         text = when (selectedSection) {
-                            TopSection.HOME -> "最近任务、笔记和财经建议的总览入口"
                             TopSection.BILIBILI -> "B 站视频总结与任务回看"
                             TopSection.XHS -> "小红书单链接总结与结果保存"
                             TopSection.NOTES -> "统一笔记库、搜索与合并"
-                            TopSection.FINANCE -> "先看建议，再决定要不要展开细节"
+                            TopSection.FINANCE -> "只保留市场信号与建议处理"
                             TopSection.SETTINGS -> "服务端连接、令牌与运行配置"
                         },
                         style = MaterialTheme.typography.bodySmall,
@@ -324,26 +301,14 @@ fun MainScreenContent(
                 .padding(16.dp)
 
             when (selectedSection) {
-                TopSection.HOME -> HomeScreen(
-                    state = home,
-                    onRefresh = onRefreshHome,
-                    onOpenSection = { selectedSection = it },
-                    modifier = contentModifier,
-                )
-
                 TopSection.FINANCE -> FinanceSignalsPanel(
                     state = finance,
                     onRefresh = onRefreshFinanceSignals,
-                    onAssetAmountChange = onAssetAmountChange,
-                    onSaveAssetStats = onSaveAssetStats,
-                    onDeleteAssetHistoryRecord = onDeleteAssetHistoryRecord,
-                    onAssetSummaryCopied = onAssetSummaryCopied,
                     onGenerateFinanceNewsDigest = onGenerateFinanceNewsDigest,
                     onToggleWatchlistNtfy = onToggleWatchlistNtfy,
                     onDismissFocusCard = onDismissFinanceFocusCard,
                     onRestoreFocusCards = onRestoreFinanceFocusCards,
                     onUpdateFocusCardStatus = onUpdateFinanceFocusCardStatus,
-                    onFillAssetStatsFromImages = onFillAssetStatsFromImages,
                     modifier = contentModifier,
                 )
 

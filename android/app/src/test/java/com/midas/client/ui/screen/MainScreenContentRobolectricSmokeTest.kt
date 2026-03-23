@@ -57,7 +57,7 @@ class MainScreenContentRobolectricSmokeTest {
             MaterialTheme {
                 Box(modifier = Modifier.width(240.dp)) {
                     GlassTabBar(
-                        selectedTabIndex = TopSection.HOME.ordinal,
+                        selectedTabIndex = TopSection.FINANCE.ordinal,
                         labels = TopSection.entries.map { it.title },
                         onSelect = {},
                     )
@@ -156,6 +156,7 @@ class MainScreenContentRobolectricSmokeTest {
                     onCommitCurrentMerge = {},
                     onRollbackLastMerge = {},
                     onFinalizeLastMerge = {},
+                    initialSection = TopSection.BILIBILI,
                     enableLifecycleAutoRefresh = false,
                     enableCyclicTabs = false,
                     animateTabSwitch = false,
@@ -245,6 +246,7 @@ class MainScreenContentRobolectricSmokeTest {
                     onCommitCurrentMerge = {},
                     onRollbackLastMerge = {},
                     onFinalizeLastMerge = {},
+                    initialSection = TopSection.BILIBILI,
                     enableLifecycleAutoRefresh = false,
                     enableCyclicTabs = false,
                     animateTabSwitch = false,
@@ -266,7 +268,7 @@ class MainScreenContentRobolectricSmokeTest {
     }
 
     @Test
-    fun workspaceDropdown_switchToAsset_shouldShowAssetPanelAndTriggerRefresh() {
+    fun workspaceDropdown_switchToFinance_shouldShowSignalPanelAndTriggerRefresh() {
         var financeRefreshClicks = 0
 
         composeRule.setContent {
@@ -307,212 +309,14 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        clickTopSection("资产")
+        clickTopSection("财经")
 
+        composeRule.onAllNodesWithText("财经信号").assertCountEquals(1)
         composeRule.onAllNodesWithText("Watchlist").assertCountEquals(1)
         composeRule.onAllNodesWithText("24小时新闻摘要").assertCountEquals(1)
         composeRule.onAllNodesWithText("今日金融与时政新闻 Top5").assertCountEquals(1)
-        composeRule.onAllNodesWithText("资产总览").assertCountEquals(1)
-        composeRule.onAllNodesWithTag("asset_amount_bank_current_deposit", useUnmergedTree = true)
-            .assertCountEquals(0)
 
         assertEquals(1, financeRefreshClicks)
-    }
-
-    @Test
-    fun assetPanel_reportAmount_shouldTriggerCallbacks() {
-        var saveClicks = 0
-        var amountChangeCalls = 0
-        var latestChangedKey = ""
-
-        composeRule.setContent {
-            MaterialTheme {
-                MainScreenContent(
-                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
-                    bilibili = BilibiliUiState(),
-                    xiaohongshu = XiaohongshuUiState(),
-                    notes = NotesUiState(),
-                    onAppForeground = {},
-                    onBaseUrlChange = {},
-                    onSaveBaseUrl = {},
-                    onTestConnection = {},
-                    onConfigTextChange = { _, _ -> },
-                    onConfigBooleanChange = { _, _ -> },
-                    onResetConfig = {},
-                    onBilibiliVideoUrlChange = {},
-                    onSubmitBilibiliSummary = {},
-                    onSaveBilibiliNote = {},
-                    onXiaohongshuUrlChange = {},
-                    onSummarizeXiaohongshuUrl = {},
-                    onRefreshXiaohongshuAuthConfig = {},
-                    onSaveSingleXiaohongshuNote = {},
-                    onNotesKeywordChange = {},
-                    onRefreshNotes = {},
-                    onDeleteBilibiliNote = {},
-                    onDeleteXiaohongshuNote = {},
-                    onSuggestMergeCandidates = {},
-                    onPreviewMergeCandidate = { _ -> },
-                    onCommitCurrentMerge = {},
-                    onRollbackLastMerge = {},
-                    onFinalizeLastMerge = {},
-                    onAssetAmountChange = { key, _ ->
-                        amountChangeCalls += 1
-                        latestChangedKey = key
-                    },
-                    onSaveAssetStats = { saveClicks += 1 },
-                    enableLifecycleAutoRefresh = false,
-                    enableCyclicTabs = false,
-                    animateTabSwitch = false,
-                )
-            }
-        }
-
-        clickTopSection("资产")
-        composeRule.onNodeWithText("资产总览").performClick()
-        composeRule.waitForIdle()
-
-        composeRule.onNodeWithTag("asset_amount_bank_current_deposit", useUnmergedTree = true)
-            .performTextInput("1")
-        composeRule.onNodeWithText("保存资产统计").performScrollTo().performClick()
-        composeRule.waitForIdle()
-
-        assertTrue(amountChangeCalls > 0)
-        assertEquals("bank_current_deposit", latestChangedKey)
-        assertEquals(1, saveClicks)
-    }
-
-    @Test
-    fun assetPanel_fillFromImages_shouldTriggerCallback() {
-        var fillClicks = 0
-
-        composeRule.setContent {
-            MaterialTheme {
-                MainScreenContent(
-                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
-                    bilibili = BilibiliUiState(),
-                    xiaohongshu = XiaohongshuUiState(),
-                    notes = NotesUiState(),
-                    onAppForeground = {},
-                    onBaseUrlChange = {},
-                    onSaveBaseUrl = {},
-                    onTestConnection = {},
-                    onConfigTextChange = { _, _ -> },
-                    onConfigBooleanChange = { _, _ -> },
-                    onResetConfig = {},
-                    onBilibiliVideoUrlChange = {},
-                    onSubmitBilibiliSummary = {},
-                    onSaveBilibiliNote = {},
-                    onXiaohongshuUrlChange = {},
-                    onSummarizeXiaohongshuUrl = {},
-                    onRefreshXiaohongshuAuthConfig = {},
-                    onSaveSingleXiaohongshuNote = {},
-                    onNotesKeywordChange = {},
-                    onRefreshNotes = {},
-                    onDeleteBilibiliNote = {},
-                    onDeleteXiaohongshuNote = {},
-                    onSuggestMergeCandidates = {},
-                    onPreviewMergeCandidate = { _ -> },
-                    onCommitCurrentMerge = {},
-                    onRollbackLastMerge = {},
-                    onFinalizeLastMerge = {},
-                    onFillAssetStatsFromImages = { fillClicks += 1 },
-                    enableLifecycleAutoRefresh = false,
-                    enableCyclicTabs = false,
-                    animateTabSwitch = false,
-                )
-            }
-        }
-
-        clickTopSection("资产")
-        composeRule.onNodeWithText("资产总览").performClick()
-        composeRule.waitForIdle()
-
-        composeRule.onNodeWithTag("asset_fill_from_images_button", useUnmergedTree = true)
-            .performScrollTo()
-            .performClick()
-        composeRule.waitForIdle()
-        assertEquals(1, fillClicks)
-    }
-
-    @Test
-    fun assetPanel_copyAndHistory_shouldTriggerCallbacks() {
-        val historyId = "history-1"
-        var copyClicks = 0
-        var deletedHistoryId = ""
-
-        composeRule.setContent {
-            MaterialTheme {
-                MainScreenContent(
-                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
-                    bilibili = BilibiliUiState(),
-                    xiaohongshu = XiaohongshuUiState(),
-                    notes = NotesUiState(),
-                    finance = FinanceSignalsUiState(
-                        assetDrafts = listOf(
-                            AssetCategoryDraft(key = "stock", label = "股票", amountInput = "10"),
-                            AssetCategoryDraft(key = "bank_current_deposit", label = "银行活期存款", amountInput = "2"),
-                        ),
-                        assetTotalAmount = 12.0,
-                        assetHistory = listOf(
-                            AssetHistoryRecord(
-                                id = historyId,
-                                savedAt = "2026-03-06 18:00:00",
-                                totalAmountWan = 12.0,
-                                amounts = mapOf(
-                                    "stock" to 10.0,
-                                    "bank_current_deposit" to 2.0,
-                                ),
-                            ),
-                        ),
-                    ),
-                    onAppForeground = {},
-                    onBaseUrlChange = {},
-                    onSaveBaseUrl = {},
-                    onTestConnection = {},
-                    onConfigTextChange = { _, _ -> },
-                    onConfigBooleanChange = { _, _ -> },
-                    onResetConfig = {},
-                    onBilibiliVideoUrlChange = {},
-                    onSubmitBilibiliSummary = {},
-                    onSaveBilibiliNote = {},
-                    onXiaohongshuUrlChange = {},
-                    onSummarizeXiaohongshuUrl = {},
-                    onRefreshXiaohongshuAuthConfig = {},
-                    onSaveSingleXiaohongshuNote = {},
-                    onNotesKeywordChange = {},
-                    onRefreshNotes = {},
-                    onDeleteBilibiliNote = {},
-                    onDeleteXiaohongshuNote = {},
-                    onSuggestMergeCandidates = {},
-                    onPreviewMergeCandidate = { _ -> },
-                    onCommitCurrentMerge = {},
-                    onRollbackLastMerge = {},
-                    onFinalizeLastMerge = {},
-                    onDeleteAssetHistoryRecord = { deletedHistoryId = it },
-                    onAssetSummaryCopied = { copyClicks += 1 },
-                    enableLifecycleAutoRefresh = false,
-                    enableCyclicTabs = false,
-                    animateTabSwitch = false,
-                )
-            }
-        }
-
-        clickTopSection("资产")
-        composeRule.onNodeWithText("资产总览").performClick()
-        composeRule.waitForIdle()
-
-        composeRule.onNodeWithText("复制资产情况").performScrollTo().performClick()
-        composeRule.onNodeWithTag("asset_toggle_history_button", useUnmergedTree = true)
-            .performScrollTo()
-            .performClick()
-        composeRule.onNodeWithTag("asset_history_open_$historyId").performScrollTo().performClick()
-        composeRule.onNodeWithText("返回列表").performScrollTo().performClick()
-        composeRule.onNodeWithTag("asset_history_menu_$historyId").performScrollTo().performClick()
-        composeRule.onNodeWithText("删除记录").performClick()
-        composeRule.waitForIdle()
-
-        assertEquals(1, copyClicks)
-        assertEquals(historyId, deletedHistoryId)
     }
 
     @Test
@@ -549,6 +353,7 @@ class MainScreenContentRobolectricSmokeTest {
                     onCommitCurrentMerge = {},
                     onRollbackLastMerge = {},
                     onFinalizeLastMerge = {},
+                    initialSection = TopSection.BILIBILI,
                     enableLifecycleAutoRefresh = false,
                     enableCyclicTabs = false,
                     animateTabSwitch = false,
