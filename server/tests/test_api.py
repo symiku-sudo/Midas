@@ -6,32 +6,48 @@ import shutil
 from pathlib import Path
 
 import app.api.routes as routes_module
+import app.middleware.access_token as access_token_module
 from fastapi.testclient import TestClient
 
 from app.api.routes import (
-    _get_asset_snapshot_service,
     _get_editable_config_service,
     _get_finance_signals_service,
     _get_note_library_service,
-    _get_xiaohongshu_sync_service,
+    _get_xiaohongshu_service,
 )
-from app.core.config import get_settings
+from app.core.config import get_settings, resolve_runtime_path
 from app.main import app
 from app.models.schemas import (
+    AsyncJobCreateData,
+    AsyncJobListData,
+    AsyncJobListItem,
+    AsyncJobProgressData,
+    AsyncJobStatusData,
+    FinanceFocusCard,
+    FinanceFocusCardActionData,
+    FinanceFocusCardHistoryData,
+    FinanceFocusCardHistoryItem,
     FinanceMarketAlertDebugData,
     FinanceNewsDebugData,
     FinanceNewsItem,
     FinanceSignalsData,
     FinanceWatchlistItem,
+    NotesReviewTopicItem,
+    NotesReviewTopicsData,
+    NotesTimelineReviewData,
+    NotesTimelineReviewItem,
+    RelatedNoteItem,
+    RelatedNotesData,
+    UnifiedNoteItem,
+    UnifiedNotesData,
 )
 from app.repositories.note_repo import NoteLibraryRepository
-from app.services.asset_categories import ASSET_CATEGORY_KEYS
 
 client = TestClient(app)
 
 
 def _notes_db_path() -> Path:
-    return Path(get_settings().xiaohongshu.db_path)
+    return resolve_runtime_path(get_settings().xiaohongshu.db_path)
 
 
 def _notes_backup_dir() -> Path:
@@ -48,8 +64,7 @@ def _reset_xiaohongshu_state() -> None:
     _get_editable_config_service.cache_clear()
     _get_finance_signals_service.cache_clear()
     _get_note_library_service.cache_clear()
-    _get_asset_snapshot_service.cache_clear()
-    _get_xiaohongshu_sync_service.cache_clear()
+    _get_xiaohongshu_service.cache_clear()
     get_settings.cache_clear()
     db_path = _notes_db_path()
     if db_path.exists():
@@ -84,6 +99,8 @@ def test_finance_signals_ok(monkeypatch) -> None:
                         change_pct="+1.2%",
                         alert_hint=">90",
                         alert_active=True,
+                        related_news_count=1,
+                        related_keywords=["原油"],
                     )
                 ],
                 top_news=[
@@ -93,6 +110,22 @@ def test_finance_signals_ok(monkeypatch) -> None:
                         published="2026-03-05 11:30:00",
                         category="finance",
                         matched_keywords=["美联储", "降息"],
+                        related_symbols=["BZ=F"],
+                        related_watchlist_names=["布伦特原油"],
+                    )
+                ],
+                focus_cards=[
+                    FinanceFocusCard(
+                        title="布伦特原油 已触发监控阈值",
+                        summary="阈值条件：>90；最近关联新闻 1 条",
+                        priority="HIGH",
+                        kind="ALERT",
+                        action_type="REVIEW_NOW",
+                        action_label="立即复核",
+                        action_hint="先看价格异动和关联新闻，再决定是否提升观察频率。",
+                        reasons=["threshold_triggered", "related_news_present"],
+                        related_symbols=["BZ=F"],
+                        related_watchlist_names=["布伦特原油"],
                     )
                 ],
                 watchlist_ntfy_enabled=True,
@@ -130,7 +163,14 @@ def test_finance_signals_ok(monkeypatch) -> None:
     assert body["data"]["watchlist_preview"][0]["price"] == 91.23
     assert body["data"]["watchlist_preview"][0]["alert_hint"] == ">90"
     assert body["data"]["watchlist_preview"][0]["alert_active"] is True
+    assert body["data"]["watchlist_preview"][0]["related_news_count"] == 1
     assert body["data"]["top_news"][0]["title"] == "美联储官员释放降息信号"
+    assert body["data"]["top_news"][0]["related_symbols"] == ["BZ=F"]
+    assert body["data"]["focus_cards"][0]["kind"] == "ALERT"
+    assert body["data"]["focus_cards"][0]["priority"] == "HIGH"
+    assert body["data"]["focus_cards"][0]["action_type"] == "REVIEW_NOW"
+    assert body["data"]["focus_cards"][0]["action_label"] == "立即复核"
+    assert "threshold_triggered" in body["data"]["focus_cards"][0]["reasons"]
     assert body["data"]["watchlist_ntfy_enabled"] is True
     assert body["data"]["ai_insight_text"]
     assert body["data"]["news_debug"]["entries_scanned"] == 12
@@ -151,7 +191,6 @@ def test_update_finance_watchlist_ntfy(monkeypatch) -> None:
         "_get_finance_signals_service",
         lambda: _FakeFinanceSignalsService(),
     )
-    monkeypatch.setattr(routes_module, "_reload_runtime_services", lambda: None)
 
     resp = client.put("/api/finance/signals/watchlist-ntfy", json={"enabled": False})
     assert resp.status_code == 200
@@ -169,6 +208,7 @@ def test_trigger_finance_news_digest(monkeypatch) -> None:
                 news_stale=False,
                 watchlist_preview=[],
                 top_news=[],
+                focus_cards=[],
                 watchlist_ntfy_enabled=False,
                 ai_insight_text="## 24小时摘要\n\n- 已生成。",
                 news_debug=FinanceNewsDebugData(
@@ -195,97 +235,416 @@ def test_trigger_finance_news_digest(monkeypatch) -> None:
     assert body["data"]["news_debug"]["digest_prompt_chars"] == 1412
 
 
-def test_asset_fill_from_images_returns_structured_amounts() -> None:
-    files = [
-        ("images", ("asset-1.jpg", b"\xff\xd8\xff\xdbmock1", "image/jpeg")),
-        ("images", ("asset-2.jpg", b"\xff\xd8\xff\xdbmock2", "image/jpeg")),
-    ]
-    resp = client.post("/api/assets/fill-from-images", files=files)
+def test_async_job_endpoints(monkeypatch) -> None:
+    class _FakeAsyncJobService:
+        async def create_bilibili_summary_job(
+            self, *, video_url: str, request_id: str
+        ) -> AsyncJobCreateData:
+            assert video_url == "https://www.bilibili.com/video/BV1xx411c7mD"
+            assert request_id
+            return AsyncJobCreateData(
+                job_id="job-bili-1",
+                job_type="bilibili_summarize",
+                status="PENDING",
+                message="任务已入队，等待执行。",
+                submitted_at="2026-03-12 12:30:00",
+            )
+
+        async def create_xiaohongshu_summary_job(
+            self, *, url: str, request_id: str
+        ) -> AsyncJobCreateData:
+            assert url == "https://www.xiaohongshu.com/explore/test-id"
+            assert request_id
+            return AsyncJobCreateData(
+                job_id="job-xhs-1",
+                job_type="xiaohongshu_summarize_url",
+                status="PENDING",
+                message="任务已入队，等待执行。",
+                submitted_at="2026-03-12 12:31:00",
+            )
+
+        async def list_jobs(
+            self, *, limit: int = 20, status: str = "", job_type: str = ""
+        ) -> AsyncJobListData:
+            assert limit == 10
+            assert status == "SUCCEEDED"
+            assert job_type == "bilibili_summarize"
+            return AsyncJobListData(
+                total=1,
+                items=[
+                    AsyncJobListItem(
+                        job_id="job-bili-1",
+                        job_type="bilibili_summarize",
+                        status="SUCCEEDED",
+                        message="任务执行完成。",
+                        submitted_at="2026-03-12 12:30:00",
+                        started_at="2026-03-12 12:30:01",
+                        finished_at="2026-03-12 12:31:00",
+                        progress=AsyncJobProgressData(current=1, total=1),
+                    )
+                ],
+            )
+
+        async def get_job(self, job_id: str) -> AsyncJobStatusData:
+            assert job_id == "job-bili-1"
+            return AsyncJobStatusData(
+                job_id=job_id,
+                job_type="bilibili_summarize",
+                status="SUCCEEDED",
+                message="任务执行完成。",
+                submitted_at="2026-03-12 12:30:00",
+                started_at="2026-03-12 12:30:01",
+                finished_at="2026-03-12 12:31:00",
+                request_payload={
+                    "video_url": "https://www.bilibili.com/video/BV1xx411c7mD"
+                },
+                result={
+                    "video_url": "https://www.bilibili.com/video/BV1xx411c7mD",
+                    "summary_markdown": "# done",
+                    "elapsed_ms": 1200,
+                    "transcript_chars": 3456,
+                },
+                error=None,
+                progress=AsyncJobProgressData(current=1, total=1),
+            )
+
+        async def retry_job(self, job_id: str, *, request_id: str) -> AsyncJobCreateData:
+            assert job_id == "job-bili-1"
+            assert request_id
+            return AsyncJobCreateData(
+                job_id="job-bili-2",
+                job_type="bilibili_summarize",
+                status="PENDING",
+                message="任务已入队，等待执行。",
+                submitted_at="2026-03-12 12:32:00",
+                retry_of_job_id="job-bili-1",
+            )
+
+    monkeypatch.setattr(app.state, "async_job_service", _FakeAsyncJobService(), raising=False)
+
+    create_bili = client.post(
+        "/api/jobs/bilibili-summarize",
+        json={"video_url": "https://www.bilibili.com/video/BV1xx411c7mD"},
+    )
+    assert create_bili.status_code == 200
+    assert create_bili.json()["data"]["job_id"] == "job-bili-1"
+
+    create_xhs = client.post(
+        "/api/jobs/xiaohongshu/summarize-url",
+        json={"url": "https://www.xiaohongshu.com/explore/test-id"},
+    )
+    assert create_xhs.status_code == 200
+    assert create_xhs.json()["data"]["job_type"] == "xiaohongshu_summarize_url"
+
+    listing = client.get(
+        "/api/jobs",
+        params={"limit": 10, "status": "SUCCEEDED", "job_type": "bilibili_summarize"},
+    )
+    assert listing.status_code == 200
+    assert listing.json()["data"]["total"] == 1
+    assert listing.json()["data"]["items"][0]["progress"]["current"] == 1
+
+    detail = client.get("/api/jobs/job-bili-1")
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["data"]["status"] == "SUCCEEDED"
+    assert body["data"]["result"]["transcript_chars"] == 3456
+    assert body["data"]["progress"]["total"] == 1
+
+    retried = client.post("/api/jobs/job-bili-1/retry")
+    assert retried.status_code == 200
+    assert retried.json()["data"]["retry_of_job_id"] == "job-bili-1"
+
+
+def test_search_notes_endpoint(monkeypatch) -> None:
+    class _FakeNoteLibraryService:
+        def search_notes(
+            self,
+            *,
+            keyword: str = "",
+            source: str = "",
+            saved_from: str = "",
+            saved_to: str = "",
+            merged: bool | None = None,
+            sort_by: str = "saved_at",
+            sort_order: str = "desc",
+            limit: int = 50,
+            offset: int = 0,
+        ) -> UnifiedNotesData:
+            assert keyword == "美联储"
+            assert source == "bilibili"
+            assert saved_from == ""
+            assert saved_to == ""
+            assert merged is None
+            assert sort_by == "saved_at"
+            assert sort_order == "desc"
+            assert limit == 10
+            assert offset == 5
+            return UnifiedNotesData(
+                total=1,
+                limit=10,
+                offset=5,
+                items=[
+                    UnifiedNoteItem(
+                        source="bilibili",
+                        note_id="b1",
+                        title="宏观复盘",
+                        source_url="https://www.bilibili.com/video/BV1xx411c7mD",
+                        summary_markdown="# 美联储与降息",
+                        saved_at="2026-03-03 08:00:00",
+                    )
+                ],
+            )
+
+    monkeypatch.setattr(
+        routes_module,
+        "_get_note_library_service",
+        lambda: _FakeNoteLibraryService(),
+    )
+
+    resp = client.get(
+        "/api/notes/search",
+        params={"keyword": "美联储", "source": "bilibili", "limit": 10, "offset": 5},
+    )
     assert resp.status_code == 200
     body = resp.json()
     assert body["ok"] is True
-    data = body["data"]
-    assert data["image_count"] == 2
-    assert set(data["category_amounts"].keys()) == set(ASSET_CATEGORY_KEYS)
-    assert data["total_amount_wan"] == 0.0
+    assert body["data"]["total"] == 1
+    assert body["data"]["items"][0]["source"] == "bilibili"
+    assert body["data"]["items"][0]["note_id"] == "b1"
 
 
-def test_asset_snapshot_history_crud() -> None:
-    _reset_xiaohongshu_state()
+def test_finance_focus_card_status_and_history_endpoints(monkeypatch) -> None:
+    class _FakeFinanceSignalsService:
+        def update_focus_card_status(
+            self,
+            *,
+            card_id: str,
+            status: str,
+        ) -> FinanceFocusCardActionData:
+            assert card_id == "card-1"
+            assert status == "WATCHING"
+            return FinanceFocusCardActionData(
+                card_id=card_id,
+                status=status,
+                status_updated_at="2026-03-15 12:01:00",
+                handled_at="2026-03-15 12:01:00",
+            )
 
-    save = client.post(
-        "/api/assets/snapshots",
-        json={
-            "id": "asset-history-1",
-            "saved_at": "2026-03-08 14:40:00",
-            "total_amount_wan": 15.5,
-            "amounts": {
-                "stock": 12.0,
-                "gold": 3.5,
-            },
+        def get_focus_card_history(self, *, limit: int = 50) -> FinanceFocusCardHistoryData:
+            assert limit == 10
+            return FinanceFocusCardHistoryData(
+                total=1,
+                items=[
+                    FinanceFocusCardHistoryItem(
+                        card_id="card-1",
+                        title="原油波动需要复核",
+                        action_type="REVIEW_NOW",
+                        status="WATCHING",
+                        last_seen_at="2026-03-15 12:00:00",
+                    )
+                ],
+            )
+
+    monkeypatch.setattr(routes_module, "_get_finance_signals_service", lambda: _FakeFinanceSignalsService())
+
+    update_resp = client.post("/api/finance/signals/cards/card-1/status", json={"status": "WATCHING"})
+    assert update_resp.status_code == 200
+    assert update_resp.json()["data"]["status"] == "WATCHING"
+
+    history_resp = client.get("/api/finance/signals/history", params={"limit": 10})
+    assert history_resp.status_code == 200
+    assert history_resp.json()["data"]["items"][0]["card_id"] == "card-1"
+
+
+def test_notes_review_and_related_endpoints(monkeypatch) -> None:
+    class _FakeNoteLibraryService:
+        def review_notes_by_topics(
+            self,
+            *,
+            days: int = 30,
+            limit: int = 8,
+            per_topic_limit: int = 5,
+        ) -> NotesReviewTopicsData:
+            assert days == 7
+            return NotesReviewTopicsData(
+                window_days=days,
+                total_topics=1,
+                items=[
+                    NotesReviewTopicItem(
+                        topic="美联储",
+                        total=2,
+                        latest_saved_at="2026-03-15 08:00:00",
+                        items=[],
+                    )
+                ],
+            )
+
+        def review_notes_by_timeline(
+            self,
+            *,
+            days: int = 30,
+            bucket: str = "day",
+            limit: int = 10,
+            per_bucket_limit: int = 5,
+        ) -> NotesTimelineReviewData:
+            assert bucket == "week"
+            return NotesTimelineReviewData(
+                window_days=days,
+                bucket=bucket,
+                total_buckets=1,
+                items=[
+                    NotesTimelineReviewItem(
+                        label="2026-03-09 ~ 2026-03-15",
+                        total=3,
+                        items=[],
+                    )
+                ],
+            )
+
+        def find_related_notes(
+            self,
+            *,
+            source: str,
+            note_id: str,
+            limit: int = 8,
+            min_score: float = 0.2,
+        ) -> RelatedNotesData:
+            assert source == "bilibili"
+            assert note_id == "b1"
+            return RelatedNotesData(
+                source=source,
+                note_id=note_id,
+                total=1,
+                items=[
+                    RelatedNoteItem(
+                        source="bilibili",
+                        note_id="b2",
+                        title="降息交易",
+                        source_url="https://www.bilibili.com/video/BV2",
+                        saved_at="2026-03-15 09:00:00",
+                        score=0.72,
+                        relation_level="STRONG",
+                    )
+                ],
+            )
+
+    monkeypatch.setattr(routes_module, "_get_note_library_service", lambda: _FakeNoteLibraryService())
+
+    topic_resp = client.get("/api/notes/review/topics", params={"days": 7})
+    assert topic_resp.status_code == 200
+    assert topic_resp.json()["data"]["items"][0]["topic"] == "美联储"
+
+    timeline_resp = client.get("/api/notes/review/timeline", params={"bucket": "week"})
+    assert timeline_resp.status_code == 200
+    assert timeline_resp.json()["data"]["items"][0]["label"] == "2026-03-09 ~ 2026-03-15"
+
+    related_resp = client.get("/api/notes/bilibili/b1/related")
+    assert related_resp.status_code == 200
+    assert related_resp.json()["data"]["items"][0]["note_id"] == "b2"
+
+
+def test_search_notes_endpoint_supports_new_filters(monkeypatch) -> None:
+    class _FakeNoteLibraryService:
+        def search_notes(self, **kwargs) -> UnifiedNotesData:
+            assert kwargs["keyword"] == "宏观"
+            assert kwargs["saved_from"] == "2026-03-01 00:00:00"
+            assert kwargs["saved_to"] == "2026-03-31 23:59:59"
+            assert kwargs["merged"] is True
+            assert kwargs["sort_by"] == "title"
+            assert kwargs["sort_order"] == "asc"
+            return UnifiedNotesData(total=0, limit=10, offset=0, items=[])
+
+    monkeypatch.setattr(routes_module, "_get_note_library_service", lambda: _FakeNoteLibraryService())
+
+    resp = client.get(
+        "/api/notes/search",
+        params={
+            "keyword": "宏观",
+            "saved_from": "2026-03-01 00:00:00",
+            "saved_to": "2026-03-31 23:59:59",
+            "merged": "true",
+            "sort_by": "title",
+            "sort_order": "asc",
+            "limit": 10,
         },
     )
-    assert save.status_code == 200
-    save_body = save.json()
-    assert save_body["ok"] is True
-    assert save_body["data"]["id"] == "asset-history-1"
-    assert save_body["data"]["amounts"]["gold"] == 3.5
-
-    listed = client.get("/api/assets/snapshots")
-    assert listed.status_code == 200
-    listed_body = listed.json()
-    assert listed_body["ok"] is True
-    assert listed_body["data"]["total"] == 1
-    assert listed_body["data"]["items"][0]["id"] == "asset-history-1"
-
-    deleted = client.delete("/api/assets/snapshots/asset-history-1")
-    assert deleted.status_code == 200
-    assert deleted.json()["data"]["deleted_count"] == 1
-
-    listed_after = client.get("/api/assets/snapshots")
-    assert listed_after.status_code == 200
-    assert listed_after.json()["data"]["total"] == 0
+    assert resp.status_code == 200
+    assert resp.json()["data"]["total"] == 0
 
 
-def test_asset_current_crud() -> None:
-    _reset_xiaohongshu_state()
+def test_finance_focus_card_status_and_history_endpoints(monkeypatch) -> None:
+    class _FakeFinanceSignalsService:
+        def update_focus_card_status(self, *, card_id: str, status: str) -> FinanceFocusCardActionData:
+            assert card_id == "card-1"
+            assert status == "WATCHING"
+            return FinanceFocusCardActionData(
+                card_id=card_id,
+                status=status,
+                status_updated_at="2026-03-15 18:00:00",
+                handled_at="2026-03-15 18:00:00",
+            )
 
-    empty = client.get("/api/assets/current")
-    assert empty.status_code == 200
-    empty_body = empty.json()
-    assert empty_body["ok"] is True
-    assert empty_body["data"] == {
-        "total_amount_wan": 0.0,
-        "amounts": {},
-    }
+        def get_focus_card_history(self, *, limit: int = 50) -> FinanceFocusCardHistoryData:
+            assert limit == 20
+            return FinanceFocusCardHistoryData(
+                total=1,
+                items=[
+                    FinanceFocusCardHistoryItem(
+                        card_id="card-1",
+                        title="布伦特原油 已触发监控阈值",
+                        action_type="REVIEW_NOW",
+                        action_label="立即复核",
+                        reasons=["threshold_triggered"],
+                        related_symbols=["BZ=F"],
+                        related_watchlist_names=["布伦特原油"],
+                        status="WATCHING",
+                        first_seen_at="2026-03-15 10:00:00",
+                        last_seen_at="2026-03-15 18:00:00",
+                        status_updated_at="2026-03-15 18:00:00",
+                    )
+                ],
+            )
 
-    saved = client.put(
-        "/api/assets/current",
-        json={
-            "total_amount_wan": 15.5,
-            "amounts": {
-                "stock": 12.0,
-                "gold": 3.5,
-            },
-        },
+    monkeypatch.setattr(routes_module, "_get_finance_signals_service", lambda: _FakeFinanceSignalsService())
+
+    updated = client.post("/api/finance/signals/cards/card-1/status", json={"status": "WATCHING"})
+    assert updated.status_code == 200
+    assert updated.json()["data"]["status"] == "WATCHING"
+
+    history = client.get("/api/finance/signals/history", params={"limit": 20})
+    assert history.status_code == 200
+    assert history.json()["data"]["items"][0]["card_id"] == "card-1"
+
+
+def test_access_token_middleware_rejects_missing_token(monkeypatch) -> None:
+    settings = get_settings().model_copy(deep=True)
+    settings.auth.access_token = "secret-token"
+    monkeypatch.setattr(access_token_module, "get_settings", lambda: settings)
+
+    resp = client.get("/api/finance/signals")
+    assert resp.status_code == 401
+    body = resp.json()
+    assert body["ok"] is False
+    assert body["code"] == "AUTH_EXPIRED"
+
+
+def test_access_token_middleware_accepts_bearer_token(monkeypatch) -> None:
+    settings = get_settings().model_copy(deep=True)
+    settings.auth.access_token = "secret-token"
+    monkeypatch.setattr(access_token_module, "get_settings", lambda: settings)
+
+    resp = client.get(
+        "/health",
+        headers={"Authorization": "Bearer secret-token"},
     )
-    assert saved.status_code == 200
-    saved_body = saved.json()
-    assert saved_body["ok"] is True
-    assert saved_body["data"]["total_amount_wan"] == 15.5
-    assert saved_body["data"]["amounts"]["stock"] == 12.0
+    assert resp.status_code == 200
 
-    fetched = client.get("/api/assets/current")
-    assert fetched.status_code == 200
-    fetched_body = fetched.json()
-    assert fetched_body["ok"] is True
-    assert fetched_body["data"] == {
-        "total_amount_wan": 15.5,
-        "amounts": {
-            "gold": 3.5,
-            "stock": 12.0,
-        },
-    }
+    resp_protected = client.get(
+        "/api/finance/signals",
+        headers={"Authorization": "Bearer secret-token"},
+    )
+    assert resp_protected.status_code == 200
 
 
 def test_bilibili_invalid_url() -> None:
@@ -394,7 +753,7 @@ def test_xiaohongshu_saved_notes_crud_and_dedupe_independent() -> None:
     assert listed_after.json()["data"]["total"] == 0
 
     # Saved note deletion should not affect xiaohongshu dedupe table.
-    service = _get_xiaohongshu_sync_service()
+    service = _get_xiaohongshu_service()
     assert service._repository.is_synced(first_summary["note_id"]) is True
 
 
@@ -662,7 +1021,7 @@ def test_existing_merge_note_format_is_refreshed_for_legacy_markdown() -> None:
     merged_note_id = commit_resp.json()["data"]["merged_note_id"]
 
     legacy_markdown = "# 旧版合并笔记\n\n## 差异与冲突\n\n- 旧格式内容"
-    repo = NoteLibraryRepository(get_settings().xiaohongshu.db_path)
+    repo = NoteLibraryRepository(str(_notes_db_path()))
     updated_count = repo.update_bilibili_note_summary(
         note_id=merged_note_id,
         summary_markdown=legacy_markdown,
@@ -741,7 +1100,7 @@ def test_legacy_merge_history_without_titles_is_rehydrated_from_markdown_links()
         f"- [历史标题一](<{first_url}>)\n"
         f"- [历史标题二](<{second_url}>)"
     )
-    repo = NoteLibraryRepository(get_settings().xiaohongshu.db_path)
+    repo = NoteLibraryRepository(str(_notes_db_path()))
     assert (
         repo.update_bilibili_note_summary(
             note_id=merged_note_id,
@@ -849,7 +1208,7 @@ def test_existing_merge_history_with_duplicate_source_refs_is_collapsed_on_refre
     merge_id = merge_data["merge_id"]
     merged_note_id = merge_data["merged_note_id"]
 
-    repo = NoteLibraryRepository(get_settings().xiaohongshu.db_path)
+    repo = NoteLibraryRepository(str(_notes_db_path()))
     legacy_markdown = "# 旧版合并笔记\n\n- 占位内容"
     assert (
         repo.update_bilibili_note_summary(

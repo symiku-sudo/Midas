@@ -83,7 +83,10 @@ def check_config_key_schema() -> list[CheckResult]:
             )
         ]
 
-    if not issues:
+    missing_issues = [issue for issue in issues if _is_missing_key_issue(issue)]
+    blocking_issues = [issue for issue in issues if not _is_missing_key_issue(issue)]
+
+    if not blocking_issues and not missing_issues:
         return [
             CheckResult(
                 name="config.key_schema",
@@ -92,11 +95,20 @@ def check_config_key_schema() -> list[CheckResult]:
             )
         ]
 
+    if not blocking_issues:
+        return [
+            CheckResult(
+                name="config.key_schema",
+                status="warn",
+                message=_format_missing_schema_issues(missing_issues),
+            )
+        ]
+
     return [
         CheckResult(
             name="config.key_schema",
             status="fail",
-            message=_format_schema_issues(issues),
+            message=_format_schema_issues(blocking_issues),
         )
     ]
 
@@ -106,6 +118,17 @@ def _format_schema_issues(issues: list[SchemaIssue]) -> str:
     if len(issues) > 3:
         preview += f"; ... 共 {len(issues)} 处"
     return preview
+
+
+def _format_missing_schema_issues(issues: list[SchemaIssue]) -> str:
+    preview = ", ".join(issue.path for issue in issues[:3])
+    if len(issues) > 3:
+        preview += f", ... 共 {len(issues)} 处"
+    return f"config.yaml 缺少部分可选键，将回退到默认值: {preview}"
+
+
+def _is_missing_key_issue(issue: SchemaIssue) -> bool:
+    return issue.message == "缺少该键。"
 
 
 def check_runtime(settings: Settings) -> list[CheckResult]:
@@ -259,32 +282,40 @@ def check_xiaohongshu(settings: Settings) -> list[CheckResult]:
         results.append(
             CheckResult(
                 name="xiaohongshu.web_readonly.request_url",
-                status="fail",
-                message="request_url 为空。",
+                status="warn",
+                message="request_url 为空；单链接总结仍可用，但收藏扫描类能力不可用。",
             )
         )
-        return results
-
-    parsed = urlparse(request_url)
-    if parsed.scheme != "https" or not parsed.netloc:
-        results.append(
-            CheckResult(
-                name="xiaohongshu.web_readonly.request_url",
-                status="fail",
-                message="request_url 必须是 HTTPS 且包含域名。",
-            )
-        )
+        parsed = None
     else:
-        results.append(
-            CheckResult(
-                name="xiaohongshu.web_readonly.request_url",
-                status="pass",
-                message=f"request_url 已配置: {request_url}",
+        parsed = urlparse(request_url)
+        if parsed.scheme != "https" or not parsed.netloc:
+            results.append(
+                CheckResult(
+                    name="xiaohongshu.web_readonly.request_url",
+                    status="fail",
+                    message="request_url 必须是 HTTPS 且包含域名。",
+                )
             )
-        )
+        else:
+            results.append(
+                CheckResult(
+                    name="xiaohongshu.web_readonly.request_url",
+                    status="pass",
+                    message=f"request_url 已配置: {request_url}",
+                )
+            )
 
     allowlist = {item.strip() for item in cfg.web_readonly.host_allowlist if item.strip()}
-    if parsed.netloc and parsed.netloc not in allowlist:
+    if parsed is None or not parsed.netloc:
+        results.append(
+            CheckResult(
+                name="xiaohongshu.web_readonly.host_allowlist",
+                status="warn",
+                message="未校验 host_allowlist；若后续启用收藏扫描，请补齐 request_url。",
+            )
+        )
+    elif parsed.netloc not in allowlist:
         results.append(
             CheckResult(
                 name="xiaohongshu.web_readonly.host_allowlist",

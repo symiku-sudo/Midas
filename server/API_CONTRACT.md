@@ -26,6 +26,12 @@ Failure:
 }
 ```
 
+## Authentication
+
+- 默认关闭。
+- 当 `config.yaml` 配置了 `auth.access_token` 且非空时，除 `GET /health` 外的接口都需要携带 `Authorization: Bearer <token>` 或 `X-Midas-Token: <token>`。
+- 缺失或错误时返回 `401` + `AUTH_EXPIRED`。
+
 ## Endpoints
 
 ## `GET /health`
@@ -57,7 +63,9 @@ Success `data`:
       "price": 91.23,
       "change_pct": "+1.2%",
       "alert_hint": ">90",
-      "alert_active": true
+      "alert_active": true,
+      "related_news_count": 1,
+      "related_keywords": ["原油"]
     }
   ],
   "top_news": [
@@ -67,7 +75,31 @@ Success `data`:
       "publisher": "Reuters",
       "published": "2026-03-05 11:40:00",
       "category": "finance",
-      "matched_keywords": ["美联储", "降息"]
+      "matched_keywords": ["美联储", "降息"],
+      "related_symbols": ["BZ=F"],
+      "related_watchlist_names": ["布伦特原油"]
+    }
+  ],
+  "focus_cards": [
+    {
+      "card_id": "a1b2c3",
+      "title": "布伦特原油 已触发监控阈值",
+      "summary": "阈值条件：>90；最近关联新闻 1 条",
+      "priority": "HIGH",
+      "kind": "ALERT",
+      "action_type": "REVIEW_NOW",
+      "action_label": "立即复核",
+      "action_hint": "先看价格异动和关联新闻，再决定是否提升观察频率。",
+      "reasons": ["threshold_triggered", "related_news_present"],
+      "related_symbols": ["BZ=F"],
+      "related_watchlist_names": ["布伦特原油"],
+      "related_asset_categories": ["stock", "equity_fund"],
+      "exposure_amount_wan": 10.2,
+      "exposure_relevance": "HIGH",
+      "portfolio_impact_summary": "关联资产暴露：股票 8.0万 / 股票基金 2.2万",
+      "status": "WATCHING",
+      "status_updated_at": "2026-03-15 18:20:00",
+      "handled_at": "2026-03-15 18:20:00"
     }
   ],
   "watchlist_ntfy_enabled": true,
@@ -92,7 +124,8 @@ Success `data`:
     "last_alert_signature": "布伦特原油（BZ=F）触发：价格突破 90",
     "last_alert_summary": "布伦特原油（BZ=F）触发：价格突破 90",
     "last_alert_status": "sent"
-  }
+  },
+  "history_count": 6
 }
 ```
 
@@ -101,16 +134,30 @@ Success `data`:
 - 若状态文件内容损坏，接口返回 `UPSTREAM_ERROR`。
 - `news_last_fetch_time` / `news_stale` 用于客户端识别新闻抓取是否陈旧。
 - `top_news` 为“今日金融与时政新闻 Top5”结构化列表，已按时效、来源权重、主题关键词和跨源覆盖加权后去重。
-- `watchlist_ntfy_enabled` 表示 Watchlist 行情阈值 ntfy 通知当前开关状态。
+- `focus_cards` 为服务端按规则生成的“今日关注建议”，当前会优先覆盖“阈值已触发的标的”和“明确影响 watchlist 的新闻”两类信号。
+- `focus_cards[].card_id/status/status_updated_at/handled_at` 让客户端能把“已看过 / 今日忽略 / 保持关注 / 取消忽略”做成服务端闭环。
+- `focus_cards[].related_asset_categories/exposure_amount_wan/exposure_relevance/portfolio_impact_summary` 用于把 watchlist / 新闻与当前资产暴露关联起来。
+- `top_news` / `watchlist_preview` 也会附带资产暴露字段，便于客户端在明细视图继续展开。
+- `focus_cards[].action_type` 为结构化动作类型，当前包括 `REVIEW_NOW`、`FOLLOW_UP`、`WAIT_CONFIRM`、`MONITOR`。
+- `focus_cards[].action_label/action_hint` 提供建议动作和一句解释，便于客户端直接展示“现在该做什么”。
+- `focus_cards[].reasons` 为触发理由代码，当前会覆盖 `threshold_triggered`、`related_news_present`、`keyword_overlap`、`recent_alert_sent`、`news_impacts_watchlist`、`linked_alert_active`、`multi_asset_impact`。
+- `watchlist_preview[].related_news_count/related_keywords` 表示该关注标的在当前 Top5 新闻里的关联数量与命中关键词。
+- `top_news[].related_symbols/related_watchlist_names` 表示该新闻可能影响的关注标的，服务端会根据 `finance_signals/financial_config.yaml` 里的 `market_data.instruments[].aliases` 做映射。
+- `watchlist_ntfy_enabled` 表示 Watchlist 行情阈值 ntfy 通知当前开关状态；接口切换后会持久化到 `finance_status.json`，配置文件只提供默认值。
 - `ai_insight_text` 仅在用户主动触发摘要按钮后写入；未触发时允许为空字符串。
 - `news_debug` 用于排查“有新闻但未进入 Top5”的召回/排序问题，以及观察 24 小时摘要的样本数与单次 prompt 文本长度。
 - `news_debug.entries_filtered_by_source` 反映白名单/黑名单过滤效果。
 - `news_debug.digest_item_count/digest_prompt_chars/digest_status/digest_last_generated_at` 分别表示摘要样本数、单次 prompt 字符数、摘要生成状态和最近一次真实生成时间。
 - `market_alert_debug` 反映 Watchlist 行情阈值通知的发送状态。
+- `history_count` 表示当前已保留的建议历史条数。
 
 ## `PUT /api/finance/signals/watchlist-ntfy`
 
 用途：切换 Watchlist 行情阈值的 ntfy 通知开关。
+
+行为说明：
+- 当前开关状态会写入 `finance_status.json`，不会改写 `finance_signals/financial_config.yaml`。
+- 当状态文件里还没有该字段时，服务端会回退到 `financial_config.yaml` 里的 `market_data.alerting.enabled` 作为默认值。
 
 Request:
 
@@ -133,75 +180,84 @@ Success `data`:
 
 ```json
 {
-  "enabled": false
-}
-```
-
-## `POST /api/assets/fill-from-images`
-
-用途：接收资产截图（最多 5 张），由服务端调用多模态 LLM 提取金额并按资产分类汇总，供客户端回填输入框。
-
-Request：
-- `Content-Type: multipart/form-data`
-- 表单字段：`images`（可重复，上传 1~5 张图片）
-
-Success `data`:
-
-```json
-{
-  "image_count": 3,
-  "category_amounts": {
-    "stock": 12.34,
-    "equity_fund": 5.20,
-    "gold": 1.00,
-    "bond_and_bond_fund": 0.00,
-    "money_market_fund": 2.10,
-    "bank_fixed_deposit": 20.00,
-    "bank_current_deposit": 3.50,
-    "housing_fund": 8.88
+  "update_time": "2026-03-10 18:00:00",
+  "news_last_fetch_time": "2026-03-10 18:00:00",
+  "news_stale": false,
+  "watchlist_preview": [],
+  "top_news": [],
+  "watchlist_ntfy_enabled": false,
+  "ai_insight_text": "## 24小时摘要\n\n- 已生成。",
+  "news_debug": {
+    "digest_item_count": 12,
+    "digest_prompt_chars": 1412,
+    "digest_status": "generated",
+    "digest_last_generated_at": "2026-03-10 18:00:00"
   },
-  "total_amount_wan": 53.02
-}
-```
-
-说明：
-- 金额单位统一为“万元人民币”。
-- `category_amounts` 始终返回完整分类键集合，缺失项返回 `0.00`。
-- 服务端仅返回识别结果，不会触发保存动作；客户端需由用户手动确认并保存。
-
-## `GET /api/assets/current`
-
-用途：读取服务端持久化的“当前资产金额”。客户端卸载重装或切换设备后，会先以该接口恢复当前填写值。
-
-Success `data`:
-
-```json
-{
-  "total_amount_wan": 15.5,
-  "amounts": {
-    "stock": 12.0,
-    "gold": 3.5
+  "market_alert_debug": {
+    "alert_enabled": false,
+    "alert_sent": false,
+    "last_alert_time": "",
+    "last_alert_signature": "",
+    "last_alert_summary": "",
+    "last_alert_status": ""
   }
 }
 ```
 
-说明：
-- 资产分类金额单位统一为“万元人民币”。
-- 首次尚未保存时，接口返回 `total_amount_wan=0` 和空 `amounts`。
+## `POST /api/finance/signals/cards/{card_id}/status`
 
-## `PUT /api/assets/current`
-
-用途：保存当前资产金额。该接口只更新“当前值”，不会追加历史快照；若客户端希望保留时间序列历史，应额外调用 `POST /api/assets/snapshots`。
+用途：更新单条财经建议卡的处理状态。
 
 Request:
 
 ```json
 {
-  "total_amount_wan": 15.5,
-  "amounts": {
-    "stock": 12.0,
-    "gold": 3.5
-  }
+  "status": "WATCHING"
+}
+```
+
+允许值：
+- `ACTIVE`
+- `SEEN`
+- `IGNORED_TODAY`
+- `WATCHING`
+
+## `GET /api/finance/signals/history`
+
+用途：读取最近财经建议历史，用于回看“为什么提醒过这个”。
+
+Query:
+- `limit`：默认 `50`，最大 `200`
+
+Success `data`:
+
+```json
+{
+  "total": 1,
+  "items": [
+    {
+      "card_id": "a1b2c3",
+      "title": "布伦特原油 已触发监控阈值",
+      "action_type": "REVIEW_NOW",
+      "action_label": "立即复核",
+      "status": "WATCHING",
+      "first_seen_at": "2026-03-15 10:00:00",
+      "last_seen_at": "2026-03-15 18:00:00",
+      "status_updated_at": "2026-03-15 18:20:00"
+    }
+  ]
+}
+```
+
+## `POST /api/jobs/bilibili-summarize`
+
+用途：以异步任务方式提交 B 站总结，请求会立即返回 `job_id`，实际总结由服务端后台 worker 顺序执行。
+
+Request:
+
+```json
+{
+  "video_url": "BV1xx411c7mD"
 }
 ```
 
@@ -209,102 +265,144 @@ Success `data`:
 
 ```json
 {
-  "total_amount_wan": 15.5,
-  "amounts": {
-    "stock": 12.0,
-    "gold": 3.5
-  }
+  "job_id": "9a7c4a1b4f6d4f1dbde7bdfce95d0d0e",
+  "job_type": "bilibili_summarize",
+  "status": "PENDING",
+  "message": "任务已入队，等待执行。",
+  "submitted_at": "2026-03-12 12:30:00",
+  "retry_of_job_id": "",
+  "progress_current": 0,
+  "progress_total": 0
 }
 ```
 
 说明：
-- 若 `total_amount_wan <= 0` 且 `amounts` 非空，服务端会自动按分类求和。
-- 仅允许已定义的资产分类键。
+- `video_url` 规则与同步接口 `POST /api/bilibili/summarize` 一致。
+- 历史任务会持久化到 `server/.tmp/async_jobs.json`。
 
-## `GET /api/assets/snapshots`
+## `POST /api/jobs/xiaohongshu/summarize-url`
 
-用途：读取服务端持久化的资产快照历史。卸载重装/换设备后，客户端可据此恢复历史记录。
+用途：以异步任务方式提交小红书单篇 URL 总结，请求会立即返回 `job_id`。
+
+Request:
+
+```json
+{
+  "url": "https://www.xiaohongshu.com/explore/67b8d0d1000000001d03f09a"
+}
+```
 
 Success `data`:
 
 ```json
 {
-  "total": 2,
+  "job_id": "92efc62e49024659adf843d60e2f7b16",
+  "job_type": "xiaohongshu_summarize_url",
+  "status": "PENDING",
+  "message": "任务已入队，等待执行。",
+  "submitted_at": "2026-03-12 12:31:00",
+  "retry_of_job_id": "",
+  "progress_current": 0,
+  "progress_total": 0
+}
+```
+
+## `GET /api/jobs`
+
+用途：读取最近异步任务历史。
+
+Query：
+- `limit`：返回条数，默认 `20`，范围 `1~100`
+- `status`：可选，按 `PENDING/RUNNING/SUCCEEDED/FAILED/INTERRUPTED` 过滤
+- `job_type`：可选，当前支持 `bilibili_summarize`、`xiaohongshu_summarize_url`
+  - 支持逗号分隔多个值，例如 `bilibili_summarize,xiaohongshu_summarize_url`
+
+Success `data`:
+
+```json
+{
+  "total": 1,
   "items": [
     {
-      "id": "asset-history-2",
-      "saved_at": "2026-03-08 14:40:00",
-      "total_amount_wan": 15.5,
-      "amounts": {
-        "stock": 12.0,
-        "gold": 3.5
-      }
-    },
-    {
-      "id": "asset-history-1",
-      "saved_at": "2026-03-07 21:10:00",
-      "total_amount_wan": 14.2,
-      "amounts": {
-        "stock": 11.0,
-        "gold": 3.2
+      "job_id": "9a7c4a1b4f6d4f1dbde7bdfce95d0d0e",
+      "job_type": "bilibili_summarize",
+      "status": "SUCCEEDED",
+      "message": "任务执行完成。",
+      "submitted_at": "2026-03-12 12:30:00",
+      "started_at": "2026-03-12 12:30:01",
+      "finished_at": "2026-03-12 12:31:00",
+      "retry_of_job_id": "",
+      "progress": {
+        "current": 0,
+        "total": 0
       }
     }
   ]
 }
 ```
 
-说明：
-- 排序规则：`saved_at` 近到远。
-- 资产分类金额单位统一为“万元人民币”。
+字段说明：
+- `retry_of_job_id`：若本任务由历史失败/中断任务重试创建，则这里会记录原任务 `job_id`；首次提交时为空字符串。
 
-## `POST /api/assets/snapshots`
+## `GET /api/jobs/{job_id}`
 
-用途：保存或迁移一条资产快照历史记录。`id` 已存在时会执行幂等更新，便于客户端把本地旧历史补传到服务端。
-
-Request:
-
-```json
-{
-  "id": "asset-history-2",
-  "saved_at": "2026-03-08 14:40:00",
-  "total_amount_wan": 15.5,
-  "amounts": {
-    "stock": 12.0,
-    "gold": 3.5
-  }
-}
-```
+用途：读取单个异步任务状态和结果。
 
 Success `data`:
 
 ```json
 {
-  "id": "asset-history-2",
-  "saved_at": "2026-03-08 14:40:00",
-  "total_amount_wan": 15.5,
-  "amounts": {
-    "stock": 12.0,
-    "gold": 3.5
-  }
+  "job_id": "9a7c4a1b4f6d4f1dbde7bdfce95d0d0e",
+  "job_type": "bilibili_summarize",
+  "status": "SUCCEEDED",
+  "message": "任务执行完成。",
+  "submitted_at": "2026-03-12 12:30:00",
+  "started_at": "2026-03-12 12:30:01",
+  "finished_at": "2026-03-12 12:31:00",
+  "retry_of_job_id": "",
+  "request_payload": {
+    "video_url": "https://www.bilibili.com/video/BV1xx411c7mD"
+  },
+  "progress": {
+    "current": 0,
+    "total": 0
+  },
+  "result": {
+    "video_url": "https://www.bilibili.com/video/BV1xx411c7mD",
+    "summary_markdown": "# 总结",
+    "elapsed_ms": 1234,
+    "transcript_chars": 4567
+  },
+  "error": null
 }
 ```
 
-说明：
-- `id` / `saved_at` 允许客户端显式传入，便于迁移本地旧记录。
-- 若 `id` 为空，服务端会自动生成。
-- 若 `total_amount_wan <= 0` 且 `amounts` 非空，服务端会自动按分类求和。
+失败说明：
+- 当 `job_id` 不存在时，返回 `404` + `JOB_NOT_FOUND`。
+- 服务启动时若发现历史任务残留在 `RUNNING`，会将其改写为 `INTERRUPTED`，并保留原请求体以便重新提交。
 
-## `DELETE /api/assets/snapshots/{record_id}`
+## `POST /api/jobs/{job_id}/retry`
 
-用途：删除一条服务端资产快照历史。
+用途：重试单个异步任务。当前仅支持 `FAILED` 或 `INTERRUPTED` 状态。
 
 Success `data`:
 
 ```json
 {
-  "deleted_count": 1
+  "job_id": "4fd0a8dcb6d0493f8df59cbb0c383d91",
+  "job_type": "bilibili_summarize",
+  "status": "PENDING",
+  "message": "任务已入队，等待执行。",
+  "submitted_at": "2026-03-12 12:40:00",
+  "retry_of_job_id": "9a7c4a1b4f6d4f1dbde7bdfce95d0d0e",
+  "progress_current": 0,
+  "progress_total": 0
 }
 ```
+
+失败说明：
+- 当 `job_id` 不存在时，返回 `404` + `JOB_NOT_FOUND`。
+- 当原任务不是 `FAILED/INTERRUPTED`，或缺少原始请求参数时，返回 `400` + `INVALID_INPUT`。
 
 ## `POST /api/bilibili/summarize`
 
@@ -389,6 +487,85 @@ Success `data`:
   ]
 }
 ```
+
+## `GET /api/notes/search`
+
+用途：统一检索已保存笔记，当前会聚合 B 站和小红书结果，支持关键词、来源、时间、是否已合并、排序与分页。
+
+Query：
+- `keyword`：可选，按标题和摘要内容模糊匹配
+- `source`：可选，支持 `bilibili`、`xiaohongshu`
+- `saved_from` / `saved_to`：可选，按东八区 `YYYY-MM-DD HH:MM:SS` 过滤保存时间
+- `merged`：可选，`true/false`
+- `sort_by`：可选，支持 `saved_at`、`title`、`source`
+- `sort_order`：可选，支持 `asc`、`desc`
+- `limit`：默认 `50`，范围 `1~200`
+- `offset`：默认 `0`
+
+Success `data`:
+
+```json
+{
+  "total": 2,
+  "limit": 20,
+  "offset": 0,
+  "items": [
+    {
+      "source": "xiaohongshu",
+      "note_id": "x1",
+      "title": "美联储观察",
+      "source_url": "https://www.xiaohongshu.com/explore/x1",
+      "summary_markdown": "# 降息交易",
+      "saved_at": "2026-03-03 08:00:00",
+      "merge_state": "ACTIVE",
+      "merge_id": "",
+      "canonical_note_id": "x1",
+      "is_merged": false,
+      "topics": ["美联储观察", "降息交易"]
+    },
+    {
+      "source": "bilibili",
+      "note_id": "b1",
+      "title": "宏观复盘",
+      "source_url": "https://www.bilibili.com/video/BV1xx411c7mD",
+      "summary_markdown": "# 美联储与降息",
+      "saved_at": "2026-03-01 08:00:00",
+      "merge_state": "ACTIVE",
+      "merge_id": "",
+      "canonical_note_id": "b1",
+      "is_merged": false,
+      "topics": ["宏观复盘", "美联储与降息"]
+    }
+  ]
+}
+```
+
+## `GET /api/notes/review/topics`
+
+用途：按“最近一周 / 最近一月”等窗口回顾主题聚类。
+
+Query：
+- `days`：默认 `30`
+- `limit`：默认 `8`
+- `per_topic_limit`：默认 `5`
+
+## `GET /api/notes/review/timeline`
+
+用途：按时间桶回看某时间段新增笔记。
+
+Query：
+- `days`：默认 `30`
+- `bucket`：`day` 或 `week`
+- `limit`：默认 `10`
+- `per_bucket_limit`：默认 `5`
+
+## `GET /api/notes/{source}/{note_id}/related`
+
+用途：独立回查某条笔记的相似/相关旧笔记，不强制进入 merge 流程。
+
+Query：
+- `limit`：默认 `8`
+- `min_score`：默认 `0.2`
 
 ## `DELETE /api/notes/bilibili/{note_id}`
 

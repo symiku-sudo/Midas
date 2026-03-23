@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from app.core.config import Settings
+from app.core.config import Settings, resolve_runtime_path
 from app.core.errors import AppError, ErrorCode
 from app.models.schemas import BilibiliSummaryData
 from app.services.asr import ASRService
@@ -48,7 +48,7 @@ class BilibiliSummarizer:
         self._validate_url(normalized_video_url)
 
         start = time.perf_counter()
-        base_temp = Path(self._settings.runtime.temp_dir)
+        base_temp = resolve_runtime_path(self._settings.runtime.temp_dir)
         job_dir = base_temp / f"bili-{uuid.uuid4().hex}"
         job_dir.mkdir(parents=True, exist_ok=True)
 

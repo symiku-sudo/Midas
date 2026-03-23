@@ -7,6 +7,7 @@ from typing import Any
 class ErrorCode(str, Enum):
     OK = "OK"
     INVALID_INPUT = "INVALID_INPUT"
+    JOB_NOT_FOUND = "JOB_NOT_FOUND"
     AUTH_EXPIRED = "AUTH_EXPIRED"
     RATE_LIMITED = "RATE_LIMITED"
     CIRCUIT_OPEN = "CIRCUIT_OPEN"

@@ -4,11 +4,12 @@ import json
 import logging
 import re
 import uuid
+from datetime import datetime, timedelta
 from difflib import SequenceMatcher
 from itertools import combinations
 from typing import Any
 
-from app.core.config import Settings
+from app.core.config import Settings, resolve_runtime_path
 from app.core.errors import AppError, ErrorCode
 from app.models.schemas import (
     BilibiliSavedNote,
@@ -20,6 +21,14 @@ from app.models.schemas import (
     NotesMergePreviewData,
     NotesMergeRollbackData,
     NotesMergeSuggestData,
+    NotesTimelineReviewData,
+    NotesTimelineReviewItem,
+    NotesReviewTopicItem,
+    NotesReviewTopicsData,
+    RelatedNoteItem,
+    RelatedNotesData,
+    UnifiedNoteItem,
+    UnifiedNotesData,
     XiaohongshuSavedNote,
     XiaohongshuSavedNotesData,
     XiaohongshuSyncedNotesPruneData,
@@ -57,6 +66,10 @@ _MEDIUM_SUMMARY_MIN = 0.62
 _MEDIUM_KEYWORD_MIN = 0.08
 _ASCII_TOKEN_PATTERN = re.compile(r"[0-9a-z]+")
 _CJK_BLOCK_PATTERN = re.compile(r"[\u4e00-\u9fff]+")
+_TOPIC_PHRASE_PATTERN = re.compile(
+    r"[A-Za-z][A-Za-z0-9.+#/\-]{1,23}|[0-9]+[A-Za-z][A-Za-z0-9.+#/\-]{1,23}|[\u4e00-\u9fff]{2,18}"
+)
+_TOPIC_SPLIT_PATTERN = re.compile(r"[|｜/·•,:：;；()（）\[\]【】<>《》“”\"'、]+")
 _ASCII_STOPWORDS = {
     "the",
     "and",
@@ -73,8 +86,49 @@ _ASCII_STOPWORDS = {
     "were",
     "can",
     "will",
+    "note",
+    "notes",
+    "summary",
+    "review",
+    "report",
+    "update",
+    "guide",
+    "tips",
+    "issue",
 }
 _CJK_STOPWORDS = {"的", "了", "和", "是", "在", "与", "及", "并", "对", "将"}
+_TOPIC_GENERIC_LABELS = {
+    "摘要",
+    "总结",
+    "关键要点",
+    "可执行建议",
+    "评论区洞察",
+    "高赞分析",
+    "样本说明",
+    "原文链接",
+    "数据来源",
+    "最近一周",
+    "最近一月",
+    "未分类",
+}
+_TOPIC_SUFFIXES = (
+    "报告",
+    "总结",
+    "摘要",
+    "分析",
+    "复盘",
+    "随记",
+    "笔记",
+    "分享",
+    "教程",
+    "指南",
+    "盘点",
+    "详解",
+    "记录",
+    "观察",
+    "合集",
+    "求助",
+)
 
 
 class NoteLibraryService:
@@ -85,7 +139,7 @@ class NoteLibraryService:
     ) -> None:
         self._settings = settings
         self._repository = repository or NoteLibraryRepository(
-            settings.xiaohongshu.db_path
+            str(resolve_runtime_path(settings.xiaohongshu.db_path))
         )
         self._llm = LLMService(settings)
         self._semantic_model: Any | None = None
@@ -189,6 +243,224 @@ class NoteLibraryService:
             for item in self._repository.list_xiaohongshu_notes()
         ]
         return XiaohongshuSavedNotesData(total=len(items), items=items)
+
+    def search_notes(
+        self,
+        *,
+        keyword: str = "",
+        source: str = "",
+        saved_from: str = "",
+        saved_to: str = "",
+        merged: bool | None = None,
+        sort_by: str = "saved_at",
+        sort_order: str = "desc",
+        limit: int = 50,
+        offset: int = 0,
+    ) -> UnifiedNotesData:
+        source_value = source.strip().lower()
+        if source_value and source_value not in _SUPPORTED_MERGE_SOURCES:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message=f"不支持的 notes source: {source}",
+                status_code=400,
+            )
+        total, items = self._repository.search_notes(
+            keyword=keyword,
+            source=source_value,
+            saved_from=saved_from,
+            saved_to=saved_to,
+            merged=merged,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=limit,
+            offset=offset,
+        )
+        return UnifiedNotesData(
+            total=total,
+            limit=limit,
+            offset=offset,
+            items=[self._build_unified_note_item(item) for item in items],
+        )
+
+    def review_notes_by_topics(
+        self,
+        *,
+        days: int = 30,
+        limit: int = 8,
+        per_topic_limit: int = 5,
+    ) -> NotesReviewTopicsData:
+        window_days = max(int(days), 1)
+        window_start = self._window_start_text(window_days)
+        rows = self._repository.list_unified_notes(
+            saved_from=window_start,
+            sort_by="saved_at",
+            sort_order="desc",
+            limit=max(limit * per_topic_limit * 8, 120),
+        )
+        grouped: dict[str, list[UnifiedNoteItem]] = {}
+        for row in rows:
+            item = self._build_unified_note_item(row)
+            unique_topics = []
+            seen_topics: set[str] = set()
+            for topic in item.topics or ["未分类"]:
+                normalized = topic.strip()
+                if not normalized or normalized in seen_topics:
+                    continue
+                seen_topics.add(normalized)
+                unique_topics.append(normalized)
+            for topic in unique_topics or ["未分类"]:
+                grouped.setdefault(topic, []).append(item)
+
+        ranked_topics = sorted(
+            grouped.items(),
+            key=lambda item: (
+                -len(item[1]),
+                item[1][0].saved_at if item[1] else "",
+                item[0],
+            ),
+        )[:limit]
+        topic_items = [
+            NotesReviewTopicItem(
+                topic=topic,
+                total=len(items),
+                latest_saved_at=items[0].saved_at if items else "",
+                items=items[:per_topic_limit],
+            )
+            for topic, items in ranked_topics
+        ]
+        return NotesReviewTopicsData(
+            window_days=window_days,
+            total_topics=len(topic_items),
+            items=topic_items,
+        )
+
+    def review_notes_by_timeline(
+        self,
+        *,
+        days: int = 30,
+        bucket: str = "day",
+        limit: int = 10,
+        per_bucket_limit: int = 5,
+    ) -> NotesTimelineReviewData:
+        window_days = max(int(days), 1)
+        bucket_value = bucket.strip().lower() or "day"
+        if bucket_value not in {"day", "week"}:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message=f"不支持的 timeline bucket: {bucket}",
+                status_code=400,
+            )
+        window_start = self._window_start_text(window_days)
+        rows = self._repository.list_unified_notes(
+            saved_from=window_start,
+            sort_by="saved_at",
+            sort_order="desc",
+            limit=max(limit * per_bucket_limit * 4, 60),
+        )
+        grouped: dict[str, list[UnifiedNoteItem]] = {}
+        bucket_bounds: dict[str, tuple[str, str]] = {}
+        for row in rows:
+            item = self._build_unified_note_item(row)
+            label, start_time, end_time = self._timeline_bucket_for_saved_at(
+                item.saved_at,
+                bucket=bucket_value,
+            )
+            grouped.setdefault(label, []).append(item)
+            bucket_bounds[label] = (start_time, end_time)
+
+        ranked_buckets = sorted(grouped.items(), key=lambda item: item[0], reverse=True)[:limit]
+        bucket_items = [
+            NotesTimelineReviewItem(
+                label=label,
+                start_time=bucket_bounds.get(label, ("", ""))[0],
+                end_time=bucket_bounds.get(label, ("", ""))[1],
+                total=len(items),
+                items=items[:per_bucket_limit],
+            )
+            for label, items in ranked_buckets
+        ]
+        return NotesTimelineReviewData(
+            window_days=window_days,
+            bucket=bucket_value,
+            total_buckets=len(bucket_items),
+            items=bucket_items,
+        )
+
+    def find_related_notes(
+        self,
+        *,
+        source: str,
+        note_id: str,
+        limit: int = 8,
+        min_score: float = 0.2,
+    ) -> RelatedNotesData:
+        source_value = self._validate_merge_source(source)
+        normalized_note_id = note_id.strip()
+        target = self._repository.get_unified_note(source=source_value, note_id=normalized_note_id)
+        if target is None:
+            raise AppError(
+                code=ErrorCode.INVALID_INPUT,
+                message=f"未找到 note_id={normalized_note_id} 对应的笔记。",
+                status_code=404,
+            )
+
+        target_note = {
+            **target,
+            "source_ref": target.get("source_url", ""),
+        }
+        candidates = self._repository.list_unified_notes(
+            source=source_value,
+            sort_by="saved_at",
+            sort_order="desc",
+            limit=400,
+        )
+        items: list[RelatedNoteItem] = []
+        for row in candidates:
+            candidate_note_id = str(row.get("note_id", "")).strip()
+            if not candidate_note_id or candidate_note_id == normalized_note_id:
+                continue
+            candidate = {
+                **row,
+                "source_ref": row.get("source_url", ""),
+            }
+            score_data = self._score_note_pair(target_note, candidate)
+            score = round(float(score_data.get("score", 0.0)), 4)
+            if score < min_score:
+                continue
+            enriched = self._build_unified_note_item(row)
+            items.append(
+                RelatedNoteItem(
+                    source=enriched.source,
+                    note_id=enriched.note_id,
+                    title=enriched.title,
+                    source_url=enriched.source_url,
+                    saved_at=enriched.saved_at,
+                    summary_excerpt=self._summary_excerpt(enriched.summary_markdown),
+                    score=score,
+                    relation_level=str(score_data.get("relation_level", _MERGE_RELATION_WEAK)),
+                    reason_codes=list(score_data.get("reason_codes", [])),
+                    merge_state=enriched.merge_state,
+                    merge_id=enriched.merge_id,
+                    canonical_note_id=enriched.canonical_note_id,
+                    is_merged=enriched.is_merged,
+                    topics=enriched.topics,
+                )
+            )
+        items.sort(
+            key=lambda item: (
+                -item.score,
+                0 if item.relation_level == _MERGE_RELATION_STRONG else 1,
+                item.saved_at,
+                item.note_id,
+            ),
+            reverse=False,
+        )
+        return RelatedNotesData(
+            source=source_value,
+            note_id=normalized_note_id,
+            total=len(items[:limit]),
+            items=items[:limit],
+        )
 
     def delete_xiaohongshu_note(self, note_id: str) -> int:
         return self._repository.delete_xiaohongshu_note(note_id)
@@ -855,6 +1127,197 @@ class NoteLibraryService:
                     return title
                 break
         return fallback
+
+    def _build_unified_note_item(self, row: dict[str, Any]) -> UnifiedNoteItem:
+        title = str(row.get("title", "")).strip()
+        summary_markdown = str(row.get("summary_markdown", ""))
+        note_id = str(row.get("note_id", "")).strip()
+        merge_state = str(row.get("merge_state", _SOURCE_INDEX_STATE_ACTIVE)).strip()
+        return UnifiedNoteItem(
+            source=str(row.get("source", "")).strip(),
+            note_id=note_id,
+            title=title,
+            source_url=str(row.get("source_url", "")).strip(),
+            summary_markdown=summary_markdown,
+            saved_at=str(row.get("saved_at", "")).strip(),
+            merge_state=merge_state or _SOURCE_INDEX_STATE_ACTIVE,
+            merge_id=str(row.get("merge_id", "")).strip(),
+            canonical_note_id=str(row.get("canonical_note_id", note_id)).strip() or note_id,
+            is_merged=bool(row.get("is_merged", False)),
+            topics=self._extract_note_topics(title=title, summary_markdown=summary_markdown),
+        )
+
+    def _extract_note_topics(
+        self,
+        *,
+        title: str,
+        summary_markdown: str,
+        limit: int = 3,
+    ) -> list[str]:
+        headline = self._extract_h1_title(summary_markdown, fallback=title)
+        weighted_texts: list[tuple[str, int]] = []
+        for text, weight in [
+            (title, 8),
+            (headline, 7),
+            *[(heading, 5) for heading in self._extract_markdown_headings(summary_markdown, limit=6)],
+            (self._summary_excerpt(summary_markdown, limit=320), 2),
+        ]:
+            normalized_text = text.strip()
+            if normalized_text:
+                weighted_texts.append((normalized_text, weight))
+
+        scores: dict[str, int] = {}
+        display: dict[str, str] = {}
+        source_hits: dict[str, int] = {}
+        for source_text, weight in weighted_texts:
+            source_seen: set[str] = set()
+            ranked_candidates = self._collect_topic_candidates(source_text)
+            for index, raw_candidate in enumerate(ranked_candidates):
+                candidate = self._normalize_topic_candidate(raw_candidate)
+                if not candidate:
+                    continue
+                key = candidate.lower() if candidate.isascii() else candidate
+                score = weight + max(0, 4 - index)
+                if any(ch.isdigit() for ch in candidate):
+                    score += 2
+                if re.search(r"[A-Z]{2,}", raw_candidate):
+                    score += 1
+                scores[key] = scores.get(key, 0) + score
+                display.setdefault(key, candidate)
+                if key not in source_seen:
+                    source_hits[key] = source_hits.get(key, 0) + 1
+                    source_seen.add(key)
+
+        ranked = sorted(
+            display,
+            key=lambda key: (
+                -(scores.get(key, 0) + source_hits.get(key, 0) * 3),
+                -len(display[key]),
+                display[key],
+            ),
+        )
+        topics = [display[key] for key in ranked[:limit]]
+        if len(topics) < limit:
+            fallback_candidates = []
+            seen_topics = {topic.lower() if topic.isascii() else topic for topic in topics}
+            for token in self._tokenize(f"{title}\n{headline}\n{summary_markdown[:320]}"):
+                candidate = self._normalize_topic_candidate(token)
+                if not candidate:
+                    continue
+                key = candidate.lower() if candidate.isascii() else candidate
+                if key in seen_topics:
+                    continue
+                seen_topics.add(key)
+                fallback_candidates.append(candidate)
+                if len(topics) + len(fallback_candidates) >= limit:
+                    break
+            topics.extend(fallback_candidates)
+        return topics[:limit] or ["未分类"]
+
+    def _extract_markdown_headings(self, markdown: str, *, limit: int = 6) -> list[str]:
+        headings: list[str] = []
+        for raw_line in markdown.splitlines():
+            line = raw_line.strip()
+            if not line.startswith("#"):
+                continue
+            text = line.lstrip("#").strip()
+            normalized = self._normalize_topic_candidate(text)
+            if normalized:
+                headings.append(normalized)
+            if len(headings) >= limit:
+                break
+        return headings
+
+    def _collect_topic_candidates(self, text: str) -> list[str]:
+        candidates: list[str] = []
+        seen: set[str] = set()
+        for clause in _TOPIC_SPLIT_PATTERN.split(text):
+            normalized_clause = self._normalize_topic_candidate(clause)
+            if normalized_clause:
+                key = normalized_clause.lower() if normalized_clause.isascii() else normalized_clause
+                if key not in seen:
+                    seen.add(key)
+                    candidates.append(normalized_clause)
+            for raw in _TOPIC_PHRASE_PATTERN.findall(clause):
+                normalized = self._normalize_topic_candidate(raw)
+                if not normalized:
+                    continue
+                key = normalized.lower() if normalized.isascii() else normalized
+                if key in seen:
+                    continue
+                seen.add(key)
+                candidates.append(normalized)
+        return candidates
+
+    def _normalize_topic_candidate(self, raw: str) -> str:
+        candidate = raw.strip().strip("-:：|/·•()[]【】<>《》“”\"' ")
+        if not candidate:
+            return ""
+        candidate = re.sub(r"^(摘要|总结|关键要点|可执行建议|评论区洞察|高赞分析|样本说明|原文链接|数据来源)[:：]?", "", candidate).strip()
+        if not candidate:
+            return ""
+        candidate = re.sub(r"\s+", " ", candidate)
+        if candidate in _TOPIC_GENERIC_LABELS:
+            return ""
+        if candidate.isdigit():
+            return ""
+        lowered = candidate.lower()
+        if lowered in _ASCII_STOPWORDS:
+            return ""
+        if candidate in _CJK_STOPWORDS:
+            return ""
+        if self._contains_cjk(candidate):
+            candidate = self._strip_topic_suffix(candidate)
+        if len(candidate) < 2:
+            return ""
+        return candidate[:18]
+
+    def _strip_topic_suffix(self, value: str) -> str:
+        candidate = value
+        for suffix in _TOPIC_SUFFIXES:
+            if candidate.endswith(suffix) and len(candidate) - len(suffix) >= 2:
+                candidate = candidate[: -len(suffix)].strip()
+                break
+        return candidate
+
+    def _contains_cjk(self, value: str) -> bool:
+        return bool(_CJK_BLOCK_PATTERN.search(value))
+
+    def _summary_excerpt(self, markdown: str, limit: int = 120) -> str:
+        lines: list[str] = []
+        for raw_line in markdown.splitlines():
+            text = raw_line.strip().lstrip("#").strip()
+            if not text:
+                continue
+            lines.append(text)
+            if len(" ".join(lines)) >= limit:
+                break
+        excerpt = " ".join(lines).strip()
+        if len(excerpt) > limit:
+            return f"{excerpt[:limit].rstrip()}..."
+        return excerpt
+
+    def _window_start_text(self, days: int) -> str:
+        delta_days = max(int(days), 1) - 1
+        return (datetime.now() - timedelta(days=delta_days)).strftime("%Y-%m-%d 00:00:00")
+
+    def _timeline_bucket_for_saved_at(
+        self,
+        saved_at: str,
+        *,
+        bucket: str,
+    ) -> tuple[str, str, str]:
+        try:
+            dt = datetime.strptime(saved_at, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return saved_at[:10], saved_at, saved_at
+        if bucket == "week":
+            start = dt - timedelta(days=dt.weekday())
+            end = start + timedelta(days=6)
+            label = f"{start.strftime('%Y-%m-%d')} ~ {end.strftime('%Y-%m-%d')}"
+            return label, start.strftime("%Y-%m-%d 00:00:00"), end.strftime("%Y-%m-%d 23:59:59")
+        label = dt.strftime("%Y-%m-%d")
+        return label, f"{label} 00:00:00", f"{label} 23:59:59"
 
     def _token_jaccard(self, left: str, right: str) -> float:
         left_tokens = set(self._tokenize(left))

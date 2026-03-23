@@ -42,6 +42,9 @@ runtime:
     startup_delay_seconds: 30
     keep_latest_files: 10
 
+auth:
+  access_token: ""
+
 notes_merge:
   semantic_similarity_enabled: true
   semantic_model_name: BAAI/bge-small-zh-v1.5
@@ -52,7 +55,7 @@ notes_merge:
 xiaohongshu:
   # 可选：mock / web_readonly
   # - mock: 使用本地示例数据（最安全）
-  # - web_readonly: 只读请求网页端接口（需手动配置 request_url/headers）
+  # - web_readonly: 只读抓取网页内容；单链接总结主要依赖 headers，request_url 仅在列表扫描类能力里使用
   mode: web_readonly
   cookie: ""
   collection_id: ""
@@ -67,7 +70,8 @@ xiaohongshu:
   api_base: ""
   mock_notes_path: ""
   web_readonly:
-    # 从浏览器 DevTools 里复制“收藏列表”请求 URL（建议只读接口），放到 .env 的 XHS_REQUEST_URL。
+    page_fetch_driver: auto
+    # 可选：从浏览器 DevTools 里复制一个已登录的只读请求 URL；常见做法是用“收藏列表”请求。
     request_url: "${XHS_REQUEST_URL}"
     request_method: GET
     # 涉及隐私字段，统一从 .env 注入。
@@ -83,6 +87,14 @@ xiaohongshu:
     request_body: ""
     har_capture_path: .tmp/xhs_detail.har
     curl_capture_path: .tmp/xhs.curl
+    playwright_user_data_dir: ""
+    playwright_channel: ""
+    playwright_headless: true
+    playwright_collect_page_url_template: "https://www.xiaohongshu.com/user/profile/{user_id}?tab=collect"
+    playwright_navigation_timeout_seconds: 30
+    playwright_response_timeout_seconds: 12
+    playwright_scroll_wait_seconds: 1.0
+    playwright_max_idle_rounds: 6
     # auto: 列表正文不足时再请求详情；always: 总是请求详情；never: 只用列表
     detail_fetch_mode: auto
     # 可选：详情接口模板，支持 {note_id} / {xsec_token}

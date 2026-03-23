@@ -6,7 +6,7 @@
 
 ## 强安全原则
 
-1. 只读：仅请求列表接口，不做写操作。
+1. 只读：仅复用网页请求头或只读页面/详情接口，不做写操作。
 2. 低频：每次只处理少量 URL（建议 1-3 条），并保持较长间隔。
 
 ## 步骤 1：准备配置
@@ -19,12 +19,14 @@ cp config.real.example.yaml config.yaml
 先保持：
 - `xiaohongshu.mode: web_readonly`
 
-## 步骤 2：从浏览器抓“收藏列表”请求
+## 步骤 2：从浏览器抓一个已登录的只读请求
 
-1. 打开小红书网页版收藏页（你已登录）。
+最常见的做法是抓“收藏列表”请求，因为它通常自带完整 Cookie 和相关签名头；这里抓包只是为了提取认证信息，不代表当前产品会去批量同步收藏。
+
+1. 打开小红书网页版任一已登录页面；若方便，直接打开收藏页。
 2. 打开 DevTools -> Network。
 3. 过滤 `fetch/xhr`，刷新页面。
-4. 找到“收藏列表”相关请求（通常返回 JSON 列表）。
+4. 找到一个稳定返回 JSON 的只读请求；优先用“收藏列表”相关请求。
 5. 记录：
    - Request URL
    - Method（GET/POST）
@@ -40,7 +42,7 @@ xiaohongshu:
   mode: web_readonly
   web_readonly:
     page_fetch_driver: auto  # auto/http/playwright
-    request_url: "https://www.xiaohongshu.com/api/..."
+    request_url: "https://www.xiaohongshu.com/api/..."  # 可选；主要用于后续只读列表扫描
     request_method: GET
     request_headers:
       Cookie: "..."

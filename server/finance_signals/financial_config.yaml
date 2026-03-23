@@ -31,24 +31,28 @@ market_data:
   instruments:
   - name: 布伦特原油
     symbol: BZ=F
+    aliases: ["原油", "油价", "布油", "布伦特"]
     rule:
       type: price_gte
       threshold: 90
       description: 价格突破 90
   - name: 现货黄金
     symbol: GC=F
+    aliases: ["黄金", "金价", "贵金属", "现货金"]
     rule:
       type: change_pct_lte
       threshold: -1.5
       description: 单日跌幅 <= -1.5%
   - name: VIX恐慌指数
     symbol: ^VIX
+    aliases: ["VIX", "恐慌指数", "波动率指数"]
     rule:
       type: price_gte
       threshold: 30
       description: 指数突破 30
   - name: 纳指100
     symbol: ^NDX
+    aliases: ["纳指", "纳斯达克100", "科技股", "美股"]
     rule:
       type: drawdown_pct_gte
       threshold: 10

@@ -1,22 +1,32 @@
 package com.midas.client.ui.screen
 
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.width
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.ui.Modifier
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertHasClickAction
-import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onAllNodesWithTag
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
+import androidx.compose.ui.test.performScrollToNode
 import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTextClearance
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.text.TextLayoutResult
+import androidx.compose.ui.unit.dp
+import com.midas.client.data.model.AsyncJobListItemData
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSummaryData
+import com.midas.client.data.model.FinanceFocusCard
+import com.midas.client.data.model.FinanceNewsItem
 import com.midas.client.data.model.FinanceWatchlistItem
 import com.midas.client.data.model.XiaohongshuSavedNote
 import com.midas.client.data.model.XiaohongshuSummaryItem
@@ -33,6 +43,37 @@ import org.robolectric.annotation.Config
 class MainScreenContentRobolectricSmokeTest {
     @get:Rule
     val composeRule = createComposeRule()
+
+    private fun clickTopSection(title: String) {
+        composeRule.onNodeWithTag("glass_tab_bar_scroll", useUnmergedTree = true)
+            .performScrollToNode(hasText(title))
+        composeRule.onAllNodesWithText(title, useUnmergedTree = true)[0]
+            .performClick()
+        composeRule.waitForIdle()
+    }
+
+    @Test
+    fun glassTabBar_shouldKeepAllSectionsReachable_onCompactWidth() {
+        composeRule.setContent {
+            MaterialTheme {
+                Box(modifier = Modifier.width(240.dp)) {
+                    GlassTabBar(
+                        selectedTabIndex = TopSection.FINANCE.ordinal,
+                        labels = TopSection.entries.map { it.title },
+                        onSelect = {},
+                    )
+                }
+            }
+        }
+
+        TopSection.entries.forEach { section ->
+            composeRule.onNodeWithTag("glass_tab_bar_scroll", useUnmergedTree = true)
+                .performScrollToNode(hasText(section.title))
+            val node = composeRule.onNodeWithText(section.title, useUnmergedTree = true)
+            node.assertIsDisplayed()
+            node.performClick()
+        }
+    }
 
     @Test
     fun smoke_clickMainButtons_withoutDevice_usesOnlyInjectedCallbacks() {
@@ -116,6 +157,7 @@ class MainScreenContentRobolectricSmokeTest {
                     onCommitCurrentMerge = {},
                     onRollbackLastMerge = {},
                     onFinalizeLastMerge = {},
+                    initialSection = TopSection.BILIBILI,
                     enableLifecycleAutoRefresh = false,
                     enableCyclicTabs = false,
                     animateTabSwitch = false,
@@ -123,31 +165,22 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("Signals").performClick()
-        composeRule.waitForIdle()
         composeRule.onNodeWithText("开始总结").performClick()
         composeRule.onNodeWithText("保存总结").performClick()
 
-        composeRule.onNodeWithText("Xiaohongshu").performClick()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithText("总结单篇").performClick()
-        composeRule.onNodeWithTag("xhs_save_single_test-note-id", useUnmergedTree = true).performScrollTo().performClick()
+        clickTopSection("笔记")
+        composeRule.onNodeWithText("刷新笔记库").performScrollTo().performClick()
 
-        composeRule.onNodeWithText("Notes").performClick()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithText("刷新笔记库").performClick()
-
-        composeRule.onNodeWithText("Settings").performClick()
-        composeRule.waitForIdle()
+        clickTopSection("设置")
         composeRule.onNodeWithText("保存").performClick()
         composeRule.onNodeWithText("连接测试").performClick()
-        composeRule.onNodeWithText("恢复默认").performClick()
+        composeRule.onNodeWithText("恢复默认").performScrollTo().performClick()
         composeRule.waitForIdle()
 
         assertEquals(1, bilibiliSubmitClicks)
         assertEquals(1, bilibiliSaveClicks)
-        assertEquals(1, xhsSummarizeUrlClicks)
-        assertEquals(1, xhsSaveSingleClicks)
+        assertEquals(0, xhsSummarizeUrlClicks)
+        assertEquals(0, xhsSaveSingleClicks)
         assertEquals(1, notesRefreshClicks)
         assertEquals(1, saveBaseUrlClicks)
         assertEquals(1, testConnectionClicks)
@@ -155,7 +188,88 @@ class MainScreenContentRobolectricSmokeTest {
     }
 
     @Test
-    fun workspaceDropdown_switchToAsset_shouldShowAssetPanelAndTriggerRefresh() {
+    fun bilibiliRecentJobsCard_shouldSupportRefreshOpenAndRetry() {
+        var refreshClicks = 0
+        var openedJobId = ""
+        var retriedJobId = ""
+
+        composeRule.setContent {
+            MaterialTheme {
+                MainScreenContent(
+                    settings = SettingsUiState(
+                        baseUrlInput = "http://127.0.0.1:8000/",
+                    ),
+                    bilibili = BilibiliUiState(
+                        recentJobs = listOf(
+                            AsyncJobListItemData(
+                                jobId = "job-bili-ok",
+                                jobType = "bilibili_summarize",
+                                status = "SUCCEEDED",
+                                message = "任务执行完成。",
+                                submittedAt = "2026-03-12 12:30:00",
+                                finishedAt = "2026-03-12 12:31:00",
+                            ),
+                            AsyncJobListItemData(
+                                jobId = "job-bili-failed",
+                                jobType = "bilibili_summarize",
+                                status = "FAILED",
+                                message = "上游暂时不可用。",
+                                submittedAt = "2026-03-12 12:32:00",
+                                finishedAt = "2026-03-12 12:33:00",
+                            ),
+                        ),
+                    ),
+                    xiaohongshu = XiaohongshuUiState(),
+                    notes = NotesUiState(),
+                    onAppForeground = {},
+                    onBaseUrlChange = {},
+                    onSaveBaseUrl = {},
+                    onTestConnection = {},
+                    onConfigTextChange = { _, _ -> },
+                    onConfigBooleanChange = { _, _ -> },
+                    onResetConfig = {},
+                    onBilibiliVideoUrlChange = {},
+                    onSubmitBilibiliSummary = {},
+                    onSaveBilibiliNote = {},
+                    onRefreshBilibiliJobs = { refreshClicks += 1 },
+                    onOpenBilibiliJob = { openedJobId = it },
+                    onRetryBilibiliJob = { retriedJobId = it },
+                    onXiaohongshuUrlChange = {},
+                    onSummarizeXiaohongshuUrl = {},
+                    onRefreshXiaohongshuAuthConfig = {},
+                    onSaveSingleXiaohongshuNote = {},
+                    onNotesKeywordChange = {},
+                    onRefreshNotes = {},
+                    onDeleteBilibiliNote = {},
+                    onDeleteXiaohongshuNote = {},
+                    onSuggestMergeCandidates = {},
+                    onPreviewMergeCandidate = { _ -> },
+                    onCommitCurrentMerge = {},
+                    onRollbackLastMerge = {},
+                    onFinalizeLastMerge = {},
+                    initialSection = TopSection.BILIBILI,
+                    enableLifecycleAutoRefresh = false,
+                    enableCyclicTabs = false,
+                    animateTabSwitch = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("刷新任务").performScrollTo().performClick()
+        composeRule.onNodeWithTag("job_open_job-bili-ok", useUnmergedTree = true)
+            .performScrollTo()
+            .performClick()
+        composeRule.onNodeWithTag("job_retry_job-bili-failed", useUnmergedTree = true)
+            .performScrollTo()
+            .performClick()
+
+        assertEquals(1, refreshClicks)
+        assertEquals("job-bili-ok", openedJobId)
+        assertEquals("job-bili-failed", retriedJobId)
+    }
+
+    @Test
+    fun workspaceDropdown_switchToFinance_shouldShowSignalPanelAndTriggerRefresh() {
         var financeRefreshClicks = 0
 
         composeRule.setContent {
@@ -189,6 +303,7 @@ class MainScreenContentRobolectricSmokeTest {
                     onRollbackLastMerge = {},
                     onFinalizeLastMerge = {},
                     onRefreshFinanceSignals = { financeRefreshClicks += 1 },
+                    initialSection = TopSection.BILIBILI,
                     enableLifecycleAutoRefresh = false,
                     enableCyclicTabs = false,
                     animateTabSwitch = false,
@@ -196,215 +311,14 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("笔记系统").performClick()
-        composeRule.onNodeWithText("资产系统").performClick()
-        composeRule.waitForIdle()
+        clickTopSection("财经")
 
-        composeRule.onAllNodesWithText("Watchlist").assertCountEquals(1)
+        composeRule.onAllNodesWithText("财经").assertCountEquals(2)
+        composeRule.onAllNodesWithText("Watchlist").assertCountEquals(2)
         composeRule.onAllNodesWithText("24小时新闻摘要").assertCountEquals(1)
         composeRule.onAllNodesWithText("今日金融与时政新闻 Top5").assertCountEquals(1)
-        composeRule.onAllNodesWithText("资产统计").assertCountEquals(1)
-        composeRule.onAllNodesWithTag("asset_amount_bank_current_deposit", useUnmergedTree = true)
-            .assertCountEquals(0)
-        composeRule.onAllNodesWithText("Notes").assertCountEquals(0)
 
         assertEquals(1, financeRefreshClicks)
-    }
-
-    @Test
-    fun assetPanel_reportAmount_shouldTriggerCallbacks() {
-        var saveClicks = 0
-        var amountChangeCalls = 0
-        var latestChangedKey = ""
-
-        composeRule.setContent {
-            MaterialTheme {
-                MainScreenContent(
-                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
-                    bilibili = BilibiliUiState(),
-                    xiaohongshu = XiaohongshuUiState(),
-                    notes = NotesUiState(),
-                    onAppForeground = {},
-                    onBaseUrlChange = {},
-                    onSaveBaseUrl = {},
-                    onTestConnection = {},
-                    onConfigTextChange = { _, _ -> },
-                    onConfigBooleanChange = { _, _ -> },
-                    onResetConfig = {},
-                    onBilibiliVideoUrlChange = {},
-                    onSubmitBilibiliSummary = {},
-                    onSaveBilibiliNote = {},
-                    onXiaohongshuUrlChange = {},
-                    onSummarizeXiaohongshuUrl = {},
-                    onRefreshXiaohongshuAuthConfig = {},
-                    onSaveSingleXiaohongshuNote = {},
-                    onNotesKeywordChange = {},
-                    onRefreshNotes = {},
-                    onDeleteBilibiliNote = {},
-                    onDeleteXiaohongshuNote = {},
-                    onSuggestMergeCandidates = {},
-                    onPreviewMergeCandidate = { _ -> },
-                    onCommitCurrentMerge = {},
-                    onRollbackLastMerge = {},
-                    onFinalizeLastMerge = {},
-                    onAssetAmountChange = { key, _ ->
-                        amountChangeCalls += 1
-                        latestChangedKey = key
-                    },
-                    onSaveAssetStats = { saveClicks += 1 },
-                    enableLifecycleAutoRefresh = false,
-                    enableCyclicTabs = false,
-                    animateTabSwitch = false,
-                )
-            }
-        }
-
-        composeRule.onNodeWithText("笔记系统").performClick()
-        composeRule.onNodeWithText("资产系统").performClick()
-        composeRule.onNodeWithText("资产统计").performClick()
-        composeRule.waitForIdle()
-
-        composeRule.onNodeWithTag("asset_amount_bank_current_deposit", useUnmergedTree = true)
-            .performTextInput("1")
-        composeRule.onNodeWithText("保存资产统计").performScrollTo().performClick()
-        composeRule.waitForIdle()
-
-        assertTrue(amountChangeCalls > 0)
-        assertEquals("bank_current_deposit", latestChangedKey)
-        assertEquals(1, saveClicks)
-    }
-
-    @Test
-    fun assetPanel_fillFromImages_shouldTriggerCallback() {
-        var fillClicks = 0
-
-        composeRule.setContent {
-            MaterialTheme {
-                MainScreenContent(
-                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
-                    bilibili = BilibiliUiState(),
-                    xiaohongshu = XiaohongshuUiState(),
-                    notes = NotesUiState(),
-                    onAppForeground = {},
-                    onBaseUrlChange = {},
-                    onSaveBaseUrl = {},
-                    onTestConnection = {},
-                    onConfigTextChange = { _, _ -> },
-                    onConfigBooleanChange = { _, _ -> },
-                    onResetConfig = {},
-                    onBilibiliVideoUrlChange = {},
-                    onSubmitBilibiliSummary = {},
-                    onSaveBilibiliNote = {},
-                    onXiaohongshuUrlChange = {},
-                    onSummarizeXiaohongshuUrl = {},
-                    onRefreshXiaohongshuAuthConfig = {},
-                    onSaveSingleXiaohongshuNote = {},
-                    onNotesKeywordChange = {},
-                    onRefreshNotes = {},
-                    onDeleteBilibiliNote = {},
-                    onDeleteXiaohongshuNote = {},
-                    onSuggestMergeCandidates = {},
-                    onPreviewMergeCandidate = { _ -> },
-                    onCommitCurrentMerge = {},
-                    onRollbackLastMerge = {},
-                    onFinalizeLastMerge = {},
-                    onFillAssetStatsFromImages = { fillClicks += 1 },
-                    enableLifecycleAutoRefresh = false,
-                    enableCyclicTabs = false,
-                    animateTabSwitch = false,
-                )
-            }
-        }
-
-        composeRule.onNodeWithText("笔记系统").performClick()
-        composeRule.onNodeWithText("资产系统").performClick()
-        composeRule.onNodeWithText("资产统计").performClick()
-        composeRule.waitForIdle()
-
-        composeRule.onNodeWithTag("asset_fill_from_images_button", useUnmergedTree = true)
-            .performScrollTo()
-            .performClick()
-        composeRule.waitForIdle()
-        assertEquals(1, fillClicks)
-    }
-
-    @Test
-    fun assetPanel_copyAndHistory_shouldTriggerCallbacks() {
-        val historyId = "history-1"
-        var copyClicks = 0
-        var deletedHistoryId = ""
-
-        composeRule.setContent {
-            MaterialTheme {
-                MainScreenContent(
-                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
-                    bilibili = BilibiliUiState(),
-                    xiaohongshu = XiaohongshuUiState(),
-                    notes = NotesUiState(),
-                    finance = FinanceSignalsUiState(
-                        assetDrafts = listOf(
-                            AssetCategoryDraft(key = "stock", label = "股票", amountInput = "10"),
-                            AssetCategoryDraft(key = "bank_current_deposit", label = "银行活期存款", amountInput = "2"),
-                        ),
-                        assetTotalAmount = 12.0,
-                        assetHistory = listOf(
-                            AssetHistoryRecord(
-                                id = historyId,
-                                savedAt = "2026-03-06 18:00:00",
-                                totalAmountWan = 12.0,
-                                amounts = mapOf(
-                                    "stock" to 10.0,
-                                    "bank_current_deposit" to 2.0,
-                                ),
-                            ),
-                        ),
-                    ),
-                    onAppForeground = {},
-                    onBaseUrlChange = {},
-                    onSaveBaseUrl = {},
-                    onTestConnection = {},
-                    onConfigTextChange = { _, _ -> },
-                    onConfigBooleanChange = { _, _ -> },
-                    onResetConfig = {},
-                    onBilibiliVideoUrlChange = {},
-                    onSubmitBilibiliSummary = {},
-                    onSaveBilibiliNote = {},
-                    onXiaohongshuUrlChange = {},
-                    onSummarizeXiaohongshuUrl = {},
-                    onRefreshXiaohongshuAuthConfig = {},
-                    onSaveSingleXiaohongshuNote = {},
-                    onNotesKeywordChange = {},
-                    onRefreshNotes = {},
-                    onDeleteBilibiliNote = {},
-                    onDeleteXiaohongshuNote = {},
-                    onSuggestMergeCandidates = {},
-                    onPreviewMergeCandidate = { _ -> },
-                    onCommitCurrentMerge = {},
-                    onRollbackLastMerge = {},
-                    onFinalizeLastMerge = {},
-                    onDeleteAssetHistoryRecord = { deletedHistoryId = it },
-                    onAssetSummaryCopied = { copyClicks += 1 },
-                    enableLifecycleAutoRefresh = false,
-                    enableCyclicTabs = false,
-                    animateTabSwitch = false,
-                )
-            }
-        }
-
-        composeRule.onNodeWithText("笔记系统").performClick()
-        composeRule.onNodeWithText("资产系统").performClick()
-        composeRule.onNodeWithText("资产统计").performClick()
-        composeRule.waitForIdle()
-
-        composeRule.onNodeWithText("复制资产情况").performScrollTo().performClick()
-        composeRule.onNodeWithTag("asset_history_open_$historyId").performScrollTo().performClick()
-        composeRule.onNodeWithText("返回列表").performScrollTo().performClick()
-        composeRule.onNodeWithTag("asset_history_menu_$historyId").performScrollTo().performClick()
-        composeRule.onNodeWithText("删除记录").performClick()
-        composeRule.waitForIdle()
-
-        assertEquals(1, copyClicks)
-        assertEquals(historyId, deletedHistoryId)
     }
 
     @Test
@@ -441,6 +355,7 @@ class MainScreenContentRobolectricSmokeTest {
                     onCommitCurrentMerge = {},
                     onRollbackLastMerge = {},
                     onFinalizeLastMerge = {},
+                    initialSection = TopSection.BILIBILI,
                     enableLifecycleAutoRefresh = false,
                     enableCyclicTabs = false,
                     animateTabSwitch = false,
@@ -448,8 +363,6 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("Signals").performClick()
-        composeRule.waitForIdle()
         composeRule.onNodeWithTag("bilibili_url_clear_button", useUnmergedTree = true).performClick()
         composeRule.waitForIdle()
 
@@ -457,7 +370,7 @@ class MainScreenContentRobolectricSmokeTest {
     }
 
     @Test
-    fun xhsInput_clearButton_shouldTriggerEmptyCallback() {
+    fun xhsInput_shouldTriggerEmptyCallback() {
         var latestUrlInput = "https://www.xiaohongshu.com/explore/test-note-id"
 
         composeRule.setContent {
@@ -490,6 +403,7 @@ class MainScreenContentRobolectricSmokeTest {
                     onCommitCurrentMerge = {},
                     onRollbackLastMerge = {},
                     onFinalizeLastMerge = {},
+                    initialSection = TopSection.XHS,
                     enableLifecycleAutoRefresh = false,
                     enableCyclicTabs = false,
                     animateTabSwitch = false,
@@ -497,14 +411,68 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("Signals").performClick()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithText("Xiaohongshu").performClick()
-        composeRule.waitForIdle()
-        composeRule.onNodeWithTag("xhs_url_clear_button", useUnmergedTree = true).performClick()
+        composeRule.onNodeWithTag("xhs_url_input", useUnmergedTree = true).performTextClearance()
         composeRule.waitForIdle()
 
         assertEquals("", latestUrlInput)
+    }
+
+    @Test
+    fun xhsPanel_singleLinkActions_shouldTriggerCallbacks() {
+        var summarizeClicks = 0
+
+        composeRule.setContent {
+            MaterialTheme {
+                MainScreenContent(
+                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
+                    bilibili = BilibiliUiState(),
+                    xiaohongshu = XiaohongshuUiState(
+                        urlInput = "https://www.xiaohongshu.com/explore/test-note-id",
+                        summaries = listOf(
+                            XiaohongshuSummaryItem(
+                                noteId = "test-note-id",
+                                title = "测试笔记",
+                                sourceUrl = "https://www.xiaohongshu.com/explore/test-note-id",
+                                summaryMarkdown = "# 测试总结",
+                            ),
+                        ),
+                    ),
+                    notes = NotesUiState(),
+                    onAppForeground = {},
+                    onBaseUrlChange = {},
+                    onSaveBaseUrl = {},
+                    onTestConnection = {},
+                    onConfigTextChange = { _, _ -> },
+                    onConfigBooleanChange = { _, _ -> },
+                    onResetConfig = {},
+                    onBilibiliVideoUrlChange = {},
+                    onSubmitBilibiliSummary = {},
+                    onSaveBilibiliNote = {},
+                    onXiaohongshuUrlChange = {},
+                    onSummarizeXiaohongshuUrl = { summarizeClicks += 1 },
+                    onRefreshXiaohongshuAuthConfig = {},
+                    onSaveSingleXiaohongshuNote = {},
+                    onNotesKeywordChange = {},
+                    onRefreshNotes = {},
+                    onDeleteBilibiliNote = {},
+                    onDeleteXiaohongshuNote = {},
+                    onSuggestMergeCandidates = {},
+                    onPreviewMergeCandidate = { _ -> },
+                    onCommitCurrentMerge = {},
+                    onRollbackLastMerge = {},
+                    onFinalizeLastMerge = {},
+                    initialSection = TopSection.XHS,
+                    enableLifecycleAutoRefresh = false,
+                    enableCyclicTabs = false,
+                    animateTabSwitch = false,
+                )
+            }
+        }
+
+        composeRule.onNodeWithText("总结单篇").performScrollTo().performClick()
+        composeRule.waitForIdle()
+
+        assertEquals(1, summarizeClicks)
     }
 
     @Test
@@ -559,7 +527,8 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("B站笔记（1/1）").assertIsDisplayed()
+        clickTopSection("笔记")
+        composeRule.onNodeWithText("B站笔记（1/1）").performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -614,9 +583,13 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onAllNodesWithText("合并笔记")[1].performClick()
+        clickTopSection("笔记")
+        composeRule.onNodeWithTag("saved_note_open_merged_note_abc123", useUnmergedTree = true)
+            .performScrollTo()
+            .performClick()
+        composeRule.waitForIdle()
 
-        composeRule.onNodeWithText("Merge Note · 来源请见正文末尾链接").assertIsDisplayed()
+        composeRule.onAllNodesWithText("Merge Note · 来源请见正文末尾链接").assertCountEquals(1)
         composeRule.onAllNodesWithText(mergedUrl).assertCountEquals(0)
     }
 
@@ -677,10 +650,15 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("普通笔记").performClick()
+        clickTopSection("笔记")
+        composeRule.onNodeWithTag("saved_note_open_b-normal-1", useUnmergedTree = true)
+            .performScrollTo()
+            .performClick()
+        composeRule.waitForIdle()
 
+        composeRule.onAllNodesWithTag("bili_source_url_detail", useUnmergedTree = true)
+            .assertCountEquals(1)
         val linkNode = composeRule.onNodeWithTag("bili_source_url_detail", useUnmergedTree = true)
-        linkNode.assertIsDisplayed()
         linkNode.assertHasClickAction()
 
         val layoutResults = mutableListOf<TextLayoutResult>()
@@ -728,6 +706,7 @@ class MainScreenContentRobolectricSmokeTest {
                     onCommitCurrentMerge = {},
                     onRollbackLastMerge = {},
                     onFinalizeLastMerge = {},
+                    initialSection = TopSection.FINANCE,
                     enableLifecycleAutoRefresh = false,
                     enableFinanceAutoRefresh = false,
                     enableCyclicTabs = false,
@@ -735,10 +714,6 @@ class MainScreenContentRobolectricSmokeTest {
                 )
             }
         }
-
-        composeRule.onNodeWithText("笔记系统").performClick()
-        composeRule.onNodeWithText("资产系统").performClick()
-        composeRule.waitForIdle()
 
         composeRule.onNodeWithText("新闻拉取：2026-03-08 11:40:00（数据可能陈旧）").assertIsDisplayed()
     }
@@ -787,6 +762,7 @@ class MainScreenContentRobolectricSmokeTest {
                     onCommitCurrentMerge = {},
                     onRollbackLastMerge = {},
                     onFinalizeLastMerge = {},
+                    initialSection = TopSection.FINANCE,
                     enableLifecycleAutoRefresh = false,
                     enableFinanceAutoRefresh = false,
                     enableCyclicTabs = false,
@@ -795,12 +771,93 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("笔记系统").performClick()
-        composeRule.onNodeWithText("资产系统").performClick()
-        composeRule.waitForIdle()
-
-        composeRule.onNodeWithText("阈值 >90").assertIsDisplayed()
+        composeRule.onNodeWithText("阈值 >90").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("ntfy 已关闭").assertIsDisplayed()
+    }
+
+    @Test
+    fun financePanel_shouldRenderWatchlistNewsLinks() {
+        composeRule.setContent {
+            MaterialTheme {
+                MainScreenContent(
+                    settings = SettingsUiState(baseUrlInput = "http://127.0.0.1:8000/"),
+                    bilibili = BilibiliUiState(),
+                    xiaohongshu = XiaohongshuUiState(),
+                    notes = NotesUiState(),
+                    finance = FinanceSignalsUiState(
+                        focusCards = listOf(
+                            FinanceFocusCard(
+                                title = "布伦特原油 已触发监控阈值",
+                                summary = "阈值条件：>90；最近关联新闻 2 条",
+                                priority = "HIGH",
+                                kind = "ALERT",
+                                actionType = "REVIEW_NOW",
+                                actionLabel = "立即复核",
+                                actionHint = "先看价格异动和关联新闻，再决定是否提升观察频率。",
+                                reasons = listOf("threshold_triggered", "related_news_present"),
+                                relatedWatchlistNames = listOf("布伦特原油"),
+                            ),
+                        ),
+                        watchlistPreview = listOf(
+                            FinanceWatchlistItem(
+                                name = "布伦特原油",
+                                symbol = "BZ=F",
+                                price = 92.69,
+                                changePct = "+8.52%",
+                                relatedNewsCount = 2,
+                                relatedKeywords = listOf("原油", "油价"),
+                            ),
+                        ),
+                        topNews = listOf(
+                            FinanceNewsItem(
+                                title = "原油与黄金同步走高",
+                                publisher = "Reuters",
+                                published = "2026-03-12 11:30:00",
+                                category = "finance",
+                                matchedKeywords = listOf("原油", "黄金"),
+                                relatedSymbols = listOf("BZ=F"),
+                                relatedWatchlistNames = listOf("布伦特原油"),
+                            ),
+                        ),
+                    ),
+                    onAppForeground = {},
+                    onBaseUrlChange = {},
+                    onSaveBaseUrl = {},
+                    onTestConnection = {},
+                    onConfigTextChange = { _, _ -> },
+                    onConfigBooleanChange = { _, _ -> },
+                    onResetConfig = {},
+                    onBilibiliVideoUrlChange = {},
+                    onSubmitBilibiliSummary = {},
+                    onSaveBilibiliNote = {},
+                    onXiaohongshuUrlChange = {},
+                    onSummarizeXiaohongshuUrl = {},
+                    onRefreshXiaohongshuAuthConfig = {},
+                    onSaveSingleXiaohongshuNote = {},
+                    onNotesKeywordChange = {},
+                    onRefreshNotes = {},
+                    onDeleteBilibiliNote = {},
+                    onDeleteXiaohongshuNote = {},
+                    onSuggestMergeCandidates = {},
+                    onPreviewMergeCandidate = { _ -> },
+                    onCommitCurrentMerge = {},
+                    onRollbackLastMerge = {},
+                    onFinalizeLastMerge = {},
+                    initialSection = TopSection.FINANCE,
+                    enableLifecycleAutoRefresh = false,
+                    enableFinanceAutoRefresh = false,
+                    enableCyclicTabs = false,
+                    animateTabSwitch = false,
+                )
+            }
+        }
+
+        composeRule.onAllNodesWithText("Watchlist").assertCountEquals(2)
+        composeRule.onNodeWithText("布伦特原油").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("BZ=F").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("关联新闻 2").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("原油 / 油价").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("影响标的：布伦特原油").performScrollTo().assertIsDisplayed()
     }
 
     @Test
@@ -839,6 +896,7 @@ class MainScreenContentRobolectricSmokeTest {
                     onCommitCurrentMerge = {},
                     onRollbackLastMerge = {},
                     onFinalizeLastMerge = {},
+                    initialSection = TopSection.FINANCE,
                     enableLifecycleAutoRefresh = false,
                     enableFinanceAutoRefresh = false,
                     enableCyclicTabs = false,
@@ -847,11 +905,7 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("笔记系统").performClick()
-        composeRule.onNodeWithText("资产系统").performClick()
-        composeRule.waitForIdle()
-
-        composeRule.onNodeWithText("24小时新闻摘要").assertIsDisplayed()
+        composeRule.onNodeWithText("24小时新闻摘要").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithTag("finance_digest_last_generated_at", useUnmergedTree = true)
             .performScrollTo()
             .assertIsDisplayed()
@@ -896,6 +950,7 @@ class MainScreenContentRobolectricSmokeTest {
                     onRollbackLastMerge = {},
                     onFinalizeLastMerge = {},
                     onGenerateFinanceNewsDigest = { triggerCount += 1 },
+                    initialSection = TopSection.FINANCE,
                     enableLifecycleAutoRefresh = false,
                     enableFinanceAutoRefresh = false,
                     enableCyclicTabs = false,
@@ -903,10 +958,6 @@ class MainScreenContentRobolectricSmokeTest {
                 )
             }
         }
-
-        composeRule.onNodeWithText("笔记系统").performClick()
-        composeRule.onNodeWithText("资产系统").performClick()
-        composeRule.waitForIdle()
 
         composeRule.onNodeWithTag("finance_digest_button", useUnmergedTree = true)
             .performScrollTo()

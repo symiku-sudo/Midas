@@ -142,6 +142,10 @@ class RuntimeConfig(BaseModel):
     backup: BackupConfig = Field(default_factory=BackupConfig)
 
 
+class AuthConfig(BaseModel):
+    access_token: str = ""
+
+
 class NotesMergeConfig(BaseModel):
     semantic_similarity_enabled: bool = True
     semantic_model_name: str = "BAAI/bge-small-zh-v1.5"
@@ -163,6 +167,7 @@ class Settings(BaseModel):
         default_factory=AssetImageFillConfig
     )
     runtime: RuntimeConfig = Field(default_factory=RuntimeConfig)
+    auth: AuthConfig = Field(default_factory=AuthConfig)
     notes_merge: NotesMergeConfig = Field(default_factory=NotesMergeConfig)
 
 
@@ -171,6 +176,13 @@ _ENV_VAR_PATTERN = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 def _project_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def resolve_runtime_path(raw_path: str | Path) -> Path:
+    candidate = Path(raw_path).expanduser()
+    if candidate.is_absolute():
+        return candidate.resolve()
+    return (_project_root() / candidate).resolve()
 
 
 def _load_dotenv(project_root: Path) -> None:

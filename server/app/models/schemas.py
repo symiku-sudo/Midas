@@ -16,6 +16,11 @@ class FinanceWatchlistItem(BaseModel):
     change_pct: str = "N/A"
     alert_hint: str = ""
     alert_active: bool = False
+    related_news_count: int = 0
+    related_keywords: list[str] = Field(default_factory=list)
+    related_asset_categories: list[str] = Field(default_factory=list)
+    exposure_amount_wan: float = 0.0
+    exposure_relevance: str = "LOW"
 
 
 class FinanceNewsItem(BaseModel):
@@ -25,6 +30,11 @@ class FinanceNewsItem(BaseModel):
     published: str = ""
     category: str = ""
     matched_keywords: list[str] = Field(default_factory=list)
+    related_symbols: list[str] = Field(default_factory=list)
+    related_watchlist_names: list[str] = Field(default_factory=list)
+    related_asset_categories: list[str] = Field(default_factory=list)
+    exposure_amount_wan: float = 0.0
+    exposure_relevance: str = "LOW"
 
 
 class FinanceNewsDebugData(BaseModel):
@@ -48,18 +58,79 @@ class FinanceMarketAlertDebugData(BaseModel):
     last_alert_status: str = ""
 
 
+class FinanceFocusCard(BaseModel):
+    card_id: str = ""
+    title: str
+    summary: str = ""
+    priority: str = "MEDIUM"
+    kind: str = "NEWS"
+    action_type: str = "MONITOR"
+    action_label: str = ""
+    action_hint: str = ""
+    reasons: list[str] = Field(default_factory=list)
+    related_symbols: list[str] = Field(default_factory=list)
+    related_watchlist_names: list[str] = Field(default_factory=list)
+    related_asset_categories: list[str] = Field(default_factory=list)
+    exposure_amount_wan: float = 0.0
+    exposure_relevance: str = "LOW"
+    portfolio_impact_summary: str = ""
+    status: str = "ACTIVE"
+    status_updated_at: str = ""
+    handled_at: str = ""
+
+
 class FinanceSignalsData(BaseModel):
     update_time: str
     news_last_fetch_time: str = ""
     news_stale: bool = False
     watchlist_preview: list[FinanceWatchlistItem]
     top_news: list[FinanceNewsItem] = Field(default_factory=list)
+    focus_cards: list[FinanceFocusCard] = Field(default_factory=list)
     watchlist_ntfy_enabled: bool = False
     ai_insight_text: str
     news_debug: FinanceNewsDebugData = Field(default_factory=FinanceNewsDebugData)
     market_alert_debug: FinanceMarketAlertDebugData = Field(
         default_factory=FinanceMarketAlertDebugData
     )
+    history_count: int = 0
+
+
+class FinanceFocusCardActionRequest(BaseModel):
+    status: str = Field(min_length=1, max_length=64)
+
+
+class FinanceFocusCardActionData(BaseModel):
+    card_id: str
+    status: str
+    status_updated_at: str
+    handled_at: str = ""
+
+
+class FinanceFocusCardHistoryItem(BaseModel):
+    card_id: str
+    title: str
+    summary: str = ""
+    priority: str = "MEDIUM"
+    kind: str = "NEWS"
+    action_type: str = "MONITOR"
+    action_label: str = ""
+    reasons: list[str] = Field(default_factory=list)
+    related_symbols: list[str] = Field(default_factory=list)
+    related_watchlist_names: list[str] = Field(default_factory=list)
+    related_asset_categories: list[str] = Field(default_factory=list)
+    exposure_amount_wan: float = 0.0
+    exposure_relevance: str = "LOW"
+    portfolio_impact_summary: str = ""
+    status: str = "ACTIVE"
+    first_seen_at: str = ""
+    last_seen_at: str = ""
+    status_updated_at: str = ""
+    handled_at: str = ""
+
+
+class FinanceFocusCardHistoryData(BaseModel):
+    total: int
+    items: list[FinanceFocusCardHistoryItem] = Field(default_factory=list)
 
 
 class FinanceWatchlistNtfyUpdateRequest(BaseModel):
@@ -116,6 +187,60 @@ class BilibiliSummaryData(BaseModel):
     transcript_chars: int
 
 
+class AsyncJobCreateData(BaseModel):
+    job_id: str
+    job_type: str
+    status: str
+    message: str
+    submitted_at: str
+    retry_of_job_id: str = ""
+    progress_current: int = 0
+    progress_total: int = 0
+
+
+class AsyncJobErrorData(BaseModel):
+    code: str
+    message: str
+    details: dict[str, Any] | None = None
+
+
+class AsyncJobProgressData(BaseModel):
+    current: int = 0
+    total: int = 0
+
+
+class AsyncJobListItem(BaseModel):
+    job_id: str
+    job_type: str
+    status: str
+    message: str
+    submitted_at: str
+    started_at: str = ""
+    finished_at: str = ""
+    retry_of_job_id: str = ""
+    progress: AsyncJobProgressData | None = None
+
+
+class AsyncJobListData(BaseModel):
+    total: int
+    items: list[AsyncJobListItem]
+
+
+class AsyncJobStatusData(BaseModel):
+    job_id: str
+    job_type: str
+    status: str
+    message: str
+    submitted_at: str
+    started_at: str = ""
+    finished_at: str = ""
+    retry_of_job_id: str = ""
+    request_payload: dict[str, Any] = Field(default_factory=dict)
+    result: dict[str, Any] | None = None
+    error: AsyncJobErrorData | None = None
+    progress: AsyncJobProgressData | None = None
+
+
 class BilibiliNoteSaveRequest(BaseModel):
     video_url: str = Field(min_length=3, max_length=2000)
     summary_markdown: str = Field(min_length=1)
@@ -139,9 +264,77 @@ class BilibiliSavedNotesData(BaseModel):
     items: list[BilibiliSavedNote]
 
 
-class XiaohongshuSyncRequest(BaseModel):
-    limit: int | None = Field(default=None, ge=1, le=100)
-    confirm_live: bool = False
+class UnifiedNoteItem(BaseModel):
+    source: str
+    note_id: str
+    title: str
+    source_url: str
+    summary_markdown: str
+    saved_at: str
+    merge_state: str = "ACTIVE"
+    merge_id: str = ""
+    canonical_note_id: str = ""
+    is_merged: bool = False
+    topics: list[str] = Field(default_factory=list)
+
+
+class UnifiedNotesData(BaseModel):
+    total: int
+    limit: int
+    offset: int
+    items: list[UnifiedNoteItem]
+
+
+class NotesReviewTopicItem(BaseModel):
+    topic: str
+    total: int
+    latest_saved_at: str = ""
+    items: list[UnifiedNoteItem] = Field(default_factory=list)
+
+
+class NotesReviewTopicsData(BaseModel):
+    window_days: int
+    total_topics: int
+    items: list[NotesReviewTopicItem] = Field(default_factory=list)
+
+
+class NotesTimelineReviewItem(BaseModel):
+    label: str
+    start_time: str = ""
+    end_time: str = ""
+    total: int
+    items: list[UnifiedNoteItem] = Field(default_factory=list)
+
+
+class NotesTimelineReviewData(BaseModel):
+    window_days: int
+    bucket: str
+    total_buckets: int
+    items: list[NotesTimelineReviewItem] = Field(default_factory=list)
+
+
+class RelatedNoteItem(BaseModel):
+    source: str
+    note_id: str
+    title: str
+    source_url: str
+    saved_at: str
+    summary_excerpt: str = ""
+    score: float
+    relation_level: str
+    reason_codes: list[str] = Field(default_factory=list)
+    merge_state: str = "ACTIVE"
+    merge_id: str = ""
+    canonical_note_id: str = ""
+    is_merged: bool = False
+    topics: list[str] = Field(default_factory=list)
+
+
+class RelatedNotesData(BaseModel):
+    source: str
+    note_id: str
+    total: int
+    items: list[RelatedNoteItem] = Field(default_factory=list)
 
 
 class XiaohongshuUrlSummaryRequest(BaseModel):
@@ -153,16 +346,6 @@ class XiaohongshuSummaryItem(BaseModel):
     title: str
     source_url: str
     summary_markdown: str
-
-
-class XiaohongshuSyncData(BaseModel):
-    requested_limit: int
-    fetched_count: int
-    new_count: int
-    skipped_count: int
-    failed_count: int
-    circuit_opened: bool
-    summaries: list[XiaohongshuSummaryItem]
 
 
 class XiaohongshuNotesSaveRequest(BaseModel):
@@ -298,62 +481,9 @@ class XiaohongshuAuthUpdateData(BaseModel):
     cookie_pairs: int
 
 
-class XiaohongshuSyncCooldownData(BaseModel):
-    mode: str
-    allowed: bool
-    remaining_seconds: int
-    next_allowed_at_epoch: int
-    last_sync_at_epoch: int
-    min_interval_seconds: int
-
-
-class XiaohongshuPendingCountData(BaseModel):
-    mode: str
-    pending_count: int
-    scanned_count: int
-
-
 class EditableConfigData(BaseModel):
     settings: dict[str, Any]
 
 
 class EditableConfigUpdateRequest(BaseModel):
     settings: dict[str, Any]
-
-
-class XiaohongshuSyncJobCreateData(BaseModel):
-    job_id: str
-    status: str
-    requested_limit: int
-
-
-class XiaohongshuSyncJobAckRequest(BaseModel):
-    note_ids: list[str] = Field(min_length=1)
-
-
-class XiaohongshuSyncJobAckData(BaseModel):
-    job_id: str
-    status: str
-    requested_count: int
-    acked_count: int
-    already_acked_count: int
-    missing_note_ids: list[str]
-    acked_note_ids: list[str]
-
-
-class XiaohongshuSyncJobError(BaseModel):
-    code: str
-    message: str
-    details: dict[str, Any] | None = None
-
-
-class XiaohongshuSyncJobStatusData(BaseModel):
-    job_id: str
-    status: str
-    requested_limit: int
-    current: int
-    total: int
-    message: str
-    summaries: list[XiaohongshuSummaryItem] = Field(default_factory=list)
-    result: XiaohongshuSyncData | None = None
-    error: XiaohongshuSyncJobError | None = None

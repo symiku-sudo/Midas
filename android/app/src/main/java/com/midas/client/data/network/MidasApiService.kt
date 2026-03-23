@@ -1,6 +1,9 @@
 package com.midas.client.data.network
 
 import com.midas.client.data.model.ApiEnvelope
+import com.midas.client.data.model.AsyncJobCreateData
+import com.midas.client.data.model.AsyncJobListData
+import com.midas.client.data.model.AsyncJobStatusData
 import com.midas.client.data.model.AssetCurrentData
 import com.midas.client.data.model.AssetCurrentUpdateRequest
 import com.midas.client.data.model.AssetImageFillData
@@ -14,6 +17,9 @@ import com.midas.client.data.model.BilibiliSummaryData
 import com.midas.client.data.model.BilibiliSummaryRequest
 import com.midas.client.data.model.EditableConfigData
 import com.midas.client.data.model.EditableConfigUpdateRequest
+import com.midas.client.data.model.FinanceFocusCardActionData
+import com.midas.client.data.model.FinanceFocusCardActionRequest
+import com.midas.client.data.model.FinanceFocusCardHistoryData
 import com.midas.client.data.model.FinanceSignalsData
 import com.midas.client.data.model.FinanceWatchlistNtfyData
 import com.midas.client.data.model.FinanceWatchlistNtfyUpdateRequest
@@ -29,7 +35,11 @@ import com.midas.client.data.model.NotesMergeRollbackRequest
 import com.midas.client.data.model.NotesMergeSuggestData
 import com.midas.client.data.model.NotesMergeSuggestRequest
 import com.midas.client.data.model.NotesDeleteData
+import com.midas.client.data.model.NotesReviewTopicsData
+import com.midas.client.data.model.NotesTimelineReviewData
 import com.midas.client.data.model.NotesSaveBatchData
+import com.midas.client.data.model.RelatedNotesData
+import com.midas.client.data.model.UnifiedNotesData
 import com.midas.client.data.model.XiaohongshuAuthUpdateData
 import com.midas.client.data.model.XiaohongshuAuthUpdateRequest
 import com.midas.client.data.model.XiaohongshuCaptureRefreshData
@@ -46,6 +56,7 @@ import retrofit2.http.Part
 import retrofit2.http.POST
 import retrofit2.http.PUT
 import retrofit2.http.Path
+import retrofit2.http.Query
 import okhttp3.MultipartBody
 
 interface MidasApiService {
@@ -62,6 +73,17 @@ interface MidasApiService {
 
     @POST("api/finance/signals/digest")
     suspend fun triggerFinanceNewsDigest(): Response<ApiEnvelope<FinanceSignalsData>>
+
+    @POST("api/finance/signals/cards/{cardId}/status")
+    suspend fun updateFinanceFocusCardStatus(
+        @Path("cardId") cardId: String,
+        @Body request: FinanceFocusCardActionRequest,
+    ): Response<ApiEnvelope<FinanceFocusCardActionData>>
+
+    @GET("api/finance/signals/history")
+    suspend fun getFinanceFocusCardHistory(
+        @Query("limit") limit: Int = 50,
+    ): Response<ApiEnvelope<FinanceFocusCardHistoryData>>
 
     @Multipart
     @POST("api/assets/fill-from-images")
@@ -90,6 +112,33 @@ interface MidasApiService {
         @Path("recordId") recordId: String
     ): Response<ApiEnvelope<NotesDeleteData>>
 
+    @POST("api/jobs/bilibili-summarize")
+    suspend fun createBilibiliSummaryJob(
+        @Body request: BilibiliSummaryRequest
+    ): Response<ApiEnvelope<AsyncJobCreateData>>
+
+    @POST("api/jobs/xiaohongshu/summarize-url")
+    suspend fun createXiaohongshuSummaryJob(
+        @Body request: XiaohongshuSummarizeUrlRequest
+    ): Response<ApiEnvelope<AsyncJobCreateData>>
+
+    @GET("api/jobs")
+    suspend fun listAsyncJobs(
+        @Query("limit") limit: Int = 20,
+        @Query("status") status: String = "",
+        @Query("job_type") jobType: String = "",
+    ): Response<ApiEnvelope<AsyncJobListData>>
+
+    @GET("api/jobs/{jobId}")
+    suspend fun getAsyncJob(
+        @Path("jobId") jobId: String
+    ): Response<ApiEnvelope<AsyncJobStatusData>>
+
+    @POST("api/jobs/{jobId}/retry")
+    suspend fun retryAsyncJob(
+        @Path("jobId") jobId: String
+    ): Response<ApiEnvelope<AsyncJobCreateData>>
+
     @POST("api/bilibili/summarize")
     suspend fun summarizeBilibili(
         @Body request: BilibiliSummaryRequest
@@ -102,6 +151,42 @@ interface MidasApiService {
 
     @GET("api/notes/bilibili")
     suspend fun listBilibiliNotes(): Response<ApiEnvelope<BilibiliSavedNotesData>>
+
+    @GET("api/notes/search")
+    suspend fun searchNotes(
+        @Query("keyword") keyword: String = "",
+        @Query("source") source: String = "",
+        @Query("saved_from") savedFrom: String = "",
+        @Query("saved_to") savedTo: String = "",
+        @Query("merged") merged: Boolean? = null,
+        @Query("sort_by") sortBy: String = "saved_at",
+        @Query("sort_order") sortOrder: String = "desc",
+        @Query("limit") limit: Int = 50,
+        @Query("offset") offset: Int = 0,
+    ): Response<ApiEnvelope<UnifiedNotesData>>
+
+    @GET("api/notes/review/topics")
+    suspend fun reviewNotesTopics(
+        @Query("days") days: Int = 30,
+        @Query("limit") limit: Int = 8,
+        @Query("per_topic_limit") perTopicLimit: Int = 5,
+    ): Response<ApiEnvelope<NotesReviewTopicsData>>
+
+    @GET("api/notes/review/timeline")
+    suspend fun reviewNotesTimeline(
+        @Query("days") days: Int = 30,
+        @Query("bucket") bucket: String = "day",
+        @Query("limit") limit: Int = 10,
+        @Query("per_bucket_limit") perBucketLimit: Int = 5,
+    ): Response<ApiEnvelope<NotesTimelineReviewData>>
+
+    @GET("api/notes/{source}/{noteId}/related")
+    suspend fun getRelatedNotes(
+        @Path("source") source: String,
+        @Path("noteId") noteId: String,
+        @Query("limit") limit: Int = 8,
+        @Query("min_score") minScore: Double = 0.2,
+    ): Response<ApiEnvelope<RelatedNotesData>>
 
     @DELETE("api/notes/bilibili/{noteId}")
     suspend fun deleteBilibiliNote(

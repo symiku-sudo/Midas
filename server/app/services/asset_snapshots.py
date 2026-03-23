@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from app.core.config import Settings
+from app.core.config import Settings, resolve_runtime_path
 from app.core.errors import AppError, ErrorCode
 from app.models.schemas import AssetCurrentData, AssetSnapshotHistoryData, AssetSnapshotRecord
 from app.repositories.note_repo import NoteLibraryRepository
@@ -17,7 +17,9 @@ class AssetSnapshotService:
         repository: NoteLibraryRepository | None = None,
     ) -> None:
         self._settings = settings
-        self._repository = repository or NoteLibraryRepository(settings.xiaohongshu.db_path)
+        self._repository = repository or NoteLibraryRepository(
+            str(resolve_runtime_path(settings.xiaohongshu.db_path))
+        )
 
     def list_history(self) -> AssetSnapshotHistoryData:
         items = [AssetSnapshotRecord(**item) for item in self._repository.list_asset_snapshots()]

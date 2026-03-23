@@ -32,9 +32,10 @@ Options:
 Flow:
   1) strict selfcheck (fail => stop)
   2) restart mobile server
-  3) export APK
-  4) (optional) share APK via tailnet URL
-  5) (optional) send ntfy notification
+  3) smoke check
+  4) export APK
+  5) (optional) share APK via tailnet URL
+  6) (optional) send ntfy notification
 EOF
 }
 
@@ -97,7 +98,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-echo "[release] 1/3 strict selfcheck..."
+echo "[release] 1/4 strict selfcheck..."
 (
   cd "$SERVER_DIR"
   if [[ ! -x ".venv/bin/python" ]]; then
@@ -107,13 +108,24 @@ echo "[release] 1/3 strict selfcheck..."
   ./.venv/bin/python tools/selfcheck.py
 )
 
-echo "[release] 2/3 restart mobile server..."
+echo "[release] 2/4 restart mobile server..."
 (
   cd "$ROOT_DIR"
   server/tools/dev_server.sh restart web_guard --mobile
 )
 
-echo "[release] 3/3 export APK..."
+echo "[release] 3/4 smoke check..."
+(
+  cd "$ROOT_DIR"
+  "$SERVER_DIR/.venv/bin/python" server/tools/smoke_test.py \
+    --base-url "http://127.0.0.1:8000" \
+    --profile web_guard
+)
+if [[ -f "$ROOT_DIR/tools/SMOKE_CHECKLIST.md" ]]; then
+  echo "[release] smoke_checklist=$ROOT_DIR/tools/SMOKE_CHECKLIST.md"
+fi
+
+echo "[release] 4/4 export APK..."
 cmd=("android/tools/export_apk.sh")
 if [[ "$BUILD_TYPE" == "release" ]]; then
   cmd+=("--release")
@@ -147,7 +159,7 @@ fi
 if [[ "$SHARE_TAILNET" == "1" ]]; then
   SHARE_APK_PATH="$LATEST_APK_PATH"
 
-  echo "[release] 4/4 share APK over tailnet..."
+  echo "[release] 5/6 share APK over tailnet..."
   if [[ ! -f "$SHARE_APK_PATH" ]]; then
     echo "[release] warning: share target APK not found: $SHARE_APK_PATH"
   elif ! "$ROOT_DIR/android/tools/share_apk_tailnet.sh" \
@@ -158,7 +170,7 @@ if [[ "$SHARE_TAILNET" == "1" ]]; then
 fi
 
 if [[ "$NOTIFY_NTFY" == "1" ]]; then
-  echo "[release] notify via ntfy..."
+  echo "[release] 6/6 notify via ntfy..."
   notify_cmd=("$ROOT_DIR/tools/ntfy_notify.sh")
   if [[ -z "${NTFY_CONFIG_FILE:-}" ]] && [[ -f "$ROOT_DIR/.tmp/ntfy/notify.env" ]]; then
     notify_cmd+=(--config "$ROOT_DIR/.tmp/ntfy/notify.env")

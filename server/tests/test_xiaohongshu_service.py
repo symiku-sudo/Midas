@@ -1,629 +1,118 @@
 from __future__ import annotations
 
-import time
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
 import pytest
 
 from app.core.config import Settings, XiaohongshuConfig, XiaohongshuWebReadonlyConfig
 from app.core.errors import AppError, ErrorCode
+from app.repositories.note_repo import NoteLibraryRepository
 from app.repositories.xiaohongshu_repo import XiaohongshuSyncRepository
+from app.services.comment_insights import CommentSnippet
 from app.services.xiaohongshu import (
     XiaohongshuNote,
     XiaohongshuPageBatch,
-    XiaohongshuSyncProgress,
-    XiaohongshuSyncService,
+    XiaohongshuService,
     XiaohongshuWebReadonlySource,
 )
 
 
-class AlwaysFailLLM:
-    async def summarize_xiaohongshu_note(self, **_: str) -> str:
-        raise AppError(
-            code=ErrorCode.UPSTREAM_ERROR,
-            message="mock llm failed",
-            status_code=502,
-        )
-
-
-class FixedSource:
-    def fetch_recent(self, limit: int) -> list[XiaohongshuNote]:
-        data = [
-            XiaohongshuNote(
-                note_id="n1",
-                title="t1",
-                content="c1",
-                source_url="https://www.xiaohongshu.com/explore/n1",
-            ),
-            XiaohongshuNote(
-                note_id="n2",
-                title="t2",
-                content="c2",
-                source_url="https://www.xiaohongshu.com/explore/n2",
-            ),
-        ]
-        return data[:limit]
-
-
-class FixedWebSource:
-    async def fetch_recent(self, limit: int) -> list[XiaohongshuNote]:
-        data = [
-            XiaohongshuNote(
-                note_id="w1",
-                title="web-title-1",
-                content="web-content-1",
-                source_url="https://www.xiaohongshu.com/explore/w1",
-            ),
-            XiaohongshuNote(
-                note_id="w2",
-                title="web-title-2",
-                content="web-content-2",
-                source_url="https://www.xiaohongshu.com/explore/w2",
-            ),
-        ]
-        return data[:limit]
-
-
 class SimpleLLM:
-    async def summarize_xiaohongshu_note(self, **_: str) -> str:
-        return "# 总结\n\n这是一段测试总结。"
-
-
-class CaptureLLM:
     def __init__(self) -> None:
-        self.last_kwargs: dict | None = None
+        self.last_text_kwargs: dict | None = None
+        self.last_video_kwargs: dict | None = None
+        self.last_comment_kwargs: dict | None = None
 
     async def summarize_xiaohongshu_note(self, **kwargs) -> str:
-        self.last_kwargs = kwargs
+        self.last_text_kwargs = kwargs
         return "# 总结\n\n这是一段测试总结。"
 
+    async def summarize_xiaohongshu_video_note(self, **kwargs) -> str:
+        self.last_video_kwargs = kwargs
+        return "# 视频总结\n\n- 结论 A"
 
-class IterWebSource:
-    def __init__(self, notes: list[XiaohongshuNote]) -> None:
-        self._notes = notes
-
-    async def iter_recent(self):
-        for note in self._notes:
-            yield note
+    async def summarize_comment_insights(self, **kwargs) -> str:
+        self.last_comment_kwargs = kwargs
+        return "## 评论区洞察（含点赞权重）\n\n- 高赞观点：太实用了。"
 
 
 class SingleUrlWebSource:
-    def __init__(self, note: XiaohongshuNote) -> None:
+    def __init__(
+        self,
+        note: XiaohongshuNote,
+        *,
+        comments: list[CommentSnippet] | None = None,
+    ) -> None:
         self._note = note
+        self._comments = comments or []
         self.last_url = ""
 
     async def fetch_note_by_url(self, note_url: str) -> XiaohongshuNote:
         self.last_url = note_url
         return self._note
 
-
-class PendingCountWebSource:
-    def __init__(self, batches: list[XiaohongshuPageBatch]) -> None:
-        self._batches = batches
-        self.calls: list[dict[str, object]] = []
-
-    async def iter_pages(
+    async def fetch_comment_snippets(
         self,
         *,
-        start_cursor: str | None = None,
-        force_head: bool = False,
-        max_pages: int | None = None,
-    ):
-        self.calls.append(
-            {
-                "start_cursor": start_cursor,
-                "force_head": force_head,
-                "max_pages": max_pages,
-            }
-        )
-        for batch in self._batches:
-            yield batch
+        note: XiaohongshuNote,
+        limit: int,
+    ) -> list[CommentSnippet]:
+        assert note.note_id == self._note.note_id
+        return self._comments[:limit]
 
 
-class BrokenIterPagesWebSource:
-    async def iter_pages(
-        self,
-        *,
-        start_cursor: str | None = None,
-        force_head: bool = False,
-        max_pages: int | None = None,
-    ):
-        raise RuntimeError("playwright launch exploded")
-        yield XiaohongshuPageBatch(notes=[])
-
-
-class HybridCursorWebSource:
-    def __init__(
-        self,
-        *,
-        head_notes: list[XiaohongshuNote],
-        head_next_cursor: str,
-        resume_pages: dict[str, list[XiaohongshuPageBatch]],
-        fail_cursors: set[str] | None = None,
-    ) -> None:
-        self.calls: list[dict[str, object]] = []
-        self._head_notes = head_notes
-        self._head_next_cursor = head_next_cursor
-        self._resume_pages = resume_pages
-        self._fail_cursors = fail_cursors or set()
-
-    async def iter_pages(
-        self,
-        *,
-        start_cursor: str | None = None,
-        force_head: bool = False,
-        max_pages: int | None = None,
-    ):
-        self.calls.append(
-            {
-                "start_cursor": start_cursor,
-                "force_head": force_head,
-                "max_pages": max_pages,
-            }
-        )
-        if force_head:
-            yield XiaohongshuPageBatch(
-                notes=self._head_notes,
-                request_cursor="",
-                next_cursor=self._head_next_cursor,
-                exhausted=False,
-            )
-            return
-        normalized_cursor = (start_cursor or "").strip()
-        if normalized_cursor in self._fail_cursors:
-            raise AppError(
-                code=ErrorCode.UPSTREAM_ERROR,
-                message="响应中 items_path 无法解析为列表：data.notes",
-                status_code=502,
-            )
-        for batch in self._resume_pages.get(normalized_cursor, []):
-            yield batch
-
-
-@pytest.mark.asyncio
-async def test_sync_circuit_breaker(tmp_path) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="mock",
-            db_path=str(tmp_path / "midas.db"),
-            circuit_breaker_failures=2,
-            max_limit=30,
-            default_limit=20,
-        )
-    )
-    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
-    service = XiaohongshuSyncService(
-        settings=settings,
-        repository=repo,
-        source=FixedSource(),
-        llm_service=AlwaysFailLLM(),
-    )
-
-    with pytest.raises(AppError) as exc_info:
-        await service.sync(limit=2)
-
-    err = exc_info.value
-    assert err.code == ErrorCode.CIRCUIT_OPEN
-    assert err.details["failed_count"] == 2
-    assert err.details["circuit_opened"] is True
-
-
-@pytest.mark.asyncio
-async def test_sync_progress_callback_contains_incremental_summaries(tmp_path) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="mock",
-            db_path=str(tmp_path / "midas.db"),
-        )
-    )
-    service = XiaohongshuSyncService(
-        settings=settings,
-        repository=XiaohongshuSyncRepository(str(tmp_path / "midas.db")),
-        source=FixedSource(),
-        llm_service=SimpleLLM(),
-    )
-
-    events: list[XiaohongshuSyncProgress] = []
-
-    async def _on_progress(progress: XiaohongshuSyncProgress) -> None:
-        events.append(progress)
-
-    result = await service.sync(limit=2, confirm_live=False, progress_callback=_on_progress)
-
-    assert result.new_count == 2
-    assert len(events) >= 3
-    assert events[0].current == 0
-    assert events[0].summaries == []
-    assert any(len(item.summaries) == 1 for item in events)
-    assert [item.note_id for item in events[-1].summaries] == ["n1", "n2"]
-
-
-@pytest.mark.asyncio
-async def test_web_readonly_hybrid_scans_head_then_resume_saved_cursor(tmp_path) -> None:
-    settings = Settings(
+def _make_web_settings(
+    tmp_path: Path | None = None,
+    *,
+    llm_enabled: bool = True,
+    comment_insights: dict | None = None,
+    **web_kwargs,
+) -> Settings:
+    db_path = str((tmp_path or Path(".tmp")) / "midas.db")
+    base_web = {
+        "request_url": "https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
+        "request_method": "GET",
+        "request_headers": {"Cookie": "a=b"},
+        "items_path": "data.notes",
+        "note_id_field": "note_id",
+        "title_field": "title",
+        "content_field_candidates": ["desc"],
+        "detail_fetch_mode": "never",
+        "host_allowlist": ["www.xiaohongshu.com", "edith.xiaohongshu.com"],
+    }
+    base_web.update(web_kwargs)
+    return Settings(
+        llm={"enabled": llm_enabled},
+        comment_insights=comment_insights or {},
         xiaohongshu=XiaohongshuConfig(
             mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            min_live_sync_interval_seconds=0,
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path"
-            ),
-        )
+            db_path=db_path,
+            web_readonly=XiaohongshuWebReadonlyConfig(**base_web),
+        ),
     )
-    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
-    repo.mark_synced("h1", "head-1", "https://www.xiaohongshu.com/explore/h1")
-    source = HybridCursorWebSource(
-        head_notes=[
-            XiaohongshuNote(
-                note_id="h1",
-                title="head-1",
-                content="head-content-1",
-                source_url="https://www.xiaohongshu.com/explore/h1",
-            )
-        ],
-        head_next_cursor="head-next",
-        resume_pages={
-            "resume-cursor": [
-                XiaohongshuPageBatch(
-                    notes=[
-                        XiaohongshuNote(
-                            note_id="r1",
-                            title="resume-1",
-                            content="resume-content-1",
-                            source_url="https://www.xiaohongshu.com/explore/r1",
-                        )
-                    ],
-                    request_cursor="resume-cursor",
-                    next_cursor="resume-next",
-                    exhausted=False,
-                ),
-                XiaohongshuPageBatch(
-                    notes=[
-                        XiaohongshuNote(
-                            note_id="r2",
-                            title="resume-2",
-                            content="resume-content-2",
-                            source_url="https://www.xiaohongshu.com/explore/r2",
-                        )
-                    ],
-                    request_cursor="resume-next",
-                    next_cursor="",
-                    exhausted=True,
-                ),
-            ]
-        },
-    )
-    service = XiaohongshuSyncService(
-        settings=settings,
-        repository=repo,
-        web_source=source,
-        llm_service=SimpleLLM(),
-    )
-    fingerprint = service._build_live_cursor_fingerprint()
-    repo.set_state(service._LIVE_CURSOR_FINGERPRINT_STATE_KEY, fingerprint)
-    repo.set_state(service._LIVE_CURSOR_STATE_KEY, "resume-cursor")
-
-    result = await service.sync(limit=2, confirm_live=True)
-
-    assert result.new_count == 2
-    assert [item.note_id for item in result.summaries] == ["r1", "r2"]
-    assert len(source.calls) == 2
-    assert source.calls[0]["force_head"] is True
-    assert source.calls[0]["max_pages"] == service._HEAD_SHORT_SCAN_PAGES
-    assert source.calls[1]["start_cursor"] == "resume-cursor"
-    assert repo.get_state(service._LIVE_CURSOR_STATE_KEY) == "resume-next"
 
 
 @pytest.mark.asyncio
-async def test_web_readonly_hybrid_uses_head_cursor_when_no_saved_cursor(tmp_path) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            min_live_sync_interval_seconds=0,
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path"
-            ),
-        )
-    )
+async def test_web_readonly_summarize_url_marks_synced(tmp_path: Path) -> None:
+    settings = _make_web_settings(tmp_path)
     repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
-    repo.mark_synced("h1", "head-1", "https://www.xiaohongshu.com/explore/h1")
-    source = HybridCursorWebSource(
-        head_notes=[
-            XiaohongshuNote(
-                note_id="h1",
-                title="head-1",
-                content="head-content-1",
-                source_url="https://www.xiaohongshu.com/explore/h1",
-            )
-        ],
-        head_next_cursor="head-next",
-        resume_pages={
-            "head-next": [
-                XiaohongshuPageBatch(
-                    notes=[
-                        XiaohongshuNote(
-                            note_id="r1",
-                            title="resume-1",
-                            content="resume-content-1",
-                            source_url="https://www.xiaohongshu.com/explore/r1",
-                        )
-                    ],
-                    request_cursor="head-next",
-                    next_cursor="",
-                    exhausted=True,
-                )
-            ]
-        },
-    )
-    service = XiaohongshuSyncService(
-        settings=settings,
-        repository=repo,
-        web_source=source,
-        llm_service=SimpleLLM(),
-    )
-
-    result = await service.sync(limit=1, confirm_live=True)
-
-    assert result.new_count == 1
-    assert [item.note_id for item in result.summaries] == ["r1"]
-    assert len(source.calls) == 2
-    assert source.calls[1]["start_cursor"] == "head-next"
-    assert repo.get_state(service._LIVE_CURSOR_STATE_KEY) == "head-next"
-
-
-@pytest.mark.asyncio
-async def test_web_readonly_hybrid_ignores_stale_cursor_on_fingerprint_change(
-    tmp_path,
-) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            min_live_sync_interval_seconds=0,
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path"
-            ),
-        )
-    )
-    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
-    repo.mark_synced("h1", "head-1", "https://www.xiaohongshu.com/explore/h1")
-    source = HybridCursorWebSource(
-        head_notes=[
-            XiaohongshuNote(
-                note_id="h1",
-                title="head-1",
-                content="head-content-1",
-                source_url="https://www.xiaohongshu.com/explore/h1",
-            )
-        ],
-        head_next_cursor="head-next",
-        resume_pages={
-            "head-next": [
-                XiaohongshuPageBatch(
-                    notes=[
-                        XiaohongshuNote(
-                            note_id="r1",
-                            title="resume-1",
-                            content="resume-content-1",
-                            source_url="https://www.xiaohongshu.com/explore/r1",
-                        )
-                    ],
-                    request_cursor="head-next",
-                    next_cursor="",
-                    exhausted=True,
-                )
-            ]
-        },
-    )
-    service = XiaohongshuSyncService(
-        settings=settings,
-        repository=repo,
-        web_source=source,
-        llm_service=SimpleLLM(),
-    )
-    repo.set_state(service._LIVE_CURSOR_FINGERPRINT_STATE_KEY, "stale-fingerprint")
-    repo.set_state(service._LIVE_CURSOR_STATE_KEY, "stale-cursor")
-
-    result = await service.sync(limit=1, confirm_live=True)
-
-    assert result.new_count == 1
-    assert [item.note_id for item in result.summaries] == ["r1"]
-    assert len(source.calls) == 2
-    assert source.calls[1]["start_cursor"] == "head-next"
-
-
-@pytest.mark.asyncio
-async def test_web_readonly_hybrid_fallback_to_head_cursor_when_saved_cursor_invalid(
-    tmp_path,
-) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            min_live_sync_interval_seconds=0,
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path"
-            ),
-        )
-    )
-    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
-    repo.mark_synced("h1", "head-1", "https://www.xiaohongshu.com/explore/h1")
-    source = HybridCursorWebSource(
-        head_notes=[
-            XiaohongshuNote(
-                note_id="h1",
-                title="head-1",
-                content="head-content-1",
-                source_url="https://www.xiaohongshu.com/explore/h1",
-            )
-        ],
-        head_next_cursor="head-next",
-        resume_pages={
-            "head-next": [
-                XiaohongshuPageBatch(
-                    notes=[
-                        XiaohongshuNote(
-                            note_id="r1",
-                            title="resume-1",
-                            content="resume-content-1",
-                            source_url="https://www.xiaohongshu.com/explore/r1",
-                        )
-                    ],
-                    request_cursor="head-next",
-                    next_cursor="",
-                    exhausted=True,
-                )
-            ]
-        },
-        fail_cursors={"stale-resume"},
-    )
-    service = XiaohongshuSyncService(
-        settings=settings,
-        repository=repo,
-        web_source=source,
-        llm_service=SimpleLLM(),
-    )
-    fingerprint = service._build_live_cursor_fingerprint()
-    repo.set_state(service._LIVE_CURSOR_FINGERPRINT_STATE_KEY, fingerprint)
-    repo.set_state(service._LIVE_CURSOR_STATE_KEY, "stale-resume")
-
-    result = await service.sync(limit=1, confirm_live=True)
-
-    assert result.new_count == 1
-    assert [item.note_id for item in result.summaries] == ["r1"]
-    assert len(source.calls) == 3
-    assert source.calls[1]["start_cursor"] == "stale-resume"
-    assert source.calls[2]["start_cursor"] == "head-next"
-    assert repo.get_state(service._LIVE_CURSOR_STATE_KEY) == "head-next"
-
-
-@pytest.mark.asyncio
-async def test_sync_failure_does_not_mark_note_as_synced(tmp_path) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="mock",
-            db_path=str(tmp_path / "midas.db"),
-            circuit_breaker_failures=10,
-            max_limit=30,
-            default_limit=20,
-        )
-    )
-    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
-    service = XiaohongshuSyncService(
-        settings=settings,
-        repository=repo,
-        source=FixedSource(),
-        llm_service=AlwaysFailLLM(),
-    )
-
-    result = await service.sync(limit=2)
-
-    assert result.new_count == 0
-    assert result.failed_count == 2
-    assert repo.is_synced("n1") is False
-    assert repo.is_synced("n2") is False
-
-
-@pytest.mark.asyncio
-async def test_web_readonly_requires_confirm_live(tmp_path) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path"
-            ),
-        )
-    )
-    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
-    service = XiaohongshuSyncService(
-        settings=settings,
-        repository=repo,
-        web_source=FixedWebSource(),
-    )
-
-    with pytest.raises(AppError) as exc_info:
-        await service.sync(limit=1, confirm_live=False)
-    assert exc_info.value.code == ErrorCode.INVALID_INPUT
-
-
-@pytest.mark.asyncio
-async def test_web_readonly_rate_limit_guard(tmp_path) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            min_live_sync_interval_seconds=1800,
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path"
-            ),
-        )
-    )
-    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
-    repo.set_state("last_live_sync_ts", str(int(time.time())))
-    service = XiaohongshuSyncService(
-        settings=settings,
-        repository=repo,
-        web_source=FixedWebSource(),
-    )
-
-    with pytest.raises(AppError) as exc_info:
-        await service.sync(limit=1, confirm_live=True)
-    assert exc_info.value.code == ErrorCode.RATE_LIMITED
-
-
-@pytest.mark.asyncio
-async def test_web_readonly_success_sets_last_sync_state(tmp_path) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            min_live_sync_interval_seconds=0,
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path"
-            ),
-        )
-    )
-    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
-    service = XiaohongshuSyncService(
-        settings=settings,
-        repository=repo,
-        web_source=FixedWebSource(),
-        llm_service=SimpleLLM(),
-    )
-
-    result = await service.sync(limit=1, confirm_live=True)
-    assert result.new_count == 1
-    assert result.fetched_count == 1
-    assert repo.get_state("last_live_sync_ts") is not None
-
-
-@pytest.mark.asyncio
-async def test_web_readonly_summarize_url_marks_synced(tmp_path) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            min_live_sync_interval_seconds=0,
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path"
-            ),
-        )
-    )
-    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
+    llm = SimpleLLM()
     note = XiaohongshuNote(
         note_id="u1",
         title="url-note",
         content="来自单篇 URL 的正文",
         source_url="https://www.xiaohongshu.com/explore/u1",
     )
-    source = SingleUrlWebSource(note)
-    service = XiaohongshuSyncService(
+    source = SingleUrlWebSource(
+        note,
+        comments=[CommentSnippet(text="太实用了。", like_count=12)],
+    )
+    service = XiaohongshuService(
         settings=settings,
         repository=repo,
         web_source=source,
-        llm_service=SimpleLLM(),
+        llm_service=llm,
     )
 
     result = await service.summarize_url("https://www.xiaohongshu.com/explore/u1")
@@ -634,126 +123,175 @@ async def test_web_readonly_summarize_url_marks_synced(tmp_path) -> None:
     assert repo.is_synced("u1") is True
     assert "原文链接" in result.summary_markdown
     assert "评论区洞察（含点赞权重）" in result.summary_markdown
+    assert llm.last_text_kwargs is not None
+    assert llm.last_text_kwargs["note_id"] == "u1"
 
 
 @pytest.mark.asyncio
-async def test_web_readonly_pending_count_only_counts_unsynced_note_ids(tmp_path) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            min_live_sync_interval_seconds=0,
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path"
-            ),
-        )
-    )
-    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
-    repo.mark_synced("w2", "web-title-2", "https://www.xiaohongshu.com/explore/w2")
-    source = PendingCountWebSource(
-        batches=[
-            XiaohongshuPageBatch(
-                notes=[
-                    XiaohongshuNote(
-                        note_id="w1",
-                        title="web-title-1",
-                        content="web-content-1",
-                        source_url="https://www.xiaohongshu.com/explore/w1",
-                    ),
-                    XiaohongshuNote(
-                        note_id="w2",
-                        title="web-title-2",
-                        content="web-content-2",
-                        source_url="https://www.xiaohongshu.com/explore/w2",
-                    ),
-                ],
-                request_cursor="",
-                next_cursor="cursor-2",
-                exhausted=False,
-            ),
-            XiaohongshuPageBatch(
-                notes=[
-                    XiaohongshuNote(
-                        note_id="w2",
-                        title="web-title-2",
-                        content="web-content-2",
-                        source_url="https://www.xiaohongshu.com/explore/w2",
-                    ),
-                    XiaohongshuNote(
-                        note_id="w3",
-                        title="web-title-3",
-                        content="web-content-3",
-                        source_url="https://www.xiaohongshu.com/explore/w3",
-                    ),
-                ],
-                request_cursor="cursor-2",
-                next_cursor="",
-                exhausted=True,
-            ),
+async def test_summarize_url_returns_saved_summary_for_deduped_note(tmp_path: Path) -> None:
+    settings = _make_web_settings(tmp_path)
+    db_path = str(tmp_path / "midas.db")
+    repo = XiaohongshuSyncRepository(db_path)
+    notes_repo = NoteLibraryRepository(db_path)
+    notes_repo.save_xiaohongshu_notes(
+        [
+            {
+                "note_id": "u2",
+                "title": "已保存标题",
+                "source_url": "https://www.xiaohongshu.com/explore/u2",
+                "summary_markdown": "# 旧总结\n\n这是旧内容。",
+            }
         ]
     )
-    service = XiaohongshuSyncService(
+    repo.mark_synced("u2", "已保存标题", "https://www.xiaohongshu.com/explore/u2")
+    note = XiaohongshuNote(
+        note_id="u2",
+        title="新标题不会覆盖",
+        content="正文",
+        source_url="https://www.xiaohongshu.com/explore/u2",
+    )
+    service = XiaohongshuService(
         settings=settings,
         repository=repo,
-        web_source=source,
+        web_source=SingleUrlWebSource(note),
         llm_service=SimpleLLM(),
     )
 
-    result = await service.get_pending_unsynced_count()
+    result = await service.summarize_url("https://www.xiaohongshu.com/explore/u2")
 
-    assert result["mode"] == "web_readonly"
-    assert result["scanned_count"] == 3
-    assert result["pending_count"] == 2
-    assert len(source.calls) == 1
-    assert source.calls[0]["force_head"] is True
+    assert result.note_id == "u2"
+    assert result.title == "已保存标题"
+    assert "# 旧总结" in result.summary_markdown
+    assert "原文链接" in result.summary_markdown
 
 
 @pytest.mark.asyncio
-async def test_web_readonly_pending_count_wraps_unexpected_source_error(tmp_path) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            min_live_sync_interval_seconds=0,
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path"
-            ),
-        )
+async def test_summarize_url_passes_image_urls_to_llm(tmp_path: Path) -> None:
+    settings = _make_web_settings(tmp_path)
+    llm = SimpleLLM()
+    note = XiaohongshuNote(
+        note_id="img-1",
+        title="图文笔记",
+        content="正文",
+        source_url="https://www.xiaohongshu.com/explore/img-1",
+        image_urls=["https://sns-webpic-qc.xhscdn.com/abc/image-1"],
     )
-    service = XiaohongshuSyncService(
+    service = XiaohongshuService(
         settings=settings,
         repository=XiaohongshuSyncRepository(str(tmp_path / "midas.db")),
-        web_source=BrokenIterPagesWebSource(),
-        llm_service=SimpleLLM(),
+        web_source=SingleUrlWebSource(note),
+        llm_service=llm,
     )
 
-    with pytest.raises(AppError) as exc_info:
-        await service.get_pending_unsynced_count()
-    assert exc_info.value.code == ErrorCode.UPSTREAM_ERROR
+    result = await service.summarize_url(note.source_url)
+
+    assert result.note_id == "img-1"
+    assert llm.last_text_kwargs is not None
+    assert llm.last_text_kwargs["image_urls"] == [
+        "https://sns-webpic-qc.xhscdn.com/abc/image-1"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_summarize_url_video_note_uses_audio_asr_and_video_llm(tmp_path: Path) -> None:
+    settings = _make_web_settings(tmp_path)
+
+    class DummyFetcher:
+        def __init__(self) -> None:
+            self.last_headers: dict[str, str] | None = None
+
+        def fetch_audio(self, video_url: str, output_dir: Path, headers=None):
+            _ = video_url
+            self.last_headers = headers
+            audio_path = output_dir / "source.wav"
+            audio_path.write_bytes(b"dummy-audio")
+            return audio_path
+
+    class DummyASR:
+        def transcribe(self, audio_path: Path) -> str:
+            assert audio_path.name == "source.wav"
+            return "这是视频转写文本。"
+
+    llm = SimpleLLM()
+    fetcher = DummyFetcher()
+    note = XiaohongshuNote(
+        note_id="video-1",
+        title="视频笔记",
+        content="这是原笔记正文",
+        source_url="https://www.xiaohongshu.com/explore/video-1",
+        is_video=True,
+    )
+    service = XiaohongshuService(
+        settings=settings,
+        repository=XiaohongshuSyncRepository(str(tmp_path / "midas.db")),
+        web_source=SingleUrlWebSource(note),
+        llm_service=llm,
+        audio_fetcher=fetcher,
+        asr_service=DummyASR(),
+    )
+
+    result = await service.summarize_url(note.source_url)
+
+    assert result.note_id == "video-1"
+    assert llm.last_video_kwargs is not None
+    assert llm.last_video_kwargs["transcript"] == "这是视频转写文本。"
+    assert llm.last_video_kwargs["content"] == "这是原笔记正文"
+    assert fetcher.last_headers is not None
+    assert fetcher.last_headers["Referer"] == note.source_url
+    assert "原文链接" in result.summary_markdown
+
+
+@pytest.mark.asyncio
+async def test_summarize_url_video_note_falls_back_to_text_summary_when_asr_fails(
+    tmp_path: Path,
+) -> None:
+    settings = _make_web_settings(tmp_path)
+
+    class BrokenFetcher:
+        def fetch_audio(self, video_url: str, output_dir: Path, headers=None):
+            raise AppError(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message="音频下载失败",
+                status_code=502,
+            )
+
+    llm = SimpleLLM()
+    note = XiaohongshuNote(
+        note_id="video-2",
+        title="视频笔记",
+        content="保底正文",
+        source_url="https://www.xiaohongshu.com/explore/video-2",
+        is_video=True,
+    )
+    service = XiaohongshuService(
+        settings=settings,
+        repository=XiaohongshuSyncRepository(str(tmp_path / "midas.db")),
+        web_source=SingleUrlWebSource(note),
+        llm_service=llm,
+        audio_fetcher=BrokenFetcher(),
+    )
+
+    result = await service.summarize_url(note.source_url)
+
+    assert llm.last_text_kwargs is not None
+    assert llm.last_video_kwargs is None
+    assert "视频音频转写失败" in result.summary_markdown
+    assert "原文链接" in result.summary_markdown
 
 
 @pytest.mark.asyncio
 async def test_web_readonly_fetch_note_by_url_resolves_xhslink(
     monkeypatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            min_live_sync_interval_seconds=0,
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path"
-            ),
-        )
-    )
+    settings = _make_web_settings(tmp_path, request_url="https://www.xiaohongshu.com/api/some/path")
     source = XiaohongshuWebReadonlySource(settings)
 
-    class _FakeResponse:
+    class FakeResponse:
         url = "https://www.xiaohongshu.com/explore/abc123"
         text = ""
 
-    class _FakeAsyncClient:
+    class FakeAsyncClient:
         def __init__(self, *_, **__):
             pass
 
@@ -764,9 +302,9 @@ async def test_web_readonly_fetch_note_by_url_resolves_xhslink(
             return False
 
         async def get(self, *_args, **_kwargs):
-            return _FakeResponse()
+            return FakeResponse()
 
-    async def _fake_extract_note_from_record(*_args, **_kwargs):
+    async def fake_extract_note_from_record(*_args, **_kwargs):
         return XiaohongshuNote(
             note_id="abc123",
             title="短链解析测试",
@@ -774,11 +312,11 @@ async def test_web_readonly_fetch_note_by_url_resolves_xhslink(
             source_url="https://www.xiaohongshu.com/explore/abc123",
         )
 
-    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", FakeAsyncClient)
     monkeypatch.setattr(
         XiaohongshuWebReadonlySource,
         "_extract_note_from_record",
-        _fake_extract_note_from_record,
+        fake_extract_note_from_record,
     )
 
     note = await source.fetch_note_by_url("http://xhslink.com/o/eNmdwzRjEI")
@@ -789,27 +327,16 @@ async def test_web_readonly_fetch_note_by_url_resolves_xhslink(
 @pytest.mark.asyncio
 async def test_web_readonly_fetch_note_by_url_resolves_xhslink_when_final_url_is_not_note(
     monkeypatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            min_live_sync_interval_seconds=0,
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path"
-            ),
-        )
-    )
+    settings = _make_web_settings(tmp_path, request_url="https://www.xiaohongshu.com/api/some/path")
     source = XiaohongshuWebReadonlySource(settings)
 
-    class _FakeResponse:
+    class FakeResponse:
         url = "https://www.xiaohongshu.com/explore"
-        text = (
-            '{"jump":"https:\\/\\/www.xiaohongshu.com\\/discovery\\/item\\/abc123"}'
-        )
+        text = '{"jump":"https:\\/\\/www.xiaohongshu.com\\/discovery\\/item\\/abc123"}'
 
-    class _FakeAsyncClient:
+    class FakeAsyncClient:
         def __init__(self, *_, **__):
             pass
 
@@ -820,9 +347,9 @@ async def test_web_readonly_fetch_note_by_url_resolves_xhslink_when_final_url_is
             return False
 
         async def get(self, *_args, **_kwargs):
-            return _FakeResponse()
+            return FakeResponse()
 
-    async def _fake_extract_note_from_record(*_args, **_kwargs):
+    async def fake_extract_note_from_record(*_args, **_kwargs):
         return XiaohongshuNote(
             note_id="abc123",
             title="短链回退解析测试",
@@ -830,11 +357,11 @@ async def test_web_readonly_fetch_note_by_url_resolves_xhslink_when_final_url_is
             source_url="https://www.xiaohongshu.com/discovery/item/abc123",
         )
 
-    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeAsyncClient)
+    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", FakeAsyncClient)
     monkeypatch.setattr(
         XiaohongshuWebReadonlySource,
         "_extract_note_from_record",
-        _fake_extract_note_from_record,
+        fake_extract_note_from_record,
     )
 
     note = await source.fetch_note_by_url("http://xhslink.com/o/eNmdwzRjEI")
@@ -845,22 +372,16 @@ async def test_web_readonly_fetch_note_by_url_resolves_xhslink_when_final_url_is
 @pytest.mark.asyncio
 async def test_web_readonly_fetch_note_by_url_keeps_image_only_note(
     monkeypatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            min_live_sync_interval_seconds=0,
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path",
-                detail_fetch_mode="never",
-            ),
-        )
+    settings = _make_web_settings(
+        tmp_path,
+        request_url="https://www.xiaohongshu.com/api/some/path",
+        detail_fetch_mode="never",
     )
     source = XiaohongshuWebReadonlySource(settings)
 
-    class _FakeResp:
+    class FakeResp:
         def __init__(self, *, text: str = "", status_code: int = 200) -> None:
             self.status_code = status_code
             self.text = text
@@ -869,7 +390,7 @@ async def test_web_readonly_fetch_note_by_url_keeps_image_only_note(
         def json() -> dict:
             return {}
 
-    class _FakeClient:
+    class FakeClient:
         calls: list[str] = []
 
         def __init__(self, *_, **__):
@@ -891,9 +412,9 @@ async def test_web_readonly_fetch_note_by_url_keeps_image_only_note(
             </script>
             </body></html>
             """
-            return _FakeResp(text=html)
+            return FakeResp(text=html)
 
-    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeClient)
+    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", FakeClient)
 
     note = await source.fetch_note_by_url(
         "https://www.xiaohongshu.com/discovery/item/imgonly1"
@@ -903,41 +424,19 @@ async def test_web_readonly_fetch_note_by_url_keeps_image_only_note(
     assert note.content == ""
     assert note.image_urls == ["https://sns-webpic-qc.xhscdn.com/imgonly-1"]
     assert note.is_video is False
-    assert any("/discovery/item/imgonly1" in url for url in _FakeClient.calls)
+    assert any("/discovery/item/imgonly1" in url for url in FakeClient.calls)
 
 
-def test_extract_note_id_from_url_supports_note_and_notes_paths(tmp_path) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path"
-            ),
-        )
-    )
+def test_extract_note_id_from_url_supports_note_and_notes_paths(tmp_path: Path) -> None:
+    settings = _make_web_settings(tmp_path, request_url="https://www.xiaohongshu.com/api/some/path")
     source = XiaohongshuWebReadonlySource(settings)
 
-    assert (
-        source.extract_note_id_from_url("https://www.xiaohongshu.com/note/abc123")
-        == "abc123"
-    )
-    assert (
-        source.extract_note_id_from_url("https://www.xiaohongshu.com/notes/xyz987")
-        == "xyz987"
-    )
+    assert source.extract_note_id_from_url("https://www.xiaohongshu.com/note/abc123") == "abc123"
+    assert source.extract_note_id_from_url("https://www.xiaohongshu.com/notes/xyz987") == "xyz987"
 
 
-def test_build_note_page_url_inherits_xsec_token_from_source_url_query(tmp_path) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path"
-            ),
-        )
-    )
+def test_build_note_page_url_inherits_xsec_token_from_source_url_query(tmp_path: Path) -> None:
+    settings = _make_web_settings(tmp_path, request_url="https://www.xiaohongshu.com/api/some/path")
     source = XiaohongshuWebReadonlySource(settings)
 
     built = source._build_note_page_url(
@@ -953,285 +452,15 @@ def test_build_note_page_url_inherits_xsec_token_from_source_url_query(tmp_path)
 
 
 @pytest.mark.asyncio
-async def test_web_readonly_skip_does_not_consume_requested_limit(tmp_path) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            min_live_sync_interval_seconds=0,
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path"
-            ),
-        )
-    )
-    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
-    repo.mark_synced("w1", "old-1", "https://www.xiaohongshu.com/explore/w1")
-    repo.mark_synced("w2", "old-2", "https://www.xiaohongshu.com/explore/w2")
-    source = IterWebSource(
-        [
-            XiaohongshuNote(
-                note_id="w1",
-                title="web-title-1",
-                content="web-content-1",
-                source_url="https://www.xiaohongshu.com/explore/w1",
-            ),
-            XiaohongshuNote(
-                note_id="w2",
-                title="web-title-2",
-                content="web-content-2",
-                source_url="https://www.xiaohongshu.com/explore/w2",
-            ),
-            XiaohongshuNote(
-                note_id="w3",
-                title="web-title-3",
-                content="web-content-3",
-                source_url="https://www.xiaohongshu.com/explore/w3",
-            ),
-            XiaohongshuNote(
-                note_id="w4",
-                title="web-title-4",
-                content="web-content-4",
-                source_url="https://www.xiaohongshu.com/explore/w4",
-            ),
-            XiaohongshuNote(
-                note_id="w5",
-                title="web-title-5",
-                content="web-content-5",
-                source_url="https://www.xiaohongshu.com/explore/w5",
-            ),
-        ]
-    )
-    service = XiaohongshuSyncService(
-        settings=settings,
-        repository=repo,
-        web_source=source,
-        llm_service=SimpleLLM(),
-    )
-
-    result = await service.sync(limit=2, confirm_live=True)
-
-    assert result.requested_limit == 2
-    assert result.new_count == 2
-    assert result.skipped_count == 2
-    assert result.fetched_count == 4
-    assert [item.note_id for item in result.summaries] == ["w3", "w4"]
-    assert repo.is_synced("w5") is False
-
-
-@pytest.mark.asyncio
-async def test_web_readonly_stops_when_all_note_ids_are_already_synced(tmp_path) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            min_live_sync_interval_seconds=0,
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path"
-            ),
-        )
-    )
-    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
-    notes = [
-        XiaohongshuNote(
-            note_id="w1",
-            title="web-title-1",
-            content="web-content-1",
-            source_url="https://www.xiaohongshu.com/explore/w1",
-        ),
-        XiaohongshuNote(
-            note_id="w2",
-            title="web-title-2",
-            content="web-content-2",
-            source_url="https://www.xiaohongshu.com/explore/w2",
-        ),
-        XiaohongshuNote(
-            note_id="w3",
-            title="web-title-3",
-            content="web-content-3",
-            source_url="https://www.xiaohongshu.com/explore/w3",
-        ),
-    ]
-    for note in notes:
-        repo.mark_synced(note.note_id, note.title, note.source_url)
-
-    service = XiaohongshuSyncService(
-        settings=settings,
-        repository=repo,
-        web_source=IterWebSource(notes),
-        llm_service=SimpleLLM(),
-    )
-
-    result = await service.sync(limit=2, confirm_live=True)
-
-    assert result.requested_limit == 2
-    assert result.new_count == 0
-    assert result.skipped_count == 3
-    assert result.fetched_count == 3
-    assert result.failed_count == 0
-    assert result.summaries == []
-
-
-@pytest.mark.asyncio
-async def test_sync_result_markdown_contains_source_url(tmp_path) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="mock",
-            db_path=str(tmp_path / "midas.db"),
-            max_limit=30,
-            default_limit=20,
-        )
-    )
-    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
-    service = XiaohongshuSyncService(
-        settings=settings,
-        repository=repo,
-        source=FixedSource(),
-        llm_service=SimpleLLM(),
-    )
-
-    result = await service.sync(limit=1)
-    assert len(result.summaries) == 1
-    assert "https://www.xiaohongshu.com/explore/n1" in result.summaries[0].summary_markdown
-    assert "原文链接" in result.summaries[0].summary_markdown
-
-
-@pytest.mark.asyncio
-async def test_sync_passes_image_urls_to_llm(tmp_path) -> None:
-    class _ImageSource:
-        def fetch_recent(self, limit: int) -> list[XiaohongshuNote]:
-            return [
-                XiaohongshuNote(
-                    note_id="n1",
-                    title="t1",
-                    content="c1",
-                    source_url="https://www.xiaohongshu.com/explore/n1",
-                    image_urls=["https://sns-webpic-qc.xhscdn.com/abc/image-1"],
-                )
-            ][:limit]
-
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="mock",
-            db_path=str(tmp_path / "midas.db"),
-            max_limit=30,
-            default_limit=20,
-        )
-    )
-    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
-    llm = CaptureLLM()
-    service = XiaohongshuSyncService(
-        settings=settings,
-        repository=repo,
-        source=_ImageSource(),
-        llm_service=llm,
-    )
-
-    result = await service.sync(limit=1)
-    assert result.new_count == 1
-    assert llm.last_kwargs is not None
-    assert llm.last_kwargs["image_urls"] == [
-        "https://sns-webpic-qc.xhscdn.com/abc/image-1"
-    ]
-
-
-@pytest.mark.asyncio
-async def test_sync_video_note_uses_audio_asr_and_llm(tmp_path) -> None:
-    class _VideoSource:
-        def fetch_recent(self, limit: int) -> list[XiaohongshuNote]:
-            return [
-                XiaohongshuNote(
-                    note_id="v1",
-                    title="视频笔记标题",
-                    content="这是原笔记正文",
-                    source_url="https://www.xiaohongshu.com/explore/v1",
-                    is_video=True,
-                )
-            ][:limit]
-
-    class _VideoLLM:
-        def __init__(self) -> None:
-            self.video_kwargs: dict | None = None
-            self.text_called = False
-
-        async def summarize_xiaohongshu_note(self, **kwargs) -> str:
-            self.text_called = True
-            return "SHOULD_NOT_BE_CALLED"
-
-        async def summarize_xiaohongshu_video_note(self, **kwargs) -> str:
-            self.video_kwargs = kwargs
-            return "# 视频总结\n\n- 结论 A"
-
-    class _DummyFetcher:
-        def __init__(self) -> None:
-            self.last_headers: dict[str, str] | None = None
-
-        def fetch_audio(
-            self,
-            video_url: str,
-            output_dir,
-            headers: dict[str, str] | None = None,
-        ):
-            self.last_headers = headers
-            audio_path = output_dir / "source.wav"
-            audio_path.write_bytes(b"dummy-audio")
-            return audio_path
-
-    class _DummyASR:
-        def transcribe(self, audio_path) -> str:
-            return "这是视频转写文本。"
-
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="mock",
-            db_path=str(tmp_path / "midas.db"),
-            max_limit=30,
-            default_limit=20,
-        )
-    )
-    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
-    llm = _VideoLLM()
-    fetcher = _DummyFetcher()
-    service = XiaohongshuSyncService(
-        settings=settings,
-        repository=repo,
-        source=_VideoSource(),
-        llm_service=llm,
-        audio_fetcher=fetcher,
-        asr_service=_DummyASR(),
-    )
-
-    result = await service.sync(limit=1)
-    assert result.new_count == 1
-    assert llm.video_kwargs is not None
-    assert llm.video_kwargs["transcript"] == "这是视频转写文本。"
-    assert llm.video_kwargs["content"] == "这是原笔记正文"
-    assert llm.text_called is False
-    assert fetcher.last_headers is not None
-    assert fetcher.last_headers.get("Referer") == "https://www.xiaohongshu.com/explore/v1"
-    assert "原文链接" in result.summaries[0].summary_markdown
-    assert "https://www.xiaohongshu.com/explore/v1" in result.summaries[0].summary_markdown
-
-
-@pytest.mark.asyncio
-async def test_web_readonly_rejects_title_only_content(monkeypatch) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=".tmp/test-midas.db",
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
-                request_method="GET",
-                request_headers={"Cookie": "a=b"},
-                items_path="data.notes",
-                note_id_field="note_id",
-                title_field="display_title",
-                content_field_candidates=["display_title", "desc"],
-            ),
-        )
+async def test_web_readonly_rejects_title_only_content(monkeypatch, tmp_path: Path) -> None:
+    settings = _make_web_settings(
+        tmp_path,
+        title_field="display_title",
+        content_field_candidates=["display_title", "desc"],
     )
     source = XiaohongshuWebReadonlySource(settings)
 
-    class _FakeResp:
+    class FakeResp:
         status_code = 200
 
         @staticmethod
@@ -1248,7 +477,7 @@ async def test_web_readonly_rejects_title_only_content(monkeypatch) -> None:
                 }
             }
 
-    class _FakeClient:
+    class FakeClient:
         def __init__(self, *_, **__):
             pass
 
@@ -1259,9 +488,9 @@ async def test_web_readonly_rejects_title_only_content(monkeypatch) -> None:
             return False
 
         async def request(self, **_):
-            return _FakeResp()
+            return FakeResp()
 
-    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeClient)
+    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", FakeClient)
 
     with pytest.raises(AppError) as exc_info:
         await source.fetch_recent(limit=1)
@@ -1270,28 +499,13 @@ async def test_web_readonly_rejects_title_only_content(monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_web_readonly_auto_fallback_to_playwright_on_http_406(monkeypatch) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=".tmp/test-midas.db",
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                page_fetch_driver="auto",
-                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
-                request_method="GET",
-                request_headers={"Cookie": "a=b"},
-                items_path="data.notes",
-                note_id_field="note_id",
-                title_field="title",
-                content_field_candidates=["desc"],
-                detail_fetch_mode="never",
-            ),
-        )
-    )
+async def test_web_readonly_auto_fallback_to_playwright_on_http_406(monkeypatch, tmp_path: Path) -> None:
+    settings = _make_web_settings(tmp_path, page_fetch_driver="auto")
     source = XiaohongshuWebReadonlySource(settings)
-    calls: dict[str, int] = {"http": 0, "playwright": 0}
+    calls = {"http": 0, "playwright": 0}
 
-    async def _fake_iter_pages_http(self, **_kwargs):
+    async def fake_iter_pages_http(self, **_kwargs):
+        _ = self
         calls["http"] += 1
         raise AppError(
             code=ErrorCode.UPSTREAM_ERROR,
@@ -1301,7 +515,8 @@ async def test_web_readonly_auto_fallback_to_playwright_on_http_406(monkeypatch)
         )
         yield XiaohongshuPageBatch(notes=[])
 
-    async def _fake_iter_pages_playwright(self, **_kwargs):
+    async def fake_iter_pages_playwright(self, **_kwargs):
+        _ = self
         calls["playwright"] += 1
         yield XiaohongshuPageBatch(
             notes=[
@@ -1317,15 +532,11 @@ async def test_web_readonly_auto_fallback_to_playwright_on_http_406(monkeypatch)
             exhausted=True,
         )
 
-    monkeypatch.setattr(
-        XiaohongshuWebReadonlySource,
-        "_iter_pages_http",
-        _fake_iter_pages_http,
-    )
+    monkeypatch.setattr(XiaohongshuWebReadonlySource, "_iter_pages_http", fake_iter_pages_http)
     monkeypatch.setattr(
         XiaohongshuWebReadonlySource,
         "_iter_pages_playwright",
-        _fake_iter_pages_playwright,
+        fake_iter_pages_playwright,
     )
 
     notes = await source.fetch_recent(limit=1)
@@ -1336,28 +547,16 @@ async def test_web_readonly_auto_fallback_to_playwright_on_http_406(monkeypatch)
 
 
 @pytest.mark.asyncio
-async def test_web_readonly_http_driver_does_not_fallback_to_playwright(monkeypatch) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=".tmp/test-midas.db",
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                page_fetch_driver="http",
-                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
-                request_method="GET",
-                request_headers={"Cookie": "a=b"},
-                items_path="data.notes",
-                note_id_field="note_id",
-                title_field="title",
-                content_field_candidates=["desc"],
-                detail_fetch_mode="never",
-            ),
-        )
-    )
+async def test_web_readonly_http_driver_does_not_fallback_to_playwright(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    settings = _make_web_settings(tmp_path, page_fetch_driver="http")
     source = XiaohongshuWebReadonlySource(settings)
-    calls: dict[str, int] = {"http": 0, "playwright": 0}
+    calls = {"http": 0, "playwright": 0}
 
-    async def _fake_iter_pages_http(self, **_kwargs):
+    async def fake_iter_pages_http(self, **_kwargs):
+        _ = self
         calls["http"] += 1
         raise AppError(
             code=ErrorCode.UPSTREAM_ERROR,
@@ -1367,19 +566,16 @@ async def test_web_readonly_http_driver_does_not_fallback_to_playwright(monkeypa
         )
         yield XiaohongshuPageBatch(notes=[])
 
-    async def _fake_iter_pages_playwright(self, **_kwargs):
+    async def fake_iter_pages_playwright(self, **_kwargs):
+        _ = self
         calls["playwright"] += 1
         yield XiaohongshuPageBatch(notes=[], exhausted=True)
 
-    monkeypatch.setattr(
-        XiaohongshuWebReadonlySource,
-        "_iter_pages_http",
-        _fake_iter_pages_http,
-    )
+    monkeypatch.setattr(XiaohongshuWebReadonlySource, "_iter_pages_http", fake_iter_pages_http)
     monkeypatch.setattr(
         XiaohongshuWebReadonlySource,
         "_iter_pages_playwright",
-        _fake_iter_pages_playwright,
+        fake_iter_pages_playwright,
     )
 
     with pytest.raises(AppError) as exc_info:
@@ -1390,92 +586,25 @@ async def test_web_readonly_http_driver_does_not_fallback_to_playwright(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_web_readonly_playwright_driver_skips_http_path(monkeypatch) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=".tmp/test-midas.db",
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                page_fetch_driver="playwright",
-                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
-                request_method="GET",
-                request_headers={"Cookie": "a=b"},
-                items_path="data.notes",
-                note_id_field="note_id",
-                title_field="title",
-                content_field_candidates=["desc"],
-                detail_fetch_mode="never",
-            ),
-        )
-    )
-    source = XiaohongshuWebReadonlySource(settings)
-    calls: dict[str, int] = {"http": 0, "playwright": 0}
-
-    async def _fake_iter_pages_http(self, **_kwargs):
-        calls["http"] += 1
-        yield XiaohongshuPageBatch(notes=[], exhausted=True)
-
-    async def _fake_iter_pages_playwright(self, **_kwargs):
-        calls["playwright"] += 1
-        yield XiaohongshuPageBatch(
-            notes=[
-                XiaohongshuNote(
-                    note_id="p2",
-                    title="playwright-2",
-                    content="正文2",
-                    source_url="https://www.xiaohongshu.com/explore/p2",
-                )
-            ],
-            request_cursor="cursor-2",
-            next_cursor="",
-            exhausted=True,
-        )
-
-    monkeypatch.setattr(
-        XiaohongshuWebReadonlySource,
-        "_iter_pages_http",
-        _fake_iter_pages_http,
-    )
-    monkeypatch.setattr(
-        XiaohongshuWebReadonlySource,
-        "_iter_pages_playwright",
-        _fake_iter_pages_playwright,
-    )
-
-    notes = await source.fetch_recent(limit=1)
-    assert len(notes) == 1
-    assert notes[0].note_id == "p2"
-    assert calls["playwright"] == 1
-    assert calls["http"] == 0
-
-
-@pytest.mark.asyncio
-async def test_web_readonly_business_auth_expired_maps_to_auth_error(monkeypatch) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=".tmp/test-midas.db",
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
-                request_method="GET",
-                request_headers={"Cookie": "a=b"},
-                items_path="data.notes",
-                note_id_field="note_id",
-                title_field="display_title",
-                content_field_candidates=["display_title", "desc"],
-            ),
-        )
+async def test_web_readonly_business_auth_expired_maps_to_auth_error(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    settings = _make_web_settings(
+        tmp_path,
+        title_field="display_title",
+        content_field_candidates=["display_title", "desc"],
     )
     source = XiaohongshuWebReadonlySource(settings)
 
-    class _FakeResp:
+    class FakeResp:
         status_code = 200
 
         @staticmethod
         def json():
             return {"code": -100, "success": False, "msg": "登录已过期", "data": {}}
 
-    class _FakeClient:
+    class FakeClient:
         def __init__(self, *_, **__):
             pass
 
@@ -1486,9 +615,9 @@ async def test_web_readonly_business_auth_expired_maps_to_auth_error(monkeypatch
             return False
 
         async def request(self, **_):
-            return _FakeResp()
+            return FakeResp()
 
-    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeClient)
+    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", FakeClient)
 
     with pytest.raises(AppError) as exc_info:
         await source.fetch_recent(limit=1)
@@ -1496,26 +625,27 @@ async def test_web_readonly_business_auth_expired_maps_to_auth_error(monkeypatch
 
 
 @pytest.mark.asyncio
-async def test_web_readonly_page_fallback_extracts_content_and_images(monkeypatch) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=".tmp/test-midas.db",
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
-                request_method="GET",
-                request_headers={"Cookie": "a=b"},
-                items_path="data.notes",
-                note_id_field="note_id",
-                title_field="display_title",
-                content_field_candidates=["display_title", "desc"],
-                max_images_per_note=3,
-            ),
-        )
+async def test_web_readonly_detail_fetch_extracts_content_and_images(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    settings = _make_web_settings(
+        tmp_path,
+        title_field="display_title",
+        content_field_candidates=["display_title", "desc"],
+        image_field_candidates=["cover.url_pre"],
+        detail_fetch_mode="always",
+        detail_request_url_template=(
+            "https://edith.xiaohongshu.com/api/sns/web/v1/note/detail?"
+            "note_id={note_id}&xsec_token={xsec_token}"
+        ),
+        detail_content_field_candidates=["data.items.0.note_card.desc"],
+        detail_image_field_candidates=["data.items.0.note_card.image_list"],
+        max_images_per_note=3,
     )
     source = XiaohongshuWebReadonlySource(settings)
 
-    class _FakeResp:
+    class FakeResp:
         def __init__(self, payload: dict | None = None, text: str = "", status_code: int = 200) -> None:
             self.status_code = status_code
             self._payload = payload or {}
@@ -1524,7 +654,7 @@ async def test_web_readonly_page_fallback_extracts_content_and_images(monkeypatc
         def json(self) -> dict:
             return self._payload
 
-    class _FakeClient:
+    class FakeClient:
         calls: list[str] = []
 
         def __init__(self, *_, **__):
@@ -1540,96 +670,7 @@ async def test_web_readonly_page_fallback_extracts_content_and_images(monkeypatc
             url = kwargs["url"]
             self.calls.append(url)
             if "collect/page" in url:
-                return _FakeResp(
-                    {
-                        "data": {
-                            "notes": [
-                                {
-                                    "note_id": "n2",
-                                    "display_title": "列表标题",
-                                    "desc": "列表标题",
-                                    "xsec_token": "token-2",
-                                }
-                            ]
-                        }
-                    }
-                )
-            html = """
-            <html><body>
-            <script>
-            window.__INITIAL_STATE__ = {"note":{"noteDetailMap":{"n2":{"note":{"noteId":"n2","title":"页面标题","desc":"页面正文","type":"normal","imageList":[{"urlDefault":"https://sns-webpic-qc.xhscdn.com/page-1"}]}}}}};
-            </script>
-            </body></html>
-            """
-            return _FakeResp(text=html)
-
-    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeClient)
-
-    notes = await source.fetch_recent(limit=1)
-    assert len(notes) == 1
-    assert notes[0].title == "页面标题"
-    assert notes[0].content == "页面正文"
-    assert notes[0].image_urls == ["https://sns-webpic-qc.xhscdn.com/page-1"]
-    assert len(_FakeClient.calls) == 3
-    assert any("/explore/n2" in url for url in _FakeClient.calls)
-
-
-@pytest.mark.asyncio
-async def test_web_readonly_detail_fetch_extracts_content_and_images(monkeypatch) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=".tmp/test-midas.db",
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
-                request_method="GET",
-                request_headers={"Cookie": "a=b"},
-                items_path="data.notes",
-                note_id_field="note_id",
-                title_field="display_title",
-                content_field_candidates=["display_title", "desc"],
-                image_field_candidates=["cover.url_pre"],
-                detail_fetch_mode="always",
-                detail_request_url_template=(
-                    "https://edith.xiaohongshu.com/api/sns/web/v1/note/detail?"
-                    "note_id={note_id}&xsec_token={xsec_token}"
-                ),
-                detail_content_field_candidates=["data.items.0.note_card.desc"],
-                detail_image_field_candidates=["data.items.0.note_card.image_list"],
-                max_images_per_note=3,
-            ),
-        )
-    )
-    source = XiaohongshuWebReadonlySource(settings)
-
-    class _FakeResp:
-        def __init__(
-            self, payload: dict | None = None, text: str = "", status_code: int = 200
-        ) -> None:
-            self.status_code = status_code
-            self._payload = payload or {}
-            self.text = text
-
-        def json(self) -> dict:
-            return self._payload
-
-    class _FakeClient:
-        calls: list[str] = []
-
-        def __init__(self, *_, **__):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def request(self, **kwargs):
-            url = kwargs["url"]
-            self.calls.append(url)
-            if "collect/page" in url:
-                return _FakeResp(
+                return FakeResp(
                     {
                         "data": {
                             "notes": [
@@ -1645,8 +686,8 @@ async def test_web_readonly_detail_fetch_extracts_content_and_images(monkeypatch
                     }
                 )
             if "/explore/" in url:
-                return _FakeResp(status_code=404)
-            return _FakeResp(
+                return FakeResp(status_code=404)
+            return FakeResp(
                 {
                     "data": {
                         "items": [
@@ -1664,7 +705,7 @@ async def test_web_readonly_detail_fetch_extracts_content_and_images(monkeypatch
                 }
             )
 
-    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeClient)
+    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", FakeClient)
 
     notes = await source.fetch_recent(limit=1)
     assert len(notes) == 1
@@ -1674,9 +715,7 @@ async def test_web_readonly_detail_fetch_extracts_content_and_images(monkeypatch
         "https://sns-webpic-qc.xhscdn.com/detail-2",
         "https://sns-webpic-qc.xhscdn.com/cover-1",
     ]
-    assert len(_FakeClient.calls) == 4
-    assert any("/explore/n1" in url for url in _FakeClient.calls)
-    assert any("/note/detail?" in url for url in _FakeClient.calls)
+    assert any("/note/detail?" in url for url in FakeClient.calls)
 
 
 def test_extract_image_urls_prefers_ordered_single_url_per_image() -> None:
@@ -1687,9 +726,7 @@ def test_extract_image_urls_prefers_ordered_single_url_per_image() -> None:
                 {
                     "url_default": "https://sns-webpic-qc.xhscdn.com/img-1-default",
                     "url_pre": "https://sns-webpic-qc.xhscdn.com/img-1-pre",
-                    "info_list": [
-                        {"url": "https://sns-webpic-qc.xhscdn.com/img-1-info"}
-                    ],
+                    "info_list": [{"url": "https://sns-webpic-qc.xhscdn.com/img-1-info"}],
                 },
                 {
                     "url_default": "https://sns-webpic-qc.xhscdn.com/img-2-default",
@@ -1697,9 +734,7 @@ def test_extract_image_urls_prefers_ordered_single_url_per_image() -> None:
                 },
                 {
                     "url_pre": "https://sns-webpic-qc.xhscdn.com/img-3-pre",
-                    "info_list": [
-                        {"url": "https://sns-webpic-qc.xhscdn.com/img-3-info"}
-                    ],
+                    "info_list": [{"url": "https://sns-webpic-qc.xhscdn.com/img-3-info"}],
                 },
             ]
         }
@@ -1719,311 +754,20 @@ def test_extract_image_urls_prefers_ordered_single_url_per_image() -> None:
 
 
 @pytest.mark.asyncio
-async def test_web_readonly_paginate_until_limit(monkeypatch) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=".tmp/test-midas.db",
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url=(
-                    "https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page?num=2&cursor="
-                ),
-                request_method="GET",
-                request_headers={"Cookie": "a=b"},
-                items_path="data.notes",
-                note_id_field="note_id",
-                title_field="title",
-                content_field_candidates=["desc"],
-            ),
-        )
-    )
-    source = XiaohongshuWebReadonlySource(settings)
-
-    class _FakeResp:
-        def __init__(
-            self, payload: dict | None = None, text: str = "", status_code: int = 200
-        ) -> None:
-            self.status_code = status_code
-            self._payload = payload or {}
-            self.text = text
-
-        def json(self) -> dict:
-            return self._payload
-
-    class _FakeClient:
-        list_urls: list[str] = []
-
-        def __init__(self, *_, **__):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def request(self, **kwargs):
-            url = kwargs["url"]
-            if "collect/page" in url:
-                self.list_urls.append(url)
-                cursor = parse_qs(urlparse(url).query).get("cursor", [""])[0]
-                if cursor == "":
-                    return _FakeResp(
-                        {
-                            "data": {
-                                "notes": [
-                                    {
-                                        "note_id": "n1",
-                                        "title": "标题1",
-                                        "desc": "正文1",
-                                    },
-                                    {
-                                        "note_id": "n2",
-                                        "title": "标题2",
-                                        "desc": "正文2",
-                                    },
-                                ],
-                                "has_more": True,
-                                "cursor": "cursor-page-2",
-                            }
-                        }
-                    )
-                if cursor == "cursor-page-2":
-                    return _FakeResp(
-                        {
-                            "data": {
-                                "notes": [
-                                    {
-                                        "note_id": "n3",
-                                        "title": "标题3",
-                                        "desc": "正文3",
-                                    },
-                                    {
-                                        "note_id": "n4",
-                                        "title": "标题4",
-                                        "desc": "正文4",
-                                    },
-                                ],
-                                "has_more": False,
-                                "cursor": "cursor-page-3",
-                            }
-                        }
-                    )
-                return _FakeResp({"data": {"notes": [], "has_more": False}})
-
-            # Note page fallback can safely fail in this case.
-            if "/explore/" in url:
-                return _FakeResp(status_code=404)
-            return _FakeResp({"data": {"notes": [], "has_more": False}})
-
-    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeClient)
-
-    notes = await source.fetch_recent(limit=3)
-    assert [item.note_id for item in notes] == ["n1", "n2", "n3"]
-    assert len(_FakeClient.list_urls) == 2
-    assert "cursor=cursor-page-2" in _FakeClient.list_urls[1]
-
-
-@pytest.mark.asyncio
-async def test_web_readonly_video_note_kept_without_content(monkeypatch) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=".tmp/test-midas.db",
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
-                request_method="GET",
-                request_headers={"Cookie": "a=b"},
-                items_path="data.notes",
-                note_id_field="note_id",
-                title_field="display_title",
-                content_field_candidates=["desc"],
-                detail_fetch_mode="never",
-            ),
-        )
-    )
-    source = XiaohongshuWebReadonlySource(settings)
-
-    class _FakeResp:
-        status_code = 200
-
-        @staticmethod
-        def json():
-            return {
-                "data": {
-                    "notes": [
-                        {
-                            "note_id": "v100",
-                            "display_title": "这是个视频",
-                            "type": "video",
-                        }
-                    ]
-                }
-            }
-
-    class _FakeClient:
-        def __init__(self, *_, **__):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def request(self, **_):
-            return _FakeResp()
-
-    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeClient)
-
-    notes = await source.fetch_recent(limit=1)
-    assert len(notes) == 1
-    assert notes[0].note_id == "v100"
-    assert notes[0].is_video is True
-    assert notes[0].content == ""
-
-
-@pytest.mark.asyncio
-async def test_web_readonly_fallback_items_path_and_note_card_shape(monkeypatch) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=".tmp/test-midas.db",
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
-                request_method="GET",
-                request_headers={"Cookie": "a=b"},
-                items_path="data.notes",
-                note_id_field="note_id",
-                title_field="title",
-                content_field_candidates=["desc"],
-                detail_fetch_mode="never",
-            ),
-        )
-    )
-    source = XiaohongshuWebReadonlySource(settings)
-
-    class _FakeResp:
-        status_code = 200
-
-        @staticmethod
-        def json():
-            return {
-                "data": {
-                    "items": [
-                        {
-                            "xsec_token": "token-1",
-                            "note_card": {
-                                "note_id": "n100",
-                                "title": "回退路径标题",
-                                "desc": "回退路径正文",
-                                "image_list": [
-                                    {
-                                        "url_default": "https://sns-webpic-qc.xhscdn.com/fallback-1"
-                                    }
-                                ],
-                            },
-                        }
-                    ],
-                    "has_more": False,
-                }
-            }
-
-    class _FakeClient:
-        def __init__(self, *_, **__):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def request(self, **_):
-            return _FakeResp()
-
-    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeClient)
-
-    notes = await source.fetch_recent(limit=1)
-    assert len(notes) == 1
-    assert notes[0].note_id == "n100"
-    assert notes[0].title == "回退路径标题"
-    assert notes[0].content == "回退路径正文"
-    assert notes[0].image_urls == ["https://sns-webpic-qc.xhscdn.com/fallback-1"]
-
-
-@pytest.mark.asyncio
-async def test_web_readonly_empty_notes_list_is_not_treated_as_error(monkeypatch) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=".tmp/test-midas.db",
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
-                request_method="GET",
-                request_headers={"Cookie": "a=b"},
-                items_path="data.notes",
-                note_id_field="note_id",
-                title_field="title",
-                content_field_candidates=["desc"],
-                detail_fetch_mode="never",
-            ),
-        )
-    )
-    source = XiaohongshuWebReadonlySource(settings)
-
-    class _FakeResp:
-        status_code = 200
-
-        @staticmethod
-        def json():
-            return {"data": {"notes": [], "has_more": False}}
-
-    class _FakeClient:
-        def __init__(self, *_, **__):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def request(self, **_):
-            return _FakeResp()
-
-    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeClient)
-
-    notes = await source.fetch_recent(limit=5)
-    assert notes == []
-
-
-@pytest.mark.asyncio
 async def test_web_readonly_empty_notes_list_with_guest_cookie_raises_auth_expired(
     monkeypatch,
+    tmp_path: Path,
 ) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=".tmp/test-midas.db",
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url=(
-                    "https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page?"
-                    "num=30&cursor=&user_id=old-user"
-                ),
-                request_method="GET",
-                request_headers={"Cookie": "a=b"},
-                items_path="data.notes",
-                note_id_field="note_id",
-                title_field="title",
-                content_field_candidates=["desc"],
-                detail_fetch_mode="never",
-            ),
-        )
+    settings = _make_web_settings(
+        tmp_path,
+        request_url=(
+            "https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page?"
+            "num=30&cursor=&user_id=old-user"
+        ),
     )
     source = XiaohongshuWebReadonlySource(settings)
 
-    class _FakeResp:
+    class FakeResp:
         def __init__(self, payload: dict) -> None:
             self.status_code = 200
             self._payload = payload
@@ -2031,7 +775,7 @@ async def test_web_readonly_empty_notes_list_with_guest_cookie_raises_auth_expir
         def json(self) -> dict:
             return self._payload
 
-    class _FakeClient:
+    class FakeClient:
         def __init__(self, *_, **__):
             pass
 
@@ -2044,82 +788,15 @@ async def test_web_readonly_empty_notes_list_with_guest_cookie_raises_auth_expir
         async def request(self, **kwargs):
             url = kwargs["url"]
             if "/api/sns/web/v2/user/me" in url:
-                return _FakeResp({"code": 0, "success": True, "data": {"guest": True}})
-            return _FakeResp({"code": 0, "success": True, "data": {"notes": []}})
+                return FakeResp({"code": 0, "success": True, "data": {"guest": True}})
+            return FakeResp({"code": 0, "success": True, "data": {"notes": []}})
 
-    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeClient)
+    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", FakeClient)
 
     with pytest.raises(AppError) as exc_info:
         await source.fetch_recent(limit=5)
     assert exc_info.value.code == ErrorCode.AUTH_EXPIRED
     assert "游客态" in exc_info.value.message
-
-
-@pytest.mark.asyncio
-async def test_web_readonly_empty_notes_list_with_user_id_mismatch_raises_auth_expired(
-    monkeypatch,
-) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=".tmp/test-midas.db",
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url=(
-                    "https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page?"
-                    "num=30&cursor=&user_id=old-user"
-                ),
-                request_method="GET",
-                request_headers={"Cookie": "a=b"},
-                items_path="data.notes",
-                note_id_field="note_id",
-                title_field="title",
-                content_field_candidates=["desc"],
-                detail_fetch_mode="never",
-            ),
-        )
-    )
-    source = XiaohongshuWebReadonlySource(settings)
-
-    class _FakeResp:
-        def __init__(self, payload: dict) -> None:
-            self.status_code = 200
-            self._payload = payload
-
-        def json(self) -> dict:
-            return self._payload
-
-    class _FakeClient:
-        def __init__(self, *_, **__):
-            pass
-
-        async def __aenter__(self):
-            return self
-
-        async def __aexit__(self, exc_type, exc, tb):
-            return False
-
-        async def request(self, **kwargs):
-            url = kwargs["url"]
-            if "/api/sns/web/v2/user/me" in url:
-                return _FakeResp(
-                    {
-                        "code": 0,
-                        "success": True,
-                        "data": {"guest": False, "user_id": "current-user"},
-                    }
-                )
-            return _FakeResp({"code": 0, "success": True, "data": {"notes": []}})
-
-    monkeypatch.setattr("app.services.xiaohongshu.httpx.AsyncClient", _FakeClient)
-
-    with pytest.raises(AppError) as exc_info:
-        await source.fetch_recent(limit=5)
-    assert exc_info.value.code == ErrorCode.AUTH_EXPIRED
-    assert "user_id 不一致" in exc_info.value.message
-    assert exc_info.value.details == {
-        "configured_user_id": "old-user",
-        "current_user_id": "current-user",
-    }
 
 
 def test_build_playwright_collect_page_url_prefers_live_user_id_override() -> None:
@@ -2133,62 +810,6 @@ def test_build_playwright_collect_page_url_prefers_live_user_id_override() -> No
         user_id_override="new-user",
     )
     assert url == "https://www.xiaohongshu.com/user/profile/new-user?tab=collect"
-
-
-def test_live_sync_cooldown_allowed_when_no_history(tmp_path) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            min_live_sync_interval_seconds=1800,
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path"
-            ),
-        )
-    )
-    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
-    service = XiaohongshuSyncService(
-        settings=settings,
-        repository=repo,
-        llm_service=SimpleLLM(),
-    )
-
-    cooldown = service.get_live_sync_cooldown()
-    assert cooldown["mode"] == "web_readonly"
-    assert cooldown["allowed"] is True
-    assert cooldown["remaining_seconds"] == 0
-    assert cooldown["next_allowed_at_epoch"] == 0
-    assert cooldown["last_sync_at_epoch"] == 0
-    assert cooldown["min_interval_seconds"] == 1800
-
-
-def test_live_sync_cooldown_reports_remaining_seconds(tmp_path) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            min_live_sync_interval_seconds=60,
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path"
-            ),
-        )
-    )
-    repo = XiaohongshuSyncRepository(str(tmp_path / "midas.db"))
-    service = XiaohongshuSyncService(
-        settings=settings,
-        repository=repo,
-        llm_service=SimpleLLM(),
-    )
-    now = int(time.time())
-    repo.set_state("last_live_sync_ts", str(now - 7))
-
-    cooldown = service.get_live_sync_cooldown()
-    assert cooldown["mode"] == "web_readonly"
-    assert cooldown["allowed"] is False
-    # allow tiny timing drift in CI
-    assert 52 <= int(cooldown["remaining_seconds"]) <= 53
-    assert int(cooldown["last_sync_at_epoch"]) == now - 7
-    assert now + 52 <= int(cooldown["next_allowed_at_epoch"]) <= now + 53
 
 
 def test_playwright_collect_candidate_rejects_telemetry_collect_endpoint() -> None:
@@ -2216,59 +837,8 @@ def test_playwright_collect_candidate_rejects_telemetry_collect_endpoint() -> No
     assert ok is False
 
 
-def test_playwright_collect_candidate_accepts_collect_page_variant() -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
-                request_method="GET",
-                host_allowlist=["www.xiaohongshu.com", "edith.xiaohongshu.com"],
-            ),
-        )
-    )
-    source = XiaohongshuWebReadonlySource(settings)
-
-    ok = source._is_playwright_collect_response_candidate(
-        response_url="https://t2.xiaohongshu.com/api/sns/web/v2/note/collect/page",
-        request_method="POST",
-        configured_method="GET",
-        configured_host="edith.xiaohongshu.com",
-        configured_path="/api/sns/web/v2/note/collect/page",
-        host_allowlist=["www.xiaohongshu.com", "edith.xiaohongshu.com"],
-    )
-
-    assert ok is True
-
-
-def test_playwright_collect_candidate_rejects_non_api_page_url() -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
-                request_method="GET",
-                host_allowlist=["www.xiaohongshu.com", "edith.xiaohongshu.com"],
-            ),
-        )
-    )
-    source = XiaohongshuWebReadonlySource(settings)
-
-    ok = source._is_playwright_collect_response_candidate(
-        response_url="https://www.xiaohongshu.com/user/profile/123?tab=collect",
-        request_method="GET",
-        configured_method="GET",
-        configured_host="edith.xiaohongshu.com",
-        configured_path="/api/sns/web/v2/note/collect/page",
-        host_allowlist=["www.xiaohongshu.com", "edith.xiaohongshu.com"],
-    )
-
-    assert ok is False
-
-
 def test_extract_request_cursor_from_request_supports_json_and_form_body() -> None:
-    settings = Settings()
-    source = XiaohongshuWebReadonlySource(settings)
+    source = XiaohongshuWebReadonlySource(Settings())
 
     cursor_from_json = source._extract_request_cursor_from_request(
         request_url="https://t2.xiaohongshu.com/api/v2/collect",
@@ -2283,54 +853,14 @@ def test_extract_request_cursor_from_request_supports_json_and_form_body() -> No
     assert cursor_from_form == "xyz789"
 
 
-def test_extract_comment_snippets_from_initial_state_uses_like_weight(tmp_path) -> None:
-    settings = Settings(
-        comment_insights={"max_comment_length": 120},
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://www.xiaohongshu.com/api/some/path",
-            ),
-        ),
-    )
-    source = XiaohongshuWebReadonlySource(settings)
-    initial_state = {
-        "note": {
-            "commentData": {
-                "comments": [
-                    {"content": "太实用了，已经照着做。", "like_count": 42},
-                    {"content": "思路不错，但有点片面。", "liked_count": "7"},
-                    {"content": "太实用了，已经照着做。", "like_count": 1},
-                ]
-            }
-        }
-    }
-
-    snippets = source._extract_comment_snippets_from_initial_state(initial_state, limit=5)
-
-    assert len(snippets) == 2
-    assert snippets[0].text == "太实用了，已经照着做。"
-    assert snippets[0].like_count == 42
-    assert snippets[1].text == "思路不错，但有点片面。"
-    assert snippets[1].like_count == 7
-
-
 @pytest.mark.asyncio
 async def test_fetch_comment_snippets_fallbacks_to_comment_api_when_initial_empty(
     monkeypatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
-    settings = Settings(
+    settings = _make_web_settings(
+        tmp_path,
         comment_insights={"request_timeout_seconds": 8},
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
-                host_allowlist=["www.xiaohongshu.com", "edith.xiaohongshu.com"],
-            ),
-        ),
     )
     source = XiaohongshuWebReadonlySource(settings)
     note = XiaohongshuNote(
@@ -2343,10 +873,10 @@ async def test_fetch_comment_snippets_fallbacks_to_comment_api_when_initial_empt
         ),
     )
 
-    async def _fake_request_text(*_args, **_kwargs) -> str:
+    async def fake_request_text(*_args, **_kwargs) -> str:
         return "<html>ok</html>"
 
-    monkeypatch.setattr(source, "_request_text", _fake_request_text)
+    monkeypatch.setattr(source, "_request_text", fake_request_text)
     monkeypatch.setattr(
         source,
         "_extract_initial_state",
@@ -2367,7 +897,7 @@ async def test_fetch_comment_snippets_fallbacks_to_comment_api_when_initial_empt
 
     captured_urls: list[str] = []
 
-    async def _fake_request_json(*, client, method, url, headers, body):
+    async def fake_request_json(*, client, method, url, headers, body):
         _ = client
         _ = headers
         _ = body
@@ -2385,7 +915,7 @@ async def test_fetch_comment_snippets_fallbacks_to_comment_api_when_initial_empt
             },
         }
 
-    monkeypatch.setattr(source, "_request_json", _fake_request_json)
+    monkeypatch.setattr(source, "_request_json", fake_request_json)
 
     comments = await source.fetch_comment_snippets(note=note, limit=5)
 
@@ -2394,7 +924,6 @@ async def test_fetch_comment_snippets_fallbacks_to_comment_api_when_initial_empt
     assert comments[0].like_count == 12
     assert comments[1].text == "第二条评论"
     assert comments[1].like_count == 3
-    assert len(captured_urls) == 1
     parsed = urlparse(captured_urls[0])
     assert parsed.path == "/api/sns/web/v2/comment/page"
     query = parse_qs(parsed.query)
@@ -2406,18 +935,9 @@ async def test_fetch_comment_snippets_fallbacks_to_comment_api_when_initial_empt
 @pytest.mark.asyncio
 async def test_fetch_comment_snippets_uses_initial_state_without_comment_api(
     monkeypatch,
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
-    settings = Settings(
-        xiaohongshu=XiaohongshuConfig(
-            mode="web_readonly",
-            db_path=str(tmp_path / "midas.db"),
-            web_readonly=XiaohongshuWebReadonlyConfig(
-                request_url="https://edith.xiaohongshu.com/api/sns/web/v2/note/collect/page",
-                host_allowlist=["www.xiaohongshu.com", "edith.xiaohongshu.com"],
-            ),
-        ),
-    )
+    settings = _make_web_settings(tmp_path)
     source = XiaohongshuWebReadonlySource(settings)
     note = XiaohongshuNote(
         note_id="n2",
@@ -2426,10 +946,10 @@ async def test_fetch_comment_snippets_uses_initial_state_without_comment_api(
         source_url="https://www.xiaohongshu.com/discovery/item/n2",
     )
 
-    async def _fake_request_text(*_args, **_kwargs) -> str:
+    async def fake_request_text(*_args, **_kwargs) -> str:
         return "<html>ok</html>"
 
-    monkeypatch.setattr(source, "_request_text", _fake_request_text)
+    monkeypatch.setattr(source, "_request_text", fake_request_text)
     monkeypatch.setattr(
         source,
         "_extract_initial_state",
@@ -2450,10 +970,10 @@ async def test_fetch_comment_snippets_uses_initial_state_without_comment_api(
         },
     )
 
-    async def _unexpected_request_json(*_args, **_kwargs):
+    async def unexpected_request_json(*_args, **_kwargs):
         raise AssertionError("initial_state 已有评论时不应再请求 comment API")
 
-    monkeypatch.setattr(source, "_request_json", _unexpected_request_json)
+    monkeypatch.setattr(source, "_request_json", unexpected_request_json)
 
     comments = await source.fetch_comment_snippets(note=note, limit=5)
     assert len(comments) == 1

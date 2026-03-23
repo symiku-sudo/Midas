@@ -32,7 +32,7 @@ def test_check_llm_enabled_without_key_fails() -> None:
     assert status_by_name["llm.api_base"] == "pass"
 
 
-def test_check_xiaohongshu_web_readonly_missing_url_fails() -> None:
+def test_check_xiaohongshu_web_readonly_missing_url_warns_for_single_url_mode() -> None:
     settings = Settings(
         xiaohongshu=XiaohongshuConfig(
             mode="web_readonly",
@@ -42,7 +42,8 @@ def test_check_xiaohongshu_web_readonly_missing_url_fails() -> None:
 
     results = check_xiaohongshu(settings)
     status_by_name = {item.name: item.status for item in results}
-    assert status_by_name["xiaohongshu.web_readonly.request_url"] == "fail"
+    assert status_by_name["xiaohongshu.web_readonly.request_url"] == "warn"
+    assert status_by_name["xiaohongshu.web_readonly.host_allowlist"] == "warn"
 
 
 def test_check_xiaohongshu_web_readonly_valid_config_passes() -> None:
@@ -164,7 +165,7 @@ def test_check_config_key_schema_warns_when_missing_config(
     assert results[0].status == "warn"
 
 
-def test_check_config_key_schema_fails_on_shape_diff(
+def test_check_config_key_schema_warns_on_missing_optional_keys(
     monkeypatch, tmp_path: Path
 ) -> None:
     example = {
@@ -187,5 +188,33 @@ def test_check_config_key_schema_fails_on_shape_diff(
 
     results = check_config_key_schema()
     assert len(results) == 1
-    assert results[0].status == "fail"
+    assert results[0].status == "warn"
     assert "llm.timeout_seconds" in results[0].message
+
+
+def test_check_config_key_schema_fails_on_extra_keys(
+    monkeypatch, tmp_path: Path
+) -> None:
+    example = {
+        "llm": {"enabled": True},
+    }
+    config = {
+        "llm": {"enabled": True},
+        "runtime": {"log_level": "INFO"},
+    }
+
+    (tmp_path / "config.example.yaml").write_text(
+        yaml.safe_dump(example, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+    (tmp_path / "config.yaml").write_text(
+        yaml.safe_dump(config, allow_unicode=True, sort_keys=False),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr("tools.selfcheck.SERVER_ROOT", tmp_path)
+
+    results = check_config_key_schema()
+    assert len(results) == 1
+    assert results[0].status == "fail"
+    assert "runtime" in results[0].message

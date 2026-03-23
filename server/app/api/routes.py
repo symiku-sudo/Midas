@@ -6,22 +6,28 @@ from functools import lru_cache
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, File, Request, UploadFile
+from fastapi import APIRouter, File, Query, Request, UploadFile
 
 from app.core.config import clear_settings_cache, get_settings
 from app.core.errors import AppError, ErrorCode
 from app.core.response import success_response
 from app.models.schemas import (
+    AsyncJobCreateData,
+    AsyncJobListData,
+    AsyncJobStatusData,
     AssetCurrentData,
     AssetCurrentUpdateRequest,
-    AssetSnapshotHistoryData,
-    AssetSnapshotSaveRequest,
-    AssetSnapshotRecord,
     AssetImageFillData,
+    AssetSnapshotHistoryData,
+    AssetSnapshotRecord,
+    AssetSnapshotSaveRequest,
     BilibiliNoteSaveRequest,
     BilibiliSummaryRequest,
     EditableConfigData,
     EditableConfigUpdateRequest,
+    FinanceFocusCardActionData,
+    FinanceFocusCardActionRequest,
+    FinanceFocusCardHistoryData,
     FinanceWatchlistNtfyData,
     FinanceWatchlistNtfyUpdateRequest,
     HealthData,
@@ -36,7 +42,11 @@ from app.models.schemas import (
     NotesMergeSuggestData,
     NotesMergeSuggestRequest,
     NotesDeleteData,
+    NotesReviewTopicsData,
+    NotesTimelineReviewData,
     NotesSaveBatchData,
+    RelatedNotesData,
+    UnifiedNotesData,
     XiaohongshuAuthUpdateData,
     XiaohongshuAuthUpdateRequest,
     XiaohongshuCaptureRefreshData,
@@ -45,12 +55,13 @@ from app.models.schemas import (
     XiaohongshuSyncedNotesPruneData,
 )
 from app.services.bilibili import BilibiliSummarizer
+from app.services.async_jobs import AsyncJobService
 from app.services.asset_image_fill import AssetImageFillService
 from app.services.asset_snapshots import AssetSnapshotService
 from app.services.editable_config import EditableConfigService
 from app.services.finance_signals import FinanceSignalsService
 from app.services.note_library import NoteLibraryService
-from app.services.xiaohongshu import XiaohongshuSyncService
+from app.services.xiaohongshu import XiaohongshuService
 from tools import xhs_capture_to_config as xhs_capture_tool
 
 router = APIRouter()
@@ -64,9 +75,9 @@ def _get_summarizer() -> BilibiliSummarizer:
 
 
 @lru_cache(maxsize=1)
-def _get_xiaohongshu_sync_service() -> XiaohongshuSyncService:
+def _get_xiaohongshu_service() -> XiaohongshuService:
     settings = get_settings()
-    return XiaohongshuSyncService(settings)
+    return XiaohongshuService(settings)
 
 @lru_cache(maxsize=1)
 def _get_note_library_service() -> NoteLibraryService:
@@ -81,7 +92,7 @@ def _get_editable_config_service() -> EditableConfigService:
 
 @lru_cache(maxsize=1)
 def _get_finance_signals_service() -> FinanceSignalsService:
-    return FinanceSignalsService()
+    return FinanceSignalsService(get_settings())
 
 
 @lru_cache(maxsize=1)
@@ -99,12 +110,23 @@ def _get_asset_snapshot_service() -> AssetSnapshotService:
 def _reload_runtime_services() -> None:
     clear_settings_cache()
     _get_summarizer.cache_clear()
-    _get_xiaohongshu_sync_service.cache_clear()
+    _get_xiaohongshu_service.cache_clear()
     _get_note_library_service.cache_clear()
     _get_editable_config_service.cache_clear()
     _get_finance_signals_service.cache_clear()
     _get_asset_image_fill_service.cache_clear()
     _get_asset_snapshot_service.cache_clear()
+
+
+def _get_async_job_service(request: Request) -> AsyncJobService:
+    service = getattr(request.app.state, "async_job_service", None)
+    if service is None:
+        raise AppError(
+            code=ErrorCode.INTERNAL_ERROR,
+            message="异步任务服务尚未初始化。",
+            status_code=500,
+        )
+    return service
 
 
 def _count_cookie_pairs(raw_cookie: str) -> int:
@@ -185,6 +207,16 @@ async def _probe_xiaohongshu_web_identity(
     return user_id, guest
 
 
+async def run_bilibili_summary_job(video_url: str):
+    summarizer = _get_summarizer()
+    return await summarizer.summarize(video_url)
+
+
+async def run_xiaohongshu_summary_job(url: str):
+    service = _get_xiaohongshu_service()
+    return await service.summarize_url(url)
+
+
 @router.get("/health")
 async def health(request: Request) -> dict:
     data = HealthData().model_dump()
@@ -204,7 +236,6 @@ async def update_finance_watchlist_ntfy(
 ) -> dict:
     service = _get_finance_signals_service()
     enabled = service.set_watchlist_ntfy_enabled(payload.enabled)
-    _reload_runtime_services()
     data = FinanceWatchlistNtfyData(enabled=enabled)
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
@@ -213,6 +244,30 @@ async def update_finance_watchlist_ntfy(
 async def trigger_finance_news_digest(request: Request) -> dict:
     service = _get_finance_signals_service()
     data = await service.trigger_news_digest()
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/finance/signals/cards/{card_id}/status")
+async def update_finance_focus_card_status(
+    card_id: str,
+    payload: FinanceFocusCardActionRequest,
+    request: Request,
+) -> dict:
+    service = _get_finance_signals_service()
+    data: FinanceFocusCardActionData = service.update_focus_card_status(
+        card_id=card_id,
+        status=payload.status,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/finance/signals/history")
+async def get_finance_focus_card_history(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+) -> dict:
+    service = _get_finance_signals_service()
+    data: FinanceFocusCardHistoryData = service.get_focus_card_history(limit=limit)
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 
@@ -234,9 +289,12 @@ async def get_asset_current(request: Request) -> dict:
 
 
 @router.put("/api/assets/current")
-async def save_asset_current(payload: AssetCurrentUpdateRequest, request: Request) -> dict:
+async def update_asset_current(
+    payload: AssetCurrentUpdateRequest,
+    request: Request,
+) -> dict:
     service = _get_asset_snapshot_service()
-    data: AssetCurrentData = service.save_current(
+    data: AssetCurrentData = service.update_current(
         total_amount_wan=payload.total_amount_wan,
         amounts=payload.amounts,
     )
@@ -244,14 +302,17 @@ async def save_asset_current(payload: AssetCurrentUpdateRequest, request: Reques
 
 
 @router.get("/api/assets/snapshots")
-async def list_asset_snapshots(request: Request) -> dict:
+async def list_asset_snapshot_history(request: Request) -> dict:
     service = _get_asset_snapshot_service()
     data: AssetSnapshotHistoryData = service.list_history()
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 
 @router.post("/api/assets/snapshots")
-async def save_asset_snapshot(payload: AssetSnapshotSaveRequest, request: Request) -> dict:
+async def save_asset_snapshot(
+    payload: AssetSnapshotSaveRequest,
+    request: Request,
+) -> dict:
     service = _get_asset_snapshot_service()
     data: AssetSnapshotRecord = service.save_snapshot(
         record_id=payload.id,
@@ -267,6 +328,63 @@ async def delete_asset_snapshot(record_id: str, request: Request) -> dict:
     service = _get_asset_snapshot_service()
     deleted_count = service.delete_snapshot(record_id)
     data = NotesDeleteData(deleted_count=deleted_count)
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/jobs/bilibili-summarize")
+async def create_bilibili_summarize_job(
+    payload: BilibiliSummaryRequest, request: Request
+) -> dict:
+    service = _get_async_job_service(request)
+    data: AsyncJobCreateData = await service.create_bilibili_summary_job(
+        video_url=payload.video_url,
+        request_id=request.state.request_id,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/jobs/xiaohongshu/summarize-url")
+async def create_xiaohongshu_summarize_job(
+    payload: XiaohongshuUrlSummaryRequest, request: Request
+) -> dict:
+    service = _get_async_job_service(request)
+    data: AsyncJobCreateData = await service.create_xiaohongshu_summary_job(
+        url=payload.url,
+        request_id=request.state.request_id,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/jobs")
+async def list_async_jobs(
+    request: Request,
+    limit: int = Query(default=20, ge=1, le=100),
+    status: str = Query(default=""),
+    job_type: str = Query(default=""),
+) -> dict:
+    service = _get_async_job_service(request)
+    data: AsyncJobListData = await service.list_jobs(
+        limit=limit,
+        status=status,
+        job_type=job_type,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/jobs/{job_id}")
+async def get_async_job(job_id: str, request: Request) -> dict:
+    service = _get_async_job_service(request)
+    data: AsyncJobStatusData = await service.get_job(job_id)
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/jobs/{job_id}/retry")
+async def retry_async_job(job_id: str, request: Request) -> dict:
+    service = _get_async_job_service(request)
+    data: AsyncJobCreateData = await service.retry_job(
+        job_id=job_id,
+        request_id=request.state.request_id,
+    )
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 
@@ -298,6 +416,92 @@ async def list_bilibili_notes(request: Request) -> dict:
     return success_response(data=result.model_dump(), request_id=request.state.request_id)
 
 
+@router.get("/api/notes/search")
+async def search_notes(
+    request: Request,
+    keyword: str = Query(default=""),
+    source: str = Query(default=""),
+    saved_from: str = Query(default=""),
+    saved_to: str = Query(default=""),
+    merged: bool | None = Query(default=None),
+    sort_by: str = Query(default="saved_at"),
+    sort_order: str = Query(default="desc"),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+) -> dict:
+    service = _get_note_library_service()
+    search_kwargs = dict(
+        keyword=keyword,
+        source=source,
+        limit=limit,
+        offset=offset,
+    )
+    if saved_from:
+        search_kwargs["saved_from"] = saved_from
+    if saved_to:
+        search_kwargs["saved_to"] = saved_to
+    if merged is not None:
+        search_kwargs["merged"] = merged
+    if sort_by and sort_by != "saved_at":
+        search_kwargs["sort_by"] = sort_by
+    if sort_order and sort_order != "desc":
+        search_kwargs["sort_order"] = sort_order
+    result: UnifiedNotesData = service.search_notes(**search_kwargs)
+    return success_response(data=result.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/notes/review/topics")
+async def review_notes_topics(
+    request: Request,
+    days: int = Query(default=30, ge=1, le=365),
+    limit: int = Query(default=8, ge=1, le=50),
+    per_topic_limit: int = Query(default=5, ge=1, le=20),
+) -> dict:
+    service = _get_note_library_service()
+    result: NotesReviewTopicsData = service.review_notes_by_topics(
+        days=days,
+        limit=limit,
+        per_topic_limit=per_topic_limit,
+    )
+    return success_response(data=result.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/notes/review/timeline")
+async def review_notes_timeline(
+    request: Request,
+    days: int = Query(default=30, ge=1, le=365),
+    bucket: str = Query(default="day"),
+    limit: int = Query(default=10, ge=1, le=50),
+    per_bucket_limit: int = Query(default=5, ge=1, le=20),
+) -> dict:
+    service = _get_note_library_service()
+    result: NotesTimelineReviewData = service.review_notes_by_timeline(
+        days=days,
+        bucket=bucket,
+        limit=limit,
+        per_bucket_limit=per_bucket_limit,
+    )
+    return success_response(data=result.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/notes/{source}/{note_id}/related")
+async def get_related_notes(
+    source: str,
+    note_id: str,
+    request: Request,
+    limit: int = Query(default=8, ge=1, le=50),
+    min_score: float = Query(default=0.2, ge=0.0, le=1.0),
+) -> dict:
+    service = _get_note_library_service()
+    result: RelatedNotesData = service.find_related_notes(
+        source=source,
+        note_id=note_id,
+        limit=limit,
+        min_score=min_score,
+    )
+    return success_response(data=result.model_dump(), request_id=request.state.request_id)
+
+
 @router.delete("/api/notes/bilibili/{note_id}")
 async def delete_bilibili_note(note_id: str, request: Request) -> dict:
     service = _get_note_library_service()
@@ -319,7 +523,7 @@ async def xiaohongshu_summarize_url(
     payload: XiaohongshuUrlSummaryRequest, request: Request
 ) -> dict:
     logger.info("Receive xiaohongshu summarize-url request")
-    service = _get_xiaohongshu_sync_service()
+    service = _get_xiaohongshu_service()
     result = await service.summarize_url(payload.url)
     return success_response(data=result.model_dump(), request_id=request.state.request_id)
 

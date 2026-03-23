@@ -1,25 +1,22 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import json
 import logging
-import random
 import re
 import shutil
-import time
 import uuid
 from dataclasses import dataclass, field
 from http.cookies import SimpleCookie
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable, Iterator
+from typing import Any, AsyncIterator, Iterator
 from urllib.parse import parse_qs, parse_qsl, quote, unquote, urlencode, urlparse, urlunparse
 
 import httpx
 
-from app.core.config import Settings
+from app.core.config import Settings, resolve_runtime_path
 from app.core.errors import AppError, ErrorCode
-from app.models.schemas import XiaohongshuSummaryItem, XiaohongshuSyncData
+from app.models.schemas import XiaohongshuSummaryItem
 from app.repositories.xiaohongshu_repo import XiaohongshuSyncRepository
 from app.services.asr import ASRService
 from app.services.audio_fetcher import AudioFetcher
@@ -78,14 +75,6 @@ class XiaohongshuPageBatch:
     request_cursor: str = ""
     next_cursor: str = ""
     exhausted: bool = False
-
-
-@dataclass(frozen=True)
-class XiaohongshuSyncProgress:
-    current: int
-    total: int
-    message: str
-    summaries: list[XiaohongshuSummaryItem] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -549,6 +538,7 @@ class XiaohongshuWebReadonlySource:
         start_cursor: str | None = None,
         force_head: bool = False,
         max_pages: int | None = None,
+        lightweight: bool = False,
     ) -> AsyncIterator[XiaohongshuPageBatch]:
         cfg = self._settings.xiaohongshu.web_readonly
         driver = cfg.page_fetch_driver.strip().lower() or "auto"
@@ -563,19 +553,26 @@ class XiaohongshuWebReadonlySource:
             )
 
         if driver == "http":
-            async for batch in self._iter_pages_http(
-                start_cursor=start_cursor,
-                force_head=force_head,
-                max_pages=max_pages,
-            ):
-                yield batch
-            return
+            try:
+                async for batch in self._iter_pages_http(
+                    start_cursor=start_cursor,
+                    force_head=force_head,
+                    max_pages=max_pages,
+                    lightweight=lightweight,
+                ):
+                    yield batch
+                return
+            except AppError as exc:
+                if lightweight and self._is_http_406_error(exc):
+                    return
+                raise
 
         if driver == "playwright":
             async for batch in self._iter_pages_playwright(
                 start_cursor=start_cursor,
                 force_head=force_head,
                 max_pages=max_pages,
+                lightweight=lightweight,
             ):
                 yield batch
             return
@@ -585,10 +582,13 @@ class XiaohongshuWebReadonlySource:
                 start_cursor=start_cursor,
                 force_head=force_head,
                 max_pages=max_pages,
+                lightweight=lightweight,
             ):
                 yield batch
             return
         except AppError as exc:
+            if lightweight and self._is_http_406_error(exc):
+                return
             if not self._is_http_406_error(exc):
                 raise
 
@@ -596,6 +596,7 @@ class XiaohongshuWebReadonlySource:
             start_cursor=start_cursor,
             force_head=force_head,
             max_pages=max_pages,
+            lightweight=lightweight,
         ):
             yield batch
 
@@ -605,6 +606,7 @@ class XiaohongshuWebReadonlySource:
         start_cursor: str | None = None,
         force_head: bool = False,
         max_pages: int | None = None,
+        lightweight: bool = False,
     ) -> AsyncIterator[XiaohongshuPageBatch]:
         cfg = self._settings.xiaohongshu.web_readonly
         request_url = cfg.request_url.strip()
@@ -699,18 +701,25 @@ class XiaohongshuWebReadonlySource:
 
                 notes: list[XiaohongshuNote] = []
                 for record in records:
-                    note = await self._extract_note_from_record(
-                        client=client,
-                        record=record,
-                        cfg=cfg,
-                        headers=headers,
-                        detail_fetch_mode=detail_fetch_mode,
-                        detail_url_template=detail_url_template,
-                        detail_method=detail_method,
-                        detail_headers=detail_headers,
-                        detail_body=detail_body,
-                        max_images=max_images,
-                    )
+                    if lightweight:
+                        note = self._build_lightweight_note_from_record(
+                            record=record,
+                            cfg=cfg,
+                            max_images=max_images,
+                        )
+                    else:
+                        note = await self._extract_note_from_record(
+                            client=client,
+                            record=record,
+                            cfg=cfg,
+                            headers=headers,
+                            detail_fetch_mode=detail_fetch_mode,
+                            detail_url_template=detail_url_template,
+                            detail_method=detail_method,
+                            detail_headers=detail_headers,
+                            detail_body=detail_body,
+                            max_images=max_images,
+                        )
                     if note is None:
                         continue
                     emitted_any = True
@@ -793,6 +802,7 @@ class XiaohongshuWebReadonlySource:
         start_cursor: str | None = None,
         force_head: bool = False,
         max_pages: int | None = None,
+        lightweight: bool = False,
     ) -> AsyncIterator[XiaohongshuPageBatch]:
         cfg = self._settings.xiaohongshu.web_readonly
         request_url = cfg.request_url.strip()
@@ -1176,18 +1186,25 @@ class XiaohongshuWebReadonlySource:
 
                         notes: list[XiaohongshuNote] = []
                         for record in records:
-                            note = await self._extract_note_from_record(
-                                client=client,
-                                record=record,
-                                cfg=cfg,
-                                headers=headers,
-                                detail_fetch_mode=detail_fetch_mode,
-                                detail_url_template=detail_url_template,
-                                detail_method=detail_method,
-                                detail_headers=detail_headers,
-                                detail_body=detail_body,
-                                max_images=max_images,
-                            )
+                            if lightweight:
+                                note = self._build_lightweight_note_from_record(
+                                    record=record,
+                                    cfg=cfg,
+                                    max_images=max_images,
+                                )
+                            else:
+                                note = await self._extract_note_from_record(
+                                    client=client,
+                                    record=record,
+                                    cfg=cfg,
+                                    headers=headers,
+                                    detail_fetch_mode=detail_fetch_mode,
+                                    detail_url_template=detail_url_template,
+                                    detail_method=detail_method,
+                                    detail_headers=detail_headers,
+                                    detail_body=detail_body,
+                                    max_images=max_images,
+                                )
                             if note is None:
                                 continue
                             emitted_any = True
@@ -1588,55 +1605,20 @@ class XiaohongshuWebReadonlySource:
         detail_body: str | None,
         max_images: int,
     ) -> XiaohongshuNote | None:
-        note_id = self._read_str(record, cfg.note_id_field)
-        if not note_id:
-            note_id = self._read_str(record, "note_id")
-        if not note_id:
-            note_id = self._read_str(record, "noteId")
-        if not note_id:
-            note_id = self._read_str(record, "id")
-        if not note_id:
-            note_id = self._read_str(record, "note_card.note_id")
-        if not note_id:
-            note_id = self._read_str(record, "note_card.noteId")
-        if not note_id:
-            note_id = self._read_str(record, "note.note_id")
-        if not note_id:
-            note_id = self._read_str(record, "note.noteId")
-        if not note_id:
+        seed = self._extract_note_seed_from_record(
+            record=record,
+            cfg=cfg,
+            max_images=max_images,
+        )
+        if seed is None:
             return None
 
-        title = self._read_str(record, cfg.title_field) or f"未命名笔记 {note_id}"
-        if title == f"未命名笔记 {note_id}":
-            title = (
-                self._read_str(record, "display_title")
-                or self._read_str(record, "note_card.title")
-                or self._read_str(record, "note_card.display_title")
-                or title
-            )
-        source_url = self._read_str(record, cfg.source_url_field)
-        if not source_url:
-            source_url = f"https://www.xiaohongshu.com/explore/{note_id}"
-        is_video = self._is_video_note(record)
-
-        content_candidates = list(cfg.content_field_candidates)
-        for field_name in ("note_card.desc", "note.desc", "note_card.content"):
-            if field_name not in content_candidates:
-                content_candidates.append(field_name)
-        content = self._pick_valid_content(
-            payload=record,
-            candidates=content_candidates,
-            title=title,
-        )
-        image_candidates = list(cfg.image_field_candidates)
-        for field_name in ("note_card.image_list", "note.image_list"):
-            if field_name not in image_candidates:
-                image_candidates.append(field_name)
-        image_urls = self._extract_image_urls(
-            payload=record,
-            candidates=image_candidates,
-            max_count=max_images,
-        )
+        note_id = seed.note_id
+        title = seed.title
+        content = seed.content
+        source_url = seed.source_url
+        image_urls = list(seed.image_urls)
+        is_video = seed.is_video
 
         page_note = await self._fetch_note_from_page(
             client=client,
@@ -1719,6 +1701,94 @@ class XiaohongshuWebReadonlySource:
         if not content and not image_urls and not is_video:
             return None
 
+        return XiaohongshuNote(
+            note_id=note_id,
+            title=title,
+            content=content,
+            source_url=source_url,
+            image_urls=image_urls,
+            is_video=is_video,
+        )
+
+    def _build_lightweight_note_from_record(
+        self,
+        *,
+        record: dict,
+        cfg,
+        max_images: int,
+    ) -> XiaohongshuNote | None:
+        seed = self._extract_note_seed_from_record(
+            record=record,
+            cfg=cfg,
+            max_images=max_images,
+        )
+        if seed is None:
+            return None
+        return XiaohongshuNote(
+            note_id=seed.note_id,
+            title=seed.title,
+            content=seed.content,
+            source_url=seed.source_url,
+            image_urls=list(seed.image_urls),
+            is_video=seed.is_video,
+        )
+
+    def _extract_note_seed_from_record(
+        self,
+        *,
+        record: dict,
+        cfg,
+        max_images: int,
+    ) -> XiaohongshuNote | None:
+        note_id = self._read_str(record, cfg.note_id_field)
+        if not note_id:
+            note_id = self._read_str(record, "note_id")
+        if not note_id:
+            note_id = self._read_str(record, "noteId")
+        if not note_id:
+            note_id = self._read_str(record, "id")
+        if not note_id:
+            note_id = self._read_str(record, "note_card.note_id")
+        if not note_id:
+            note_id = self._read_str(record, "note_card.noteId")
+        if not note_id:
+            note_id = self._read_str(record, "note.note_id")
+        if not note_id:
+            note_id = self._read_str(record, "note.noteId")
+        if not note_id:
+            return None
+
+        title = self._read_str(record, cfg.title_field) or f"未命名笔记 {note_id}"
+        if title == f"未命名笔记 {note_id}":
+            title = (
+                self._read_str(record, "display_title")
+                or self._read_str(record, "note_card.title")
+                or self._read_str(record, "note_card.display_title")
+                or title
+            )
+        source_url = self._read_str(record, cfg.source_url_field)
+        if not source_url:
+            source_url = f"https://www.xiaohongshu.com/explore/{note_id}"
+        is_video = self._is_video_note(record)
+
+        content_candidates = list(cfg.content_field_candidates)
+        for field_name in ("note_card.desc", "note.desc", "note_card.content"):
+            if field_name not in content_candidates:
+                content_candidates.append(field_name)
+        content = self._pick_valid_content(
+            payload=record,
+            candidates=content_candidates,
+            title=title,
+        )
+        image_candidates = list(cfg.image_field_candidates)
+        for field_name in ("note_card.image_list", "note.image_list"):
+            if field_name not in image_candidates:
+                image_candidates.append(field_name)
+        image_urls = self._extract_image_urls(
+            payload=record,
+            candidates=image_candidates,
+            max_count=max_images,
+        )
         return XiaohongshuNote(
             note_id=note_id,
             title=title,
@@ -2816,11 +2886,7 @@ class XiaohongshuWebReadonlySource:
         return ""
 
 
-class XiaohongshuSyncService:
-    _LIVE_CURSOR_STATE_KEY = "live_sync_cursor"
-    _LIVE_CURSOR_FINGERPRINT_STATE_KEY = "live_sync_cursor_fingerprint"
-    _HEAD_SHORT_SCAN_PAGES = 2
-
+class XiaohongshuService:
     def __init__(
         self,
         settings: Settings,
@@ -2833,7 +2899,7 @@ class XiaohongshuSyncService:
     ) -> None:
         self._settings = settings
         self._repository = repository or XiaohongshuSyncRepository(
-            settings.xiaohongshu.db_path
+            str(resolve_runtime_path(settings.xiaohongshu.db_path))
         )
         self._source = source or MockXiaohongshuSource(settings)
         self._web_source = web_source or XiaohongshuWebReadonlySource(settings)
@@ -2844,179 +2910,6 @@ class XiaohongshuSyncService:
         )
         self._audio_fetcher = audio_fetcher or AudioFetcher(settings)
         self._asr_service = asr_service or ASRService(settings)
-
-    async def sync(
-        self,
-        limit: int | None,
-        confirm_live: bool = False,
-        progress_callback: Callable[[XiaohongshuSyncProgress], Awaitable[None]] | None = None,
-    ) -> XiaohongshuSyncData:
-        requested_limit = limit or self._settings.xiaohongshu.default_limit
-        if requested_limit > self._settings.xiaohongshu.max_limit:
-            raise AppError(
-                code=ErrorCode.INVALID_INPUT,
-                message=(
-                    f"limit 超过上限，当前最大允许 {self._settings.xiaohongshu.max_limit}。"
-                ),
-                status_code=400,
-            )
-
-        mode = self._settings.xiaohongshu.mode.strip().lower()
-        if mode == "web_readonly":
-            if not confirm_live:
-                raise AppError(
-                    code=ErrorCode.INVALID_INPUT,
-                    message=(
-                        "web_readonly 模式需要显式确认。请在请求体中传 confirm_live=true。"
-                    ),
-                    status_code=400,
-                )
-            self._enforce_live_sync_interval()
-        elif mode != "mock":
-            raise AppError(
-                code=ErrorCode.INVALID_INPUT,
-                message="当前仅支持 xiaohongshu.mode=mock 或 web_readonly。",
-                status_code=400,
-            )
-
-        fetched_count = 0
-        processed_count = 0
-        new_count = 0
-        skipped_count = 0
-        failed_count = 0
-        consecutive_failures = 0
-        summaries: list[XiaohongshuSummaryItem] = []
-        first_note = True
-        seen_note_ids: set[str] = set()
-
-        await self._emit_progress(
-            progress_callback,
-            XiaohongshuSyncProgress(
-                current=0,
-                total=requested_limit,
-                message=f"开始同步，目标有效笔记 {requested_limit} 条。",
-                summaries=list(summaries),
-            ),
-        )
-
-        async for note in self._iter_candidate_notes(mode=mode, requested_limit=requested_limit):
-            if mode != "mock":
-                if first_note:
-                    first_note = False
-                else:
-                    await self._delay_between_requests(mode=mode)
-
-            if note.note_id in seen_note_ids:
-                continue
-            seen_note_ids.add(note.note_id)
-            fetched_count += 1
-            if await asyncio.to_thread(self._repository.is_synced, note.note_id):
-                skipped_count += 1
-                processed_count += 1
-                await self._emit_progress(
-                    progress_callback,
-                    XiaohongshuSyncProgress(
-                        current=new_count,
-                        total=requested_limit,
-                        message=f"已跳过重复笔记：{note.note_id}（有效 {new_count}/{requested_limit}）",
-                        summaries=list(summaries),
-                    ),
-                )
-                continue
-
-            try:
-                if note.is_video:
-                    summary = await self._summarize_video_note(note)
-                else:
-                    summary = await self._llm_service.summarize_xiaohongshu_note(
-                        note_id=note.note_id,
-                        title=note.title,
-                        content=note.content,
-                        source_url=note.source_url,
-                        image_urls=note.image_urls,
-                    )
-                summary = self._ensure_source_link(summary, note.source_url)
-                summary = await self._append_comment_insights_section(
-                    mode=mode,
-                    note=note,
-                    summary_markdown=summary,
-                )
-                summaries.append(
-                    XiaohongshuSummaryItem(
-                        note_id=note.note_id,
-                        title=note.title,
-                        source_url=note.source_url,
-                        summary_markdown=summary,
-                    )
-                )
-                new_count += 1
-                consecutive_failures = 0
-                processed_count += 1
-                await self._emit_progress(
-                    progress_callback,
-                    XiaohongshuSyncProgress(
-                        current=new_count,
-                        total=requested_limit,
-                        message=f"已完成有效同步：{new_count}/{requested_limit}（{note.note_id}）",
-                        summaries=list(summaries),
-                    ),
-                )
-            except AppError as exc:
-                failed_count += 1
-                consecutive_failures += 1
-                processed_count += 1
-                await self._emit_progress(
-                    progress_callback,
-                    XiaohongshuSyncProgress(
-                        current=new_count,
-                        total=requested_limit,
-                        message=f"处理失败笔记：{note.note_id}（有效 {new_count}/{requested_limit}）",
-                        summaries=list(summaries),
-                    ),
-                )
-                if (
-                    consecutive_failures
-                    >= self._settings.xiaohongshu.circuit_breaker_failures
-                ):
-                    raise AppError(
-                        code=ErrorCode.CIRCUIT_OPEN,
-                        message="小红书同步连续失败已触发熔断，本次任务已停止。",
-                        status_code=429,
-                        details={
-                            "requested_limit": requested_limit,
-                            "fetched_count": fetched_count,
-                            "new_count": new_count,
-                            "skipped_count": skipped_count,
-                            "failed_count": failed_count,
-                            "processed_count": processed_count,
-                            "circuit_opened": True,
-                            "last_error_code": exc.code.value,
-                            "last_error_message": exc.message,
-                            "summaries": [item.model_dump() for item in summaries],
-                        },
-                    ) from exc
-
-            if new_count >= requested_limit:
-                break
-
-        result = XiaohongshuSyncData(
-            requested_limit=requested_limit,
-            fetched_count=fetched_count,
-            new_count=new_count,
-            skipped_count=skipped_count,
-            failed_count=failed_count,
-            circuit_opened=False,
-            summaries=summaries,
-        )
-
-        if mode == "web_readonly":
-            await asyncio.to_thread(
-                self._repository.set_state,
-                "last_live_sync_ts",
-                str(int(time.time())),
-            )
-
-        return result
 
     async def summarize_url(self, note_url: str) -> XiaohongshuSummaryItem:
         mode = self._settings.xiaohongshu.mode.strip().lower()
@@ -3091,53 +2984,6 @@ class XiaohongshuSyncService:
         )
         return result
 
-    def mark_synced_from_summaries(self, summaries: list[XiaohongshuSummaryItem]) -> int:
-        if not summaries:
-            return 0
-        for item in summaries:
-            self._repository.mark_synced(
-                note_id=item.note_id,
-                title=item.title,
-                source_url=item.source_url,
-            )
-        return len(summaries)
-
-    async def get_pending_unsynced_count(self) -> dict[str, int | str]:
-        mode = self._settings.xiaohongshu.mode.strip().lower()
-        if mode not in {"mock", "web_readonly"}:
-            raise AppError(
-                code=ErrorCode.INVALID_INPUT,
-                message="当前仅支持 xiaohongshu.mode=mock 或 web_readonly。",
-                status_code=400,
-            )
-
-        scanned_count = 0
-        pending_count = 0
-        seen_note_ids: set[str] = set()
-        try:
-            async for note in self._iter_notes_for_pending_count(mode=mode):
-                if note.note_id in seen_note_ids:
-                    continue
-                seen_note_ids.add(note.note_id)
-                scanned_count += 1
-                if not await asyncio.to_thread(self._repository.is_synced, note.note_id):
-                    pending_count += 1
-        except AppError:
-            raise
-        except Exception as exc:
-            raise AppError(
-                code=ErrorCode.UPSTREAM_ERROR,
-                message="统计未登记数量失败，请稍后重试。",
-                status_code=502,
-                details={"error": str(exc)},
-            ) from exc
-
-        return {
-            "mode": mode,
-            "pending_count": pending_count,
-            "scanned_count": scanned_count,
-        }
-
     async def _resolve_note_by_url(self, *, mode: str, note_url: str) -> XiaohongshuNote:
         if mode == "web_readonly":
             return await self._web_source.fetch_note_by_url(note_url)
@@ -3177,209 +3023,6 @@ class XiaohongshuSyncService:
             code=ErrorCode.INVALID_INPUT,
             message=f"未找到该小红书笔记：{target_note_id}",
             status_code=404,
-        )
-
-    async def _iter_notes_for_pending_count(
-        self,
-        *,
-        mode: str,
-    ) -> AsyncIterator[XiaohongshuNote]:
-        if mode == "mock":
-            iter_recent = getattr(self._source, "iter_recent", None)
-            if callable(iter_recent):
-                for note in iter_recent():
-                    yield note
-                return
-            for note in self._source.fetch_recent(limit=10000):
-                yield note
-            return
-
-        iter_pages = getattr(self._web_source, "iter_pages", None)
-        if callable(iter_pages):
-            async for batch in iter_pages(force_head=True):
-                for note in batch.notes:
-                    yield note
-            return
-
-        iter_recent = getattr(self._web_source, "iter_recent", None)
-        if callable(iter_recent):
-            async for note in iter_recent():
-                yield note
-            return
-
-        notes = await self._web_source.fetch_recent(
-            limit=max(self._settings.xiaohongshu.max_limit, 1)
-        )
-        for note in notes:
-            yield note
-
-    async def _iter_candidate_notes(
-        self, *, mode: str, requested_limit: int
-    ) -> AsyncIterator[XiaohongshuNote]:
-        if mode == "mock":
-            iter_recent = getattr(self._source, "iter_recent", None)
-            if callable(iter_recent):
-                for note in iter_recent():
-                    yield note
-                return
-            for note in self._source.fetch_recent(requested_limit):
-                yield note
-            return
-
-        iter_pages = getattr(self._web_source, "iter_pages", None)
-        if callable(iter_pages):
-            async for note in self._iter_web_candidate_notes_with_hybrid_cursor(
-                iter_pages=iter_pages,
-            ):
-                yield note
-            return
-
-        iter_recent = getattr(self._web_source, "iter_recent", None)
-        if callable(iter_recent):
-            async for note in iter_recent():
-                yield note
-            return
-
-        notes = await self._web_source.fetch_recent(requested_limit)
-        for note in notes:
-            yield note
-
-    async def _iter_web_candidate_notes_with_hybrid_cursor(
-        self,
-        *,
-        iter_pages: Callable[..., AsyncIterator[XiaohongshuPageBatch]],
-    ) -> AsyncIterator[XiaohongshuNote]:
-        seen_note_ids: set[str] = set()
-        cursor_fingerprint = self._build_live_cursor_fingerprint()
-        saved_cursor = await asyncio.to_thread(
-            self._load_live_cursor,
-            fingerprint=cursor_fingerprint,
-        )
-
-        head_next_cursor = ""
-        head_exhausted = False
-        async for batch in iter_pages(
-            force_head=True,
-            max_pages=max(self._HEAD_SHORT_SCAN_PAGES, 1),
-        ):
-            if batch.next_cursor:
-                head_next_cursor = batch.next_cursor.strip()
-            if batch.exhausted:
-                head_exhausted = True
-            for note in batch.notes:
-                if note.note_id in seen_note_ids:
-                    continue
-                seen_note_ids.add(note.note_id)
-                yield note
-
-        if head_exhausted:
-            return
-
-        resume_cursor = saved_cursor or head_next_cursor
-        if not resume_cursor:
-            return
-
-        fallback_cursor = ""
-        if saved_cursor and head_next_cursor and saved_cursor != head_next_cursor:
-            fallback_cursor = head_next_cursor
-
-        async for note in self._iter_resume_notes_with_cursor_fallback(
-            iter_pages=iter_pages,
-            primary_cursor=resume_cursor,
-            fallback_cursor=fallback_cursor,
-            seen_note_ids=seen_note_ids,
-            fingerprint=cursor_fingerprint,
-        ):
-            yield note
-
-    async def _iter_resume_notes_with_cursor_fallback(
-        self,
-        *,
-        iter_pages: Callable[..., AsyncIterator[XiaohongshuPageBatch]],
-        primary_cursor: str,
-        fallback_cursor: str,
-        seen_note_ids: set[str],
-        fingerprint: str,
-    ) -> AsyncIterator[XiaohongshuNote]:
-        current_cursor = primary_cursor
-        tried_fallback = False
-
-        while current_cursor:
-            try:
-                async for batch in iter_pages(start_cursor=current_cursor):
-                    page_cursor = batch.request_cursor.strip()
-                    if page_cursor:
-                        await asyncio.to_thread(
-                            self._save_live_cursor,
-                            cursor=page_cursor,
-                            fingerprint=fingerprint,
-                        )
-                    for note in batch.notes:
-                        if note.note_id in seen_note_ids:
-                            continue
-                        seen_note_ids.add(note.note_id)
-                        yield note
-                    if batch.exhausted:
-                        return
-                return
-            except AppError as exc:
-                can_retry_with_fallback = (
-                    (not tried_fallback)
-                    and bool(fallback_cursor)
-                    and (fallback_cursor != current_cursor)
-                    and (exc.code == ErrorCode.UPSTREAM_ERROR)
-                    and ("items_path 无法解析为列表" in exc.message)
-                )
-                if not can_retry_with_fallback:
-                    raise
-                current_cursor = fallback_cursor
-                tried_fallback = True
-
-    def _build_live_cursor_fingerprint(self) -> str:
-        cfg = self._settings.xiaohongshu.web_readonly
-        fingerprint_payload = {
-            "request_url": cfg.request_url,
-            "request_method": cfg.request_method,
-            "request_body": cfg.request_body,
-            "request_headers": cfg.request_headers,
-            "items_path": cfg.items_path,
-            "note_id_field": cfg.note_id_field,
-            "title_field": cfg.title_field,
-            "source_url_field": cfg.source_url_field,
-        }
-        normalized = json.dumps(
-            fingerprint_payload,
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        return hashlib.sha1(normalized.encode("utf-8")).hexdigest()
-
-    def _load_live_cursor(self, *, fingerprint: str) -> str | None:
-        saved_fingerprint = self._repository.get_state(
-            self._LIVE_CURSOR_FINGERPRINT_STATE_KEY
-        )
-        if saved_fingerprint != fingerprint:
-            return None
-        raw_cursor = self._repository.get_state(self._LIVE_CURSOR_STATE_KEY)
-        if raw_cursor is None:
-            return None
-        cursor = raw_cursor.strip()
-        if not cursor:
-            return None
-        return cursor
-
-    def _save_live_cursor(self, *, cursor: str, fingerprint: str) -> None:
-        normalized_cursor = cursor.strip()
-        if not normalized_cursor:
-            return
-        self._repository.set_state(
-            self._LIVE_CURSOR_FINGERPRINT_STATE_KEY,
-            fingerprint,
-        )
-        self._repository.set_state(
-            self._LIVE_CURSOR_STATE_KEY,
-            normalized_cursor,
         )
 
     async def _summarize_video_note(self, note: XiaohongshuNote) -> str:
@@ -3424,7 +3067,7 @@ class XiaohongshuSyncService:
         )
 
     async def _transcribe_video_note(self, note: XiaohongshuNote) -> str:
-        base_temp = Path(self._settings.runtime.temp_dir)
+        base_temp = resolve_runtime_path(self._settings.runtime.temp_dir)
         job_dir = base_temp / f"xhs-video-{uuid.uuid4().hex}"
         job_dir.mkdir(parents=True, exist_ok=True)
 
@@ -3523,83 +3166,3 @@ class XiaohongshuSyncService:
                 note.note_id,
             )
         return []
-
-    async def _emit_progress(
-        self,
-        callback: Callable[[XiaohongshuSyncProgress], Awaitable[None]] | None,
-        progress: XiaohongshuSyncProgress,
-    ) -> None:
-        if callback is None:
-            return
-        await callback(progress)
-
-    def _enforce_live_sync_interval(self) -> None:
-        cooldown = self.get_live_sync_cooldown()
-        wait_seconds = cooldown["remaining_seconds"]
-        if wait_seconds > 0:
-            raise AppError(
-                code=ErrorCode.RATE_LIMITED,
-                message=f"为降低风控，距离上次真实同步过短，请 {wait_seconds} 秒后重试。",
-                status_code=429,
-                details={"wait_seconds": wait_seconds},
-            )
-
-    def get_live_sync_cooldown(self) -> dict[str, int | bool | str]:
-        mode = self._settings.xiaohongshu.mode.strip().lower()
-        now = int(time.time())
-        min_interval = max(int(self._settings.xiaohongshu.min_live_sync_interval_seconds), 0)
-
-        if mode != "web_readonly":
-            return {
-                "mode": mode,
-                "allowed": True,
-                "remaining_seconds": 0,
-                "next_allowed_at_epoch": 0,
-                "last_sync_at_epoch": 0,
-                "min_interval_seconds": min_interval,
-            }
-
-        last_sync_raw = self._repository.get_state("last_live_sync_ts")
-        last_sync_at_epoch = 0
-        if last_sync_raw:
-            try:
-                last_sync_at_epoch = int(last_sync_raw)
-            except ValueError:
-                last_sync_at_epoch = 0
-
-        next_allowed_at_epoch = (
-            last_sync_at_epoch + min_interval if last_sync_at_epoch > 0 else 0
-        )
-        remaining_seconds = (
-            max(next_allowed_at_epoch - now, 0) if next_allowed_at_epoch > 0 else 0
-        )
-
-        return {
-            "mode": mode,
-            "allowed": remaining_seconds <= 0,
-            "remaining_seconds": remaining_seconds,
-            "next_allowed_at_epoch": next_allowed_at_epoch,
-            "last_sync_at_epoch": last_sync_at_epoch,
-            "min_interval_seconds": min_interval,
-        }
-
-    async def _delay_between_requests(self, *, mode: str) -> None:
-        if mode == "mock":
-            return
-
-        min_delay = self._settings.xiaohongshu.random_delay_min_seconds
-        max_delay = self._settings.xiaohongshu.random_delay_max_seconds
-        if min_delay < 0 or max_delay < 0:
-            raise AppError(
-                code=ErrorCode.INVALID_INPUT,
-                message="随机延迟配置不能为负数。",
-                status_code=400,
-            )
-        if max_delay < min_delay:
-            raise AppError(
-                code=ErrorCode.INVALID_INPUT,
-                message="随机延迟配置错误：max_delay 小于 min_delay。",
-                status_code=400,
-            )
-
-        await asyncio.sleep(random.uniform(min_delay, max_delay))
