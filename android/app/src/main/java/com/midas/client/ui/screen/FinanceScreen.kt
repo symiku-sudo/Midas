@@ -1,7 +1,12 @@
 package com.midas.client.ui.screen
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -9,9 +14,6 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -24,34 +26,42 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.midas.client.data.model.FinanceFocusCard
 import com.midas.client.data.model.FinanceNewsItem
 import com.midas.client.data.model.FinanceWatchlistItem
 import com.midas.client.ui.components.MarkdownText
 import java.util.Locale
 
+private enum class AssetPanelTab(val title: String) {
+    WATCHLIST("Watchlist"),
+    ASSET_STATS("资产统计"),
+}
+
 @Composable
 internal fun FinanceSignalsPanel(
     state: FinanceSignalsUiState,
     onRefresh: () -> Unit,
+    onAssetAmountChange: (String, String) -> Unit,
+    onSaveAssetStats: () -> Unit,
+    onDeleteAssetHistoryRecord: (String) -> Unit,
+    onAssetSummaryCopied: () -> Unit,
     onGenerateFinanceNewsDigest: () -> Unit,
     onToggleWatchlistNtfy: (Boolean) -> Unit,
-    onDismissFocusCard: (FinanceFocusCard) -> Unit,
-    onRestoreFocusCards: () -> Unit,
-    onUpdateFocusCardStatus: (String, String) -> Unit,
+    onFillAssetStatsFromImages: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    var selectedAssetTab by remember { mutableStateOf(AssetPanelTab.WATCHLIST) }
     var showAllNews by remember { mutableStateOf(false) }
 
     Column(
         modifier = modifier.verticalScroll(rememberScrollState()),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        Text("财经信号", style = MaterialTheme.typography.titleMedium)
+        Text("财经", style = MaterialTheme.typography.titleMedium)
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
@@ -93,94 +103,13 @@ internal fun FinanceSignalsPanel(
             }
         }
 
-        if (state.focusCards.isNotEmpty()) {
-                GlassCard(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                        ) {
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Text("今日关注建议", style = MaterialTheme.typography.titleSmall)
-                                Text(
-                                    text = "先处理优先级高的，再决定要不要展开行情和新闻明细。",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            if (state.dismissedFocusCardCount > 0) {
-                                MidasButton(
-                                    onClick = onRestoreFocusCards,
-                                    tone = ButtonTone.NEUTRAL,
-                                ) {
-                                    SingleLineActionText("恢复 ${state.dismissedFocusCardCount}")
-                                }
-                            }
-                        }
-                        FinanceFocusCardList(
-                            items = state.focusCards,
-                            onDismiss = onDismissFocusCard,
-                            onStatusChange = { item, status ->
-                                if (item.cardId.isNotBlank()) {
-                                    onUpdateFocusCardStatus(item.cardId, status)
-                                }
-                            },
-                        )
-                    }
-                }
-            } else if (state.dismissedFocusCardCount > 0) {
-                GlassCard(modifier = Modifier.fillMaxWidth()) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(12.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Text(
-                            text = "今日建议已全部处理",
-                            style = MaterialTheme.typography.titleSmall,
-                        )
-                        MidasButton(
-                            onClick = onRestoreFocusCards,
-                            tone = ButtonTone.NEUTRAL,
-                        ) {
-                            SingleLineActionText("恢复 ${state.dismissedFocusCardCount}")
-                        }
-                    }
-                }
-            }
+        GlassTabBar(
+            selectedTabIndex = selectedAssetTab.ordinal,
+            labels = AssetPanelTab.entries.map { it.title },
+            onSelect = { index -> selectedAssetTab = AssetPanelTab.entries[index] },
+        )
 
-            if (state.focusCardHistory.isNotEmpty()) {
-                GlassCard(modifier = Modifier.fillMaxWidth()) {
-                    Column(
-                        modifier = Modifier.padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Text("建议历史", style = MaterialTheme.typography.titleSmall)
-                        state.focusCardHistory.take(5).forEachIndexed { index, item ->
-                            Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                                Text(
-                                    text = item.title,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    fontWeight = FontWeight.SemiBold,
-                                )
-                                Text(
-                                    text = "${item.status} · ${item.lastSeenAt.ifBlank { item.statusUpdatedAt }}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                )
-                            }
-                            if (index < state.focusCardHistory.take(5).lastIndex) {
-                                HorizontalDivider()
-                            }
-                        }
-                    }
-                }
-            }
-
+        if (selectedAssetTab == AssetPanelTab.WATCHLIST) {
             GlassCard(modifier = Modifier.fillMaxWidth()) {
                 Column(
                     modifier = Modifier.padding(12.dp),
@@ -298,6 +227,16 @@ internal fun FinanceSignalsPanel(
                         isLoading = state.isLoading,
                     )
                 }
+            }
+        } else {
+            AssetStatsCard(
+                state = state,
+                onAssetAmountChange = onAssetAmountChange,
+                onSaveAssetStats = onSaveAssetStats,
+                onDeleteAssetHistoryRecord = onDeleteAssetHistoryRecord,
+                onAssetSummaryCopied = onAssetSummaryCopied,
+                onFillAssetStatsFromImages = onFillAssetStatsFromImages,
+            )
         }
 
         if (state.errorMessage.isNotBlank()) {
@@ -309,198 +248,335 @@ internal fun FinanceSignalsPanel(
     }
 }
 
-@Composable
-private fun FinanceFocusCardList(
-    items: List<FinanceFocusCard>,
-    onDismiss: (FinanceFocusCard) -> Unit,
-    onStatusChange: (FinanceFocusCard, String) -> Unit,
-) {
-    val groupedItems = items.groupBy { item -> item.actionType.uppercase(Locale.ROOT) }
-    val orderedTypes = listOf("REVIEW_NOW", "FOLLOW_UP", "WAIT_CONFIRM", "MONITOR")
-    val orderedGroups = orderedTypes.mapNotNull { type ->
-        groupedItems[type]?.takeIf { group -> group.isNotEmpty() }?.let { group -> type to group }
-    } + groupedItems.entries
-        .filter { entry -> entry.key !in orderedTypes }
-        .map { entry -> entry.key to entry.value }
+private fun formatAmountWanRmb(amount: Double): String {
+    return "${"%.2f".format(Locale.US, amount)} 万元人民币"
+}
 
-    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        orderedGroups.forEachIndexed { groupIndex, (actionType, groupItems) ->
-            Text(
-                text = financeActionTypeGroupLabel(actionType),
-                style = MaterialTheme.typography.bodySmall,
-                fontWeight = FontWeight.SemiBold,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-            groupItems.forEachIndexed { itemIndex, item ->
-                FinanceFocusCardItem(
-                    item = item,
-                    onDismiss = { onDismiss(item) },
-                    onStatusChange = { status -> onStatusChange(item, status) },
-                )
-                if (itemIndex < groupItems.lastIndex) {
-                    HorizontalDivider()
-                }
-            }
-            if (groupIndex < orderedGroups.lastIndex) {
-                HorizontalDivider()
-            }
+private data class AssetBreakdownItem(
+    val label: String,
+    val amountWan: Double,
+)
+
+private fun collectNonZeroAssetBreakdown(
+    drafts: List<AssetCategoryDraft>,
+): List<AssetBreakdownItem> {
+    return drafts.mapNotNull { draft ->
+        val amount = draft.amountInput.trim().replace(",", "").toDoubleOrNull() ?: 0.0
+        if (amount > 0.0) {
+            AssetBreakdownItem(label = draft.label, amountWan = amount)
+        } else {
+            null
         }
-    }
+    }.sortedByDescending { it.amountWan }
 }
 
 @Composable
-private fun FinanceFocusCardItem(
-    item: FinanceFocusCard,
-    onDismiss: () -> Unit,
-    onStatusChange: (String) -> Unit,
+private fun AssetStatsCard(
+    state: FinanceSignalsUiState,
+    onAssetAmountChange: (String, String) -> Unit,
+    onSaveAssetStats: () -> Unit,
+    onDeleteAssetHistoryRecord: (String) -> Unit,
+    onAssetSummaryCopied: () -> Unit,
+    onFillAssetStatsFromImages: () -> Unit,
 ) {
-    val priorityColor = when (item.priority.uppercase(Locale.ROOT)) {
-        "HIGH" -> ErrorStatusColor
-        "LOW" -> LinkStatusColor
-        else -> WarningStatusColor
+    val context = LocalContext.current
+    var selectedHistoryId by remember { mutableStateOf<String?>(null) }
+    val selectedHistory = state.assetHistory.firstOrNull { it.id == selectedHistoryId }
+    val nonZeroBreakdown = collectNonZeroAssetBreakdown(state.assetDrafts)
+    var showEditor by remember(state.assetHistory.size) {
+        mutableStateOf(state.assetHistory.isEmpty() && nonZeroBreakdown.isEmpty())
     }
-    val kindLabel = when (item.kind.uppercase(Locale.ROOT)) {
-        "ALERT" -> "阈值提醒"
-        "NEWS" -> "新闻关注"
-        else -> item.kind
+    var showHistory by remember(state.assetHistory.size) { mutableStateOf(false) }
+    BackHandler(enabled = selectedHistoryId != null) {
+        selectedHistoryId = null
     }
-    val actionTypeLabel = when (item.actionType.uppercase(Locale.ROOT)) {
-        "REVIEW_NOW" -> "立即处理"
-        "FOLLOW_UP" -> "继续跟进"
-        "WAIT_CONFIRM" -> "等待确认"
-        else -> "持续观察"
+
+    if (selectedHistory != null) {
+        AssetHistoryDetailPanel(
+            record = selectedHistory,
+            drafts = state.assetDrafts,
+            onBack = { selectedHistoryId = null },
+        )
+        return
     }
-    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-        ) {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+
+    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        GlassCard(modifier = Modifier.fillMaxWidth()) {
+            Column(
+                modifier = Modifier.padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Text("资产总览", style = MaterialTheme.typography.titleSmall)
                 Text(
-                    text = kindLabel,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = priorityColor,
-                    modifier = Modifier
-                        .background(
-                            color = priorityColor.copy(alpha = 0.14f),
-                            shape = RoundedCornerShape(999.dp),
-                        )
-                        .padding(horizontal = 8.dp, vertical = 2.dp),
+                    text = formatAmountWanRmb(state.assetTotalAmount),
+                    style = MaterialTheme.typography.headlineSmall,
+                    fontWeight = FontWeight.SemiBold,
                 )
-                if (item.actionLabel.isNotBlank()) {
+                Text(
+                    text = if (state.assetHistory.isNotEmpty()) {
+                        "最近保存：${state.assetHistory.first().savedAt}"
+                    } else {
+                        "最近保存：暂无历史记录"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = "非零分类 ${nonZeroBreakdown.size} 项 · 历史记录 ${state.assetHistory.size} 条",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (nonZeroBreakdown.isEmpty()) {
                     Text(
-                        text = "${item.actionLabel} · $actionTypeLabel",
+                        "还没有录入资产分类，先展开下方“编辑资产分类”。",
                         style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurface,
-                        modifier = Modifier
-                            .background(
-                                color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.72f),
-                                shape = RoundedCornerShape(999.dp),
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                } else {
+                    nonZeroBreakdown.take(3).forEach { item ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                        ) {
+                            Text(
+                                text = item.label,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
-                            .padding(horizontal = 8.dp, vertical = 2.dp),
+                            Text(
+                                text = formatAmountWanRmb(item.amountWan),
+                                style = MaterialTheme.typography.bodySmall,
+                                fontWeight = FontWeight.SemiBold,
+                            )
+                        }
+                    }
+                    if (nonZeroBreakdown.size > 3) {
+                        Text(
+                            "其余 ${nonZeroBreakdown.size - 3} 项已折叠到编辑区。",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                }
+                MidasButton(
+                    onClick = { showEditor = !showEditor },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .testTag("asset_toggle_editor_button"),
+                    tone = if (showEditor) ButtonTone.NEUTRAL else ButtonTone.SUCCESS,
+                ) {
+                    SingleLineActionText(if (showEditor) "收起资产录入" else "编辑资产分类")
+                }
+                if (state.assetHistory.isNotEmpty()) {
+                    MidasButton(
+                        onClick = { showHistory = !showHistory },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("asset_toggle_history_button"),
+                        tone = ButtonTone.NEUTRAL,
+                    ) {
+                        SingleLineActionText(
+                            if (showHistory) "收起历史记录" else "查看历史记录（${state.assetHistory.size}）",
+                        )
+                    }
+                }
+                MidasButton(
+                    onClick = {
+                        val text = buildAssetSummaryText(state)
+                        val clipboard = context.getSystemService(ClipboardManager::class.java)
+                        clipboard?.setPrimaryClip(ClipData.newPlainText("asset_summary", text))
+                        onAssetSummaryCopied()
+                    },
+                    enabled = !state.isFillingAssetFromImages,
+                    modifier = Modifier.fillMaxWidth(),
+                    tone = ButtonTone.NEUTRAL,
+                ) {
+                    SingleLineActionText("复制资产情况")
+                }
+                if (state.assetErrorMessage.isNotBlank()) {
+                    Text(text = state.assetErrorMessage, color = ErrorStatusColor)
+                }
+                if (state.assetStatusMessage.isNotBlank()) {
+                    Text(text = state.assetStatusMessage, color = SuccessStatusColor)
+                }
+            }
+        }
+
+        if (showEditor) {
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text("资产分类录入", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        "按风险从高到低排序，单位：万元人民币。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                    state.assetDrafts.forEach { draft ->
+                        OutlinedTextField(
+                            value = draft.amountInput,
+                            onValueChange = { value -> onAssetAmountChange(draft.key, value) },
+                            label = { Text(draft.label) },
+                            placeholder = { Text("例如：12.50（万元）") },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("asset_amount_${draft.key}"),
+                            singleLine = true,
+                        )
+                    }
+                    MidasButton(
+                        onClick = onSaveAssetStats,
+                        enabled = !state.isSavingAssetStats && !state.isFillingAssetFromImages,
+                        modifier = Modifier.fillMaxWidth(),
+                        tone = ButtonTone.SUCCESS,
+                    ) {
+                        SingleLineActionText(
+                            if (state.isSavingAssetStats) "保存中..." else "保存资产统计",
+                        )
+                    }
+                    MidasButton(
+                        onClick = onFillAssetStatsFromImages,
+                        enabled = !state.isFillingAssetFromImages && !state.isSavingAssetStats,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("asset_fill_from_images_button"),
+                    ) {
+                        SingleLineActionText(
+                            if (state.isFillingAssetFromImages) "识别中..." else "图片识别回填",
+                        )
+                    }
+                    Text(
+                        text = "支持最多上传 5 张图片，回填后不会自动保存。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
             }
-            MidasButton(
-                onClick = onDismiss,
-                tone = ButtonTone.NEUTRAL,
-            ) {
-                SingleLineActionText("已看过")
-            }
         }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            MidasButton(
-                onClick = { onStatusChange("WATCHING") },
-                tone = ButtonTone.NEUTRAL,
-            ) {
-                SingleLineActionText("保持关注")
-            }
-            MidasButton(
-                onClick = { onStatusChange("IGNORED_TODAY") },
-                tone = ButtonTone.NEUTRAL,
-            ) {
-                SingleLineActionText("今日忽略")
-            }
-            if (item.status != "ACTIVE") {
-                MidasButton(
-                    onClick = { onStatusChange("ACTIVE") },
-                    tone = ButtonTone.NEUTRAL,
+
+        if (showHistory) {
+            GlassCard(modifier = Modifier.fillMaxWidth()) {
+                Column(
+                    modifier = Modifier.padding(12.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    SingleLineActionText("取消忽略")
+                    Text("历史记录（近到远）", style = MaterialTheme.typography.titleSmall)
+                    state.assetHistory.forEach { record ->
+                        AssetHistoryListItem(
+                            record = record,
+                            onOpen = { selectedHistoryId = record.id },
+                            onDelete = { onDeleteAssetHistoryRecord(record.id) },
+                        )
+                    }
                 }
             }
         }
-        if (item.relatedWatchlistNames.isNotEmpty()) {
-            Text(
-                text = item.relatedWatchlistNames.joinToString(" / "),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
+    }
+}
+
+private fun buildAssetSummaryText(state: FinanceSignalsUiState): String {
+    val lines = mutableListOf<String>()
+    lines += "资产情况（单位：万元人民币）"
+    var nonZeroCount = 0
+    state.assetDrafts.forEach { draft ->
+        val amount = draft.amountInput.trim().replace(",", "").toDoubleOrNull() ?: 0.0
+        if (amount > 0.0) {
+            lines += "${draft.label}：${formatAmountWanRmb(amount)}"
+            nonZeroCount += 1
         }
-        Text(
-            text = item.title,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = FontWeight.SemiBold,
-        )
-        if (item.summary.isNotBlank()) {
-            Text(
-                text = item.summary,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        if (item.actionHint.isNotBlank()) {
-            Text(
-                text = "建议动作：${item.actionHint}",
-                style = MaterialTheme.typography.bodySmall,
-                color = LinkStatusColor,
-            )
-        }
-        if (item.portfolioImpactSummary.isNotBlank()) {
-            Text(
-                text = item.portfolioImpactSummary,
-                style = MaterialTheme.typography.bodySmall,
-                color = SuccessStatusColor,
-            )
-        }
-        if (item.reasons.isNotEmpty()) {
-            Text(
-                text = "触发原因：${item.reasons.joinToString(" / ") { financeReasonLabel(it) }}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        if (item.statusUpdatedAt.isNotBlank() && item.status != "ACTIVE") {
-            Text(
-                text = "最近处理：${item.status} · ${item.statusUpdatedAt}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
+    }
+    if (nonZeroCount == 0) {
+        lines += "暂无已填资产。"
+    }
+    lines += "总资产：${formatAmountWanRmb(state.assetTotalAmount)}"
+    return lines.joinToString("\n")
+}
+
+@Composable
+private fun AssetHistoryListItem(
+    record: AssetHistoryRecord,
+    onOpen: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    var menuExpanded by remember(record.id) { mutableStateOf(false) }
+    GlassCard(
+        modifier = Modifier
+            .fillMaxWidth()
+            .testTag("asset_history_open_${record.id}")
+            .clickable(onClick = onOpen),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(12.dp),
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column(
+                modifier = Modifier.weight(1f),
+                verticalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Text("保存时间：${record.savedAt}", style = MaterialTheme.typography.bodySmall)
+                Text(
+                    "总资产：${formatAmountWanRmb(record.totalAmountWan)}",
+                    style = MaterialTheme.typography.bodySmall,
+                    fontWeight = FontWeight.SemiBold,
+                )
+            }
+            Box {
+                IconButton(
+                    onClick = { menuExpanded = true },
+                    modifier = Modifier.testTag("asset_history_menu_${record.id}"),
+                ) {
+                    Text("⋮")
+                }
+                androidx.compose.material3.DropdownMenu(
+                    expanded = menuExpanded,
+                    onDismissRequest = { menuExpanded = false },
+                ) {
+                    androidx.compose.material3.DropdownMenuItem(
+                        text = { Text("删除记录") },
+                        onClick = {
+                            menuExpanded = false
+                            onDelete()
+                        },
+                    )
+                }
+            }
         }
     }
 }
 
-private fun financeActionTypeGroupLabel(actionType: String): String {
-    return when (actionType.uppercase(Locale.ROOT)) {
-        "REVIEW_NOW" -> "优先处理"
-        "FOLLOW_UP" -> "继续跟进"
-        "WAIT_CONFIRM" -> "等待确认"
-        else -> "持续观察"
-    }
-}
-
-private fun financeReasonLabel(code: String): String {
-    return when (code.trim().lowercase(Locale.ROOT)) {
-        "threshold_triggered" -> "阈值触发"
-        "related_news_present" -> "已有关联新闻"
-        "keyword_overlap" -> "关键词重合"
-        "recent_alert_sent" -> "近期已告警"
-        "news_impacts_watchlist" -> "新闻影响关注项"
-        "linked_alert_active" -> "关联标的已触发阈值"
-        "multi_asset_impact" -> "影响多个标的"
-        else -> code
+@Composable
+private fun AssetHistoryDetailPanel(
+    record: AssetHistoryRecord,
+    drafts: List<AssetCategoryDraft>,
+    onBack: () -> Unit,
+) {
+    GlassCard(modifier = Modifier.fillMaxWidth()) {
+        Column(
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            Text("历史记录详情", style = MaterialTheme.typography.titleSmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                MidasButton(onClick = onBack, tone = ButtonTone.NEUTRAL) {
+                    SingleLineActionText("返回列表")
+                }
+            }
+            Text("保存时间：${record.savedAt}", style = MaterialTheme.typography.bodySmall)
+            Text(
+                "总资产：${formatAmountWanRmb(record.totalAmountWan)}",
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = FontWeight.SemiBold,
+            )
+            HorizontalDivider()
+            drafts.forEach { draft ->
+                val amount = record.amounts[draft.key] ?: 0.0
+                Text("${draft.label}：${formatAmountWanRmb(amount)}", style = MaterialTheme.typography.bodySmall)
+            }
+        }
     }
 }
 
@@ -639,29 +715,29 @@ private fun FinanceTopNewsList(
                                         .padding(horizontal = 8.dp, vertical = 2.dp),
                                 )
                             }
-                            if (item.relatedWatchlistNames.isNotEmpty()) {
+                            if (item.publisher.isNotBlank()) {
                                 Text(
-                                    text = "影响 ${item.relatedWatchlistNames.joinToString(" / ")}",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = WarningStatusColor,
-                                    modifier = Modifier
-                                        .background(
-                                            color = WarningStatusColor.copy(alpha = 0.12f),
-                                            shape = RoundedCornerShape(999.dp),
-                                        )
-                                        .padding(horizontal = 8.dp, vertical = 2.dp),
-                                )
-                            }
-                            val metaText = listOf(item.publisher, item.published)
-                                .filter { it.isNotBlank() }
-                                .joinToString(" · ")
-                            if (metaText.isNotBlank()) {
-                                Text(
-                                    text = metaText,
+                                    text = item.publisher,
                                     style = MaterialTheme.typography.bodySmall,
                                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
                                 )
                             }
+                        }
+                        if (item.relatedWatchlistNames.isNotEmpty()) {
+                            Text(
+                                text = "影响标的：${item.relatedWatchlistNames.joinToString(" / ")}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = WarningStatusColor,
+                            )
+                        }
+                        if (item.matchedKeywords.isNotEmpty()) {
+                            Text(
+                                text = "关键词：${item.matchedKeywords.joinToString(" / ")}",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
                         }
                     }
                     if (index < items.lastIndex) {

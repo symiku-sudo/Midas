@@ -4,6 +4,12 @@ import com.midas.client.data.model.ApiEnvelope
 import com.midas.client.data.model.AsyncJobCreateData
 import com.midas.client.data.model.AsyncJobListData
 import com.midas.client.data.model.AsyncJobStatusData
+import com.midas.client.data.model.AssetCurrentData
+import com.midas.client.data.model.AssetCurrentUpdateRequest
+import com.midas.client.data.model.AssetImageFillData
+import com.midas.client.data.model.AssetSnapshotHistoryData
+import com.midas.client.data.model.AssetSnapshotRecordData
+import com.midas.client.data.model.AssetSnapshotSaveRequest
 import com.midas.client.data.model.BilibiliNoteSaveRequest
 import com.midas.client.data.model.BilibiliSavedNote
 import com.midas.client.data.model.BilibiliSavedNotesData
@@ -44,8 +50,17 @@ import com.midas.client.data.model.XiaohongshuSummaryItem
 import com.midas.client.data.network.MidasApiFactory
 import com.midas.client.data.network.MidasApiService
 import com.midas.client.util.AppResult
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.MultipartBody
+import okhttp3.RequestBody.Companion.toRequestBody
 import org.json.JSONObject
 import retrofit2.Response
+
+data class AssetImageUpload(
+    val fileName: String,
+    val bytes: ByteArray,
+    val mimeType: String = "image/jpeg",
+)
 
 class MidasRepository {
     private suspend fun <T> request(
@@ -90,6 +105,79 @@ class MidasRepository {
         limit: Int = 50,
     ): AppResult<FinanceFocusCardHistoryData> {
         return request(baseUrl) { getFinanceFocusCardHistory(limit) }
+    }
+
+    suspend fun fillAssetStatsFromImages(
+        baseUrl: String,
+        images: List<AssetImageUpload>,
+    ): AppResult<AssetImageFillData> {
+        if (images.isEmpty()) {
+            return AppResult.Error(code = "INVALID_INPUT", message = "请至少上传 1 张图片。")
+        }
+        val parts = images.mapIndexedNotNull { index, image ->
+            if (image.bytes.isEmpty()) {
+                return@mapIndexedNotNull null
+            }
+            val mime = image.mimeType.trim().ifBlank { "image/jpeg" }
+            val mediaType = runCatching { mime.toMediaType() }
+                .getOrDefault("image/jpeg".toMediaType())
+            val fileName = image.fileName.trim().ifBlank { "asset_${index + 1}.jpg" }
+            val body = image.bytes.toRequestBody(mediaType)
+            MultipartBody.Part.createFormData("images", fileName, body)
+        }
+        if (parts.isEmpty()) {
+            return AppResult.Error(code = "INVALID_INPUT", message = "图片内容为空，请重新选择。")
+        }
+        return request(baseUrl) { fillAssetStatsFromImages(parts) }
+    }
+
+    suspend fun getAssetCurrent(baseUrl: String): AppResult<AssetCurrentData> {
+        return request(baseUrl) { getAssetCurrent() }
+    }
+
+    suspend fun saveAssetCurrent(
+        baseUrl: String,
+        totalAmountWan: Double,
+        amounts: Map<String, Double>,
+    ): AppResult<AssetCurrentData> {
+        return request(baseUrl) {
+            saveAssetCurrent(
+                AssetCurrentUpdateRequest(
+                    totalAmountWan = totalAmountWan,
+                    amounts = amounts,
+                )
+            )
+        }
+    }
+
+    suspend fun listAssetSnapshots(baseUrl: String): AppResult<AssetSnapshotHistoryData> {
+        return request(baseUrl) { listAssetSnapshots() }
+    }
+
+    suspend fun saveAssetSnapshot(
+        baseUrl: String,
+        id: String,
+        savedAt: String,
+        totalAmountWan: Double,
+        amounts: Map<String, Double>,
+    ): AppResult<AssetSnapshotRecordData> {
+        return request(baseUrl) {
+            saveAssetSnapshot(
+                AssetSnapshotSaveRequest(
+                    id = id,
+                    savedAt = savedAt,
+                    totalAmountWan = totalAmountWan,
+                    amounts = amounts,
+                )
+            )
+        }
+    }
+
+    suspend fun deleteAssetSnapshot(
+        baseUrl: String,
+        recordId: String,
+    ): AppResult<NotesDeleteData> {
+        return request(baseUrl) { deleteAssetSnapshot(recordId) }
     }
 
     suspend fun createBilibiliSummaryJob(

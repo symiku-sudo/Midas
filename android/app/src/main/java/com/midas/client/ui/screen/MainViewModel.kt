@@ -36,6 +36,8 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     internal var autoSaveConfigJob: Job? = null
     internal var financeSignalsJob: Job? = null
+    internal var assetCurrentJob: Job? = null
+    internal var assetHistoryJob: Job? = null
     internal var notesSearchJob: Job? = null
     internal var bilibiliSummaryJob: Job? = null
     internal var xiaohongshuSummaryJob: Job? = null
@@ -43,14 +45,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     init {
         ServerAuthState.updateAccessToken(settingsRepository.getServerAccessToken())
         loadEditableConfig()
+        loadLocalAssetStats()
         loadSavedNotes()
         refreshAsyncJobHistories()
         loadFinanceSignals()
+        loadAssetCurrent()
+        loadAssetSnapshotHistory()
     }
 
     override fun onCleared() {
         autoSaveConfigJob?.cancel()
         financeSignalsJob?.cancel()
+        assetCurrentJob?.cancel()
+        assetHistoryJob?.cancel()
         notesSearchJob?.cancel()
         bilibiliSummaryJob?.cancel()
         xiaohongshuSummaryJob?.cancel()

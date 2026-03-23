@@ -1,5 +1,7 @@
 package com.midas.client.ui.screen
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -50,7 +52,6 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.midas.client.data.model.FinanceFocusCard
 import com.midas.client.data.model.NotesMergeCandidateItem
 import com.midas.client.data.model.UnifiedNoteItem
 import com.midas.client.data.model.XiaohongshuSummaryItem
@@ -83,6 +84,13 @@ fun MainScreen(viewModel: MainViewModel) {
     val xiaohongshu by viewModel.xiaohongshuState.collectAsStateWithLifecycle()
     val notes by viewModel.notesState.collectAsStateWithLifecycle()
     val finance by viewModel.financeState.collectAsStateWithLifecycle()
+    val assetImagesLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.OpenMultipleDocuments(),
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            viewModel.onAssetImagesSelected(uris)
+        }
+    }
 
     MainScreenContent(
         settings = settings,
@@ -128,11 +136,14 @@ fun MainScreen(viewModel: MainViewModel) {
         onRollbackLastMerge = viewModel::rollbackLastMerge,
         onFinalizeLastMerge = viewModel::finalizeLastMerge,
         onRefreshFinanceSignals = viewModel::loadFinanceSignals,
+        onRefreshAssetStats = viewModel::refreshAssetStats,
+        onAssetAmountChange = viewModel::onAssetAmountInputChange,
+        onSaveAssetStats = viewModel::saveAssetStats,
+        onDeleteAssetHistoryRecord = viewModel::deleteAssetHistoryRecord,
+        onAssetSummaryCopied = viewModel::markAssetSummaryCopied,
         onGenerateFinanceNewsDigest = viewModel::generateFinanceNewsDigest,
         onToggleWatchlistNtfy = viewModel::setWatchlistNtfyEnabled,
-        onDismissFinanceFocusCard = viewModel::dismissFinanceFocusCard,
-        onRestoreFinanceFocusCards = viewModel::restoreDismissedFinanceFocusCards,
-        onUpdateFinanceFocusCardStatus = viewModel::updateFinanceFocusCardStatus,
+        onFillAssetStatsFromImages = { assetImagesLauncher.launch(arrayOf("image/*")) },
         initialSection = TopSection.FINANCE,
     )
 }
@@ -183,11 +194,14 @@ fun MainScreenContent(
     onRollbackLastMerge: () -> Unit,
     onFinalizeLastMerge: () -> Unit,
     onRefreshFinanceSignals: () -> Unit = {},
+    onRefreshAssetStats: () -> Unit = {},
+    onAssetAmountChange: (String, String) -> Unit = { _, _ -> },
+    onSaveAssetStats: () -> Unit = {},
+    onDeleteAssetHistoryRecord: (String) -> Unit = {},
+    onAssetSummaryCopied: () -> Unit = {},
     onGenerateFinanceNewsDigest: () -> Unit = {},
     onToggleWatchlistNtfy: (Boolean) -> Unit = {},
-    onDismissFinanceFocusCard: (FinanceFocusCard) -> Unit = {},
-    onRestoreFinanceFocusCards: () -> Unit = {},
-    onUpdateFinanceFocusCardStatus: (String, String) -> Unit = { _, _ -> },
+    onFillAssetStatsFromImages: () -> Unit = {},
     initialSection: TopSection = TopSection.FINANCE,
     enableLifecycleAutoRefresh: Boolean = true,
     enableFinanceAutoRefresh: Boolean = true,
@@ -276,7 +290,7 @@ fun MainScreenContent(
                             TopSection.BILIBILI -> "B 站视频总结与任务回看"
                             TopSection.XHS -> "小红书单链接总结与结果保存"
                             TopSection.NOTES -> "统一笔记库、搜索与合并"
-                            TopSection.FINANCE -> "只保留市场信号与建议处理"
+                            TopSection.FINANCE -> "Watchlist、新闻摘要与资产统计"
                             TopSection.SETTINGS -> "服务端连接、令牌与运行配置"
                         },
                         style = MaterialTheme.typography.bodySmall,
@@ -289,6 +303,7 @@ fun MainScreenContent(
                             selectedSection = TopSection.entries[index]
                             if (selectedSection == TopSection.FINANCE) {
                                 onRefreshFinanceSignals()
+                                onRefreshAssetStats()
                             }
                         },
                     )
@@ -303,12 +318,17 @@ fun MainScreenContent(
             when (selectedSection) {
                 TopSection.FINANCE -> FinanceSignalsPanel(
                     state = finance,
-                    onRefresh = onRefreshFinanceSignals,
+                    onRefresh = {
+                        onRefreshFinanceSignals()
+                        onRefreshAssetStats()
+                    },
+                    onAssetAmountChange = onAssetAmountChange,
+                    onSaveAssetStats = onSaveAssetStats,
+                    onDeleteAssetHistoryRecord = onDeleteAssetHistoryRecord,
+                    onAssetSummaryCopied = onAssetSummaryCopied,
                     onGenerateFinanceNewsDigest = onGenerateFinanceNewsDigest,
                     onToggleWatchlistNtfy = onToggleWatchlistNtfy,
-                    onDismissFocusCard = onDismissFinanceFocusCard,
-                    onRestoreFocusCards = onRestoreFinanceFocusCards,
-                    onUpdateFocusCardStatus = onUpdateFinanceFocusCardStatus,
+                    onFillAssetStatsFromImages = onFillAssetStatsFromImages,
                     modifier = contentModifier,
                 )
 

@@ -6,7 +6,7 @@ from functools import lru_cache
 from urllib.parse import urlparse
 
 import httpx
-from fastapi import APIRouter, Query, Request
+from fastapi import APIRouter, File, Query, Request, UploadFile
 
 from app.core.config import clear_settings_cache, get_settings
 from app.core.errors import AppError, ErrorCode
@@ -15,6 +15,12 @@ from app.models.schemas import (
     AsyncJobCreateData,
     AsyncJobListData,
     AsyncJobStatusData,
+    AssetCurrentData,
+    AssetCurrentUpdateRequest,
+    AssetImageFillData,
+    AssetSnapshotHistoryData,
+    AssetSnapshotRecord,
+    AssetSnapshotSaveRequest,
     BilibiliNoteSaveRequest,
     BilibiliSummaryRequest,
     EditableConfigData,
@@ -50,6 +56,8 @@ from app.models.schemas import (
 )
 from app.services.bilibili import BilibiliSummarizer
 from app.services.async_jobs import AsyncJobService
+from app.services.asset_image_fill import AssetImageFillService
+from app.services.asset_snapshots import AssetSnapshotService
 from app.services.editable_config import EditableConfigService
 from app.services.finance_signals import FinanceSignalsService
 from app.services.note_library import NoteLibraryService
@@ -87,6 +95,18 @@ def _get_finance_signals_service() -> FinanceSignalsService:
     return FinanceSignalsService(get_settings())
 
 
+@lru_cache(maxsize=1)
+def _get_asset_image_fill_service() -> AssetImageFillService:
+    settings = get_settings()
+    return AssetImageFillService(settings)
+
+
+@lru_cache(maxsize=1)
+def _get_asset_snapshot_service() -> AssetSnapshotService:
+    settings = get_settings()
+    return AssetSnapshotService(settings)
+
+
 def _reload_runtime_services() -> None:
     clear_settings_cache()
     _get_summarizer.cache_clear()
@@ -94,6 +114,8 @@ def _reload_runtime_services() -> None:
     _get_note_library_service.cache_clear()
     _get_editable_config_service.cache_clear()
     _get_finance_signals_service.cache_clear()
+    _get_asset_image_fill_service.cache_clear()
+    _get_asset_snapshot_service.cache_clear()
 
 
 def _get_async_job_service(request: Request) -> AsyncJobService:
@@ -247,6 +269,66 @@ async def get_finance_focus_card_history(
 ) -> dict:
     service = _get_finance_signals_service()
     data: FinanceFocusCardHistoryData = service.get_focus_card_history(limit=limit)
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/assets/fill-from-images")
+async def fill_asset_stats_from_images(
+    request: Request,
+    images: list[UploadFile] = File(...),
+) -> dict:
+    service = _get_asset_image_fill_service()
+    result: AssetImageFillData = await service.extract_from_uploads(images)
+    return success_response(data=result.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/assets/current")
+async def get_asset_current(request: Request) -> dict:
+    service = _get_asset_snapshot_service()
+    data: AssetCurrentData = service.get_current()
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.put("/api/assets/current")
+async def update_asset_current(
+    payload: AssetCurrentUpdateRequest,
+    request: Request,
+) -> dict:
+    service = _get_asset_snapshot_service()
+    data: AssetCurrentData = service.update_current(
+        total_amount_wan=payload.total_amount_wan,
+        amounts=payload.amounts,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.get("/api/assets/snapshots")
+async def list_asset_snapshot_history(request: Request) -> dict:
+    service = _get_asset_snapshot_service()
+    data: AssetSnapshotHistoryData = service.list_history()
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.post("/api/assets/snapshots")
+async def save_asset_snapshot(
+    payload: AssetSnapshotSaveRequest,
+    request: Request,
+) -> dict:
+    service = _get_asset_snapshot_service()
+    data: AssetSnapshotRecord = service.save_snapshot(
+        record_id=payload.id,
+        saved_at=payload.saved_at,
+        total_amount_wan=payload.total_amount_wan,
+        amounts=payload.amounts,
+    )
+    return success_response(data=data.model_dump(), request_id=request.state.request_id)
+
+
+@router.delete("/api/assets/snapshots/{record_id}")
+async def delete_asset_snapshot(record_id: str, request: Request) -> dict:
+    service = _get_asset_snapshot_service()
+    deleted_count = service.delete_snapshot(record_id)
+    data = NotesDeleteData(deleted_count=deleted_count)
     return success_response(data=data.model_dump(), request_id=request.state.request_id)
 
 

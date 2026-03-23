@@ -47,7 +47,8 @@ class MainScreenContentRobolectricSmokeTest {
     private fun clickTopSection(title: String) {
         composeRule.onNodeWithTag("glass_tab_bar_scroll", useUnmergedTree = true)
             .performScrollToNode(hasText(title))
-        composeRule.onNodeWithText(title, useUnmergedTree = true).performClick()
+        composeRule.onAllNodesWithText(title, useUnmergedTree = true)[0]
+            .performClick()
         composeRule.waitForIdle()
     }
 
@@ -302,6 +303,7 @@ class MainScreenContentRobolectricSmokeTest {
                     onRollbackLastMerge = {},
                     onFinalizeLastMerge = {},
                     onRefreshFinanceSignals = { financeRefreshClicks += 1 },
+                    initialSection = TopSection.BILIBILI,
                     enableLifecycleAutoRefresh = false,
                     enableCyclicTabs = false,
                     animateTabSwitch = false,
@@ -311,8 +313,8 @@ class MainScreenContentRobolectricSmokeTest {
 
         clickTopSection("财经")
 
-        composeRule.onAllNodesWithText("财经信号").assertCountEquals(1)
-        composeRule.onAllNodesWithText("Watchlist").assertCountEquals(1)
+        composeRule.onAllNodesWithText("财经").assertCountEquals(2)
+        composeRule.onAllNodesWithText("Watchlist").assertCountEquals(2)
         composeRule.onAllNodesWithText("24小时新闻摘要").assertCountEquals(1)
         composeRule.onAllNodesWithText("今日金融与时政新闻 Top5").assertCountEquals(1)
 
@@ -850,17 +852,12 @@ class MainScreenContentRobolectricSmokeTest {
             }
         }
 
-        composeRule.onNodeWithText("今日关注建议").assertIsDisplayed()
-        composeRule.onNodeWithText("阈值提醒").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("立即复核 · 立即处理").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("布伦特原油 已触发监控阈值").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("建议动作：先看价格异动和关联新闻，再决定是否提升观察频率。").performScrollTo()
-            .assertIsDisplayed()
-        composeRule.onNodeWithText("触发原因：阈值触发 / 已有关联新闻").performScrollTo()
-            .assertIsDisplayed()
+        composeRule.onAllNodesWithText("Watchlist").assertCountEquals(2)
+        composeRule.onNodeWithText("布伦特原油").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("BZ=F").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("关联新闻 2").performScrollTo().assertIsDisplayed()
         composeRule.onNodeWithText("原油 / 油价").performScrollTo().assertIsDisplayed()
-        composeRule.onNodeWithText("影响 布伦特原油").performScrollTo().assertIsDisplayed()
+        composeRule.onNodeWithText("影响标的：布伦特原油").performScrollTo().assertIsDisplayed()
     }
 
     @Test
